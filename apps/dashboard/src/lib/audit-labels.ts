@@ -96,8 +96,7 @@ export const AUDIT_EVENT_LABELS: Record<string, AuditLabel> = {
   },
   "grant.materialized": {
     label: "Permission grant materialized",
-    description:
-      "A pending grant attached to an invitation was applied after the invitee joined.",
+    description: "A pending grant attached to an invitation was applied after the invitee joined.",
   },
 
   /* ---------- Projects ---------- */
@@ -159,6 +158,22 @@ export const AUDIT_EVENT_LABELS: Record<string, AuditLabel> = {
     label: "Domain verification failed",
     description: "DNS verification for a custom domain did not succeed.",
   },
+  "domain.registered": {
+    label: "Workspace domain registered",
+    description: "A reusable base domain was registered for the organization.",
+  },
+  "domain.registered_verified": {
+    label: "Workspace domain verified",
+    description: "Ownership verification for a reusable base domain succeeded.",
+  },
+  "domain.registered_verify_failed": {
+    label: "Workspace domain verification failed",
+    description: "Ownership verification for a reusable base domain did not succeed.",
+  },
+  "domain.registered_removed": {
+    label: "Workspace domain removed",
+    description: "A reusable base domain was removed from the organization.",
+  },
   "ssl.renewal_failed": {
     label: "SSL renewal failed",
     description:
@@ -172,8 +187,7 @@ export const AUDIT_EVENT_LABELS: Record<string, AuditLabel> = {
   },
   "auth-mode-changed": {
     label: "Auth mode changed",
-    description:
-      "Instance authentication mode was switched (e.g. local single-user → cloud auth).",
+    description: "Instance authentication mode was switched (e.g. local single-user → cloud auth).",
   },
 
   /* ---------- Cloud connection ---------- */
@@ -314,7 +328,8 @@ export const AUDIT_EVENT_LABELS: Record<string, AuditLabel> = {
   },
   "server:admin": {
     label: "Server: admin action",
-    description: "A destructive server endpoint (e.g. delete, install/remove component) was invoked.",
+    description:
+      "A destructive server endpoint (e.g. delete, install/remove component) was invoked.",
   },
   "domain:write": {
     label: "Domain action",
@@ -361,8 +376,7 @@ export const AUDIT_EVENT_LABELS: Record<string, AuditLabel> = {
   },
   "billing:write": {
     label: "Billing action",
-    description:
-      "A billing write endpoint was invoked (subscribe, top-up, open portal).",
+    description: "A billing write endpoint was invoked (subscribe, top-up, open portal).",
   },
   "billing:admin": {
     label: "Billing: admin action",
@@ -421,7 +435,10 @@ function prettifyEventType(type: string): string {
   if (!type) return "Unknown event";
   // Colon-delimited (permission tag) — promote to "X: y" so it reads naturally.
   if (type.includes(":")) {
-    const parts = type.split(":").map((p) => p.replace(/[._]/g, " ").trim()).filter(Boolean);
+    const parts = type
+      .split(":")
+      .map((p) => p.replace(/[._]/g, " ").trim())
+      .filter(Boolean);
     if (parts.length === 0) return type;
     const [first, ...rest] = parts;
     const head = first.charAt(0).toUpperCase() + first.slice(1);

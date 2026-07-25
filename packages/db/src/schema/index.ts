@@ -8,6 +8,7 @@ export { resourceGrant } from "./resource-grant";
 export { invitationPendingGrant } from "./invitation-pending-grant";
 export { gitInstallation } from "./github";
 export { azureDevopsConnection } from "./azure-devops";
+export { organizationDomain } from "./organization-domain";
 export { githubInstallState } from "./github-install-state";
 export { projectGroup, project, envVar } from "./project";
 export { deployment, buildSession } from "./deployment";
@@ -34,12 +35,7 @@ export { cloudHandoffCode } from "./cloud-handoff-code";
 export { personalAccessToken } from "./personal-access-token";
 export { personalAccessTokenGrant } from "./personal-access-token-grant";
 export { oauthApplication, oauthAccessToken, oauthConsent } from "./oauth";
-export {
-  backupDestination,
-  backupPolicy,
-  backupRun,
-  backupRestore,
-} from "./backup";
+export { backupDestination, backupPolicy, backupRun, backupRestore } from "./backup";
 export { dockerMigrationRun } from "./docker-migration";
 export {
   notificationChannel,

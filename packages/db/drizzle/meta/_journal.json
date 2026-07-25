@@ -449,6 +449,13 @@
       "when": 1784950100000,
       "tag": "0063_add_project_webhook_external_id",
       "breakpoints": true
+    },
+    {
+      "idx": 64,
+      "version": "7",
+      "when": 1785007200000,
+      "tag": "0064_add_organization_domain",
+      "breakpoints": true
     }
   ]
 }

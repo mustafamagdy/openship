@@ -13,10 +13,15 @@ const projectRepo = vi.hoisted(() => ({
   findById: vi.fn(),
 }));
 
+const organizationDomainRepo = vi.hoisted(() => ({
+  findVerifiedParent: vi.fn(),
+}));
+
 vi.mock("@repo/db", () => ({
   repos: {
     domain: domainRepo,
     project: projectRepo,
+    organizationDomain: organizationDomainRepo,
   },
 }));
 
@@ -76,7 +81,9 @@ describe("addDomain retries", () => {
     domainRepo.setPrimary.mockReset();
     domainRepo.update.mockReset();
     projectRepo.findById.mockReset();
+    organizationDomainRepo.findVerifiedParent.mockReset();
     projectRepo.findById.mockResolvedValue(project);
+    organizationDomainRepo.findVerifiedParent.mockResolvedValue(undefined);
   });
 
   it("reuses a pending domain owned by the same project", async () => {
@@ -125,5 +132,37 @@ describe("addDomain retries", () => {
 
     expect(domainRepo.create).not.toHaveBeenCalled();
     expect(domainRepo.update).not.toHaveBeenCalled();
+  });
+
+  it("inherits verification from a registered workspace domain", async () => {
+    domainRepo.findByHostname.mockResolvedValue(undefined);
+    domainRepo.create.mockImplementation(async (data) => ({
+      id: "dom_registered",
+      ...data,
+    }));
+    organizationDomainRepo.findVerifiedParent.mockResolvedValue({
+      id: "odm_123",
+      domain: "example.com",
+      verified: true,
+    });
+
+    const result = await addDomain(context as any, {
+      projectId: project.id,
+      hostname: "app.example.com",
+    });
+
+    expect(domainRepo.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        hostname: "app.example.com",
+        verified: true,
+        status: "active",
+        verifiedAt: expect.any(Date),
+      }),
+    );
+    expect(result.domain).toMatchObject({
+      hostname: "app.example.com",
+      verified: true,
+      status: "active",
+    });
   });
 });

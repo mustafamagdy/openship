@@ -12,6 +12,11 @@ export {
   type NewAzureDevopsConnection,
 } from "./azure-devops-connection.repo";
 export {
+  createOrganizationDomainRepo,
+  type OrganizationDomain,
+  type NewOrganizationDomain,
+} from "./organization-domain.repo";
+export {
   createGithubInstallStateRepo,
   type GithubInstallState,
   type NewGithubInstallState,
@@ -25,7 +30,11 @@ export {
   type CreatePatInput,
 } from "./personal-access-token.repo";
 export { createOAuthRepo } from "./oauth.repo";
-export { createProjectGroupRepo, type ProjectGroup, type NewProjectGroup } from "./project-group.repo";
+export {
+  createProjectGroupRepo,
+  type ProjectGroup,
+  type NewProjectGroup,
+} from "./project-group.repo";
 export {
   createProjectRepo,
   type Project,
@@ -42,9 +51,21 @@ export {
 } from "./deployment.repo";
 export { createDomainRepo, type Domain, type NewDomain } from "./domain.repo";
 export { createRouteRuleRepo, type RouteRule, type NewRouteRule } from "./route-rule.repo";
-export { createWebhookSourceRepo, type WebhookSource, type NewWebhookSource } from "./webhook-source.repo";
-export { createSystemNoticeRepo, type SystemNotice, type NewSystemNotice } from "./system-notice.repo";
-export { createUpdateStatusRepo, type UpdateStatus, type NewUpdateStatus } from "./update-status.repo";
+export {
+  createWebhookSourceRepo,
+  type WebhookSource,
+  type NewWebhookSource,
+} from "./webhook-source.repo";
+export {
+  createSystemNoticeRepo,
+  type SystemNotice,
+  type NewSystemNotice,
+} from "./system-notice.repo";
+export {
+  createUpdateStatusRepo,
+  type UpdateStatus,
+  type NewUpdateStatus,
+} from "./update-status.repo";
 export {
   createServerModuleStatusRepo,
   type ServerModuleStatus,
@@ -97,11 +118,7 @@ export {
   type ServerTunnel,
   type NewServerTunnel,
 } from "./server-tunnel.repo";
-export {
-  createMailServerRepo,
-  type MailServer,
-  type NewMailServer,
-} from "./mail-server.repo";
+export { createMailServerRepo, type MailServer, type NewMailServer } from "./mail-server.repo";
 export {
   createAnalyticsRepo,
   type ServerAnalyticsRow,
@@ -204,6 +221,7 @@ import { createSessionRepo } from "./session.repo";
 import { createAccountRepo } from "./account.repo";
 import { createGitInstallationRepo } from "./git-installation.repo";
 import { createAzureDevopsConnectionRepo } from "./azure-devops-connection.repo";
+import { createOrganizationDomainRepo } from "./organization-domain.repo";
 import { createGithubInstallStateRepo } from "./github-install-state.repo";
 import { createProjectGroupRepo } from "./project-group.repo";
 import { createProjectRepo } from "./project.repo";
@@ -274,6 +292,7 @@ export const repos = {
   account: createAccountRepo(db),
   gitInstallation: createGitInstallationRepo(db),
   azureDevopsConnection: createAzureDevopsConnectionRepo(db),
+  organizationDomain: createOrganizationDomainRepo(db),
   githubInstallState: createGithubInstallStateRepo(db),
   projectGroup: createProjectGroupRepo(db),
   project: createProjectRepo(db),

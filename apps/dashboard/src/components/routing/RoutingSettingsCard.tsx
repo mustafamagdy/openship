@@ -1,11 +1,25 @@
 "use client";
 
 import React, { useCallback, useEffect, useId, useMemo, useState } from "react";
-import { Globe, Shield, Server, X, Copy, Check, Info, Eye, EyeOff, Link2, Hash } from "lucide-react";
+import {
+  Globe,
+  Shield,
+  Server,
+  X,
+  Copy,
+  Check,
+  Info,
+  Eye,
+  EyeOff,
+  Link2,
+  Hash,
+} from "lucide-react";
 import { domainsApi } from "@/lib/api";
 import { usePlatform } from "@/context/PlatformContext";
 import { useI18n, interpolate } from "@/components/i18n-provider";
 import { normalizeSubdomain, normalizeSubdomainInput } from "@/utils/subdomain";
+import { useRegisteredDomains } from "@/hooks/useRegisteredDomains";
+import { buildRegisteredHostname, matchRegisteredDomain } from "@/utils/registeredDomain";
 
 interface DnsRecord {
   type: "CNAME" | "A" | "TXT";
@@ -84,6 +98,9 @@ export function RoutingSettingsCard({
   const [draftCustomDomain, setDraftCustomDomain] = useState(customDomain);
   const [draftPort, setDraftPort] = useState(exposedPort ?? "");
   const [draftTargetPath, setDraftTargetPath] = useState(targetPath ?? "/");
+  const { verifiedDomains, defaultDomain } = useRegisteredDomains();
+  const [selectedRegisteredDomain, setSelectedRegisteredDomain] = useState("");
+  const [manualDomainMode, setManualDomainMode] = useState(false);
 
   useEffect(() => {
     setDraftDomain(domain);
@@ -101,16 +118,40 @@ export function RoutingSettingsCard({
     setDraftTargetPath(targetPath ?? "/");
   }, [targetPath]);
 
+  const currentCustomHostname = saveMode === "explicit" ? draftCustomDomain : customDomain;
+  const registeredMatch = useMemo(
+    () => matchRegisteredDomain(currentCustomHostname, verifiedDomains),
+    [currentCustomHostname, verifiedDomains],
+  );
+  const registeredSubdomain = registeredMatch?.subdomain ?? "";
+
+  useEffect(() => {
+    if (manualDomainMode) return;
+    if (registeredMatch) {
+      setSelectedRegisteredDomain(registeredMatch.domain);
+      return;
+    }
+    if (currentCustomHostname) {
+      setSelectedRegisteredDomain("");
+      setManualDomainMode(true);
+      return;
+    }
+    setSelectedRegisteredDomain(defaultDomain ?? "");
+  }, [currentCustomHostname, defaultDomain, manualDomainMode, registeredMatch]);
+
   const visible = exposed ?? true;
   const hasPortOptions = (ports ?? []).length > 0;
-  const showsPortTarget = targetMode === "proxy" && typeof exposedPort !== "undefined" && onExposedPortChange;
+  const showsPortTarget =
+    targetMode === "proxy" && typeof exposedPort !== "undefined" && onExposedPortChange;
   const showsPathTarget = targetMode === "static" && onTargetPathChange;
-  const showsReadOnlyTarget = !showsPortTarget && !showsPathTarget && Boolean(readOnlyTarget?.value);
+  const showsReadOnlyTarget =
+    !showsPortTarget && !showsPathTarget && Boolean(readOnlyTarget?.value);
   const portOptions = useMemo(
-    () => (ports ?? []).map((value) => {
-      const parts = value.split(":");
-      return parts.length === 2 ? parts[1].split("/")[0] : parts[0].split("/")[0];
-    }),
+    () =>
+      (ports ?? []).map((value) => {
+        const parts = value.split(":");
+        return parts.length === 2 ? parts[1].split("/")[0] : parts[0].split("/")[0];
+      }),
     [ports],
   );
 
@@ -161,6 +202,14 @@ export function RoutingSettingsCard({
     void onCustomDomainChange(draftCustomDomain.toLowerCase());
   };
 
+  const updateCustomDomain = (next: string) => {
+    if (saveMode === "explicit") {
+      setDraftCustomDomain(next);
+    } else {
+      void onCustomDomainChange(next);
+    }
+  };
+
   const commitPort = () => {
     if (onExposedPortChange) {
       void onExposedPortChange(draftPort);
@@ -178,7 +227,9 @@ export function RoutingSettingsCard({
   // two bottom-align.
   const portInlineField = showsPortTarget ? (
     <div className="shrink-0">
-      <label className="mb-1.5 block text-[13px] font-medium text-muted-foreground">{w.exposedPort}</label>
+      <label className="mb-1.5 block text-[13px] font-medium text-muted-foreground">
+        {w.exposedPort}
+      </label>
       <input
         type="text"
         inputMode="numeric"
@@ -210,7 +261,11 @@ export function RoutingSettingsCard({
       {typeof exposed === "boolean" && onExposedChange && (
         <div className="flex items-center justify-between gap-3">
           <div className="flex items-center gap-2">
-            {visible ? <Eye className="size-4 text-info" /> : <EyeOff className="size-4 text-muted-foreground" />}
+            {visible ? (
+              <Eye className="size-4 text-info" />
+            ) : (
+              <EyeOff className="size-4 text-muted-foreground" />
+            )}
             <span className="text-sm font-medium text-foreground">
               {visible ? w.publiclyExposed : w.internalOnly}
             </span>
@@ -222,7 +277,9 @@ export function RoutingSettingsCard({
             className={`relative rounded-full transition-colors duration-200 ${visible ? "bg-info-solid" : "bg-muted-foreground/20"}`}
             style={{ height: "22px", width: "40px" }}
           >
-            <span className={`absolute top-0.5 start-0.5 w-[18px] h-[18px] rounded-full bg-background shadow-sm transition-transform duration-200 ${visible ? "translate-x-[18px] rtl:-translate-x-[18px]" : "translate-x-0"}`} />
+            <span
+              className={`absolute top-0.5 start-0.5 w-[18px] h-[18px] rounded-full bg-background shadow-sm transition-transform duration-200 ${visible ? "translate-x-[18px] rtl:-translate-x-[18px]" : "translate-x-0"}`}
+            />
           </button>
         </div>
       )}
@@ -283,7 +340,9 @@ export function RoutingSettingsCard({
                     placeholder={projectName || "my-project"}
                     className="min-w-0 flex-1 h-full ps-3.5 text-sm bg-transparent outline-none text-foreground placeholder:text-muted-foreground/40"
                   />
-                  <span className="shrink-0 ps-2 pe-3.5 text-sm text-muted-foreground">.{baseDomain}</span>
+                  <span className="shrink-0 ps-2 pe-3.5 text-sm text-muted-foreground">
+                    .{baseDomain}
+                  </span>
                 </div>
                 {saveMode === "explicit" && draftDomain !== domain && (
                   <button
@@ -304,33 +363,76 @@ export function RoutingSettingsCard({
               <div className="flex items-end gap-2">
                 <div className="min-w-0 flex-1 flex items-center gap-2">
                   <div className="flex-1 flex items-center rounded-2xl border border-border/50 bg-background/60 overflow-hidden h-11">
-                  <input
-                    value={saveMode === "explicit" ? draftCustomDomain : customDomain}
-                    onChange={(event) => {
-                      const next = event.target.value.toLowerCase();
-                      if (saveMode === "explicit") {
-                        setDraftCustomDomain(next);
-                      } else {
-                        void onCustomDomainChange(next);
-                      }
-                    }}
-                    onBlur={() => {
-                      if (saveMode === "explicit" && draftCustomDomain !== customDomain) commitCustomDomain();
-                    }}
-                    placeholder="app.example.com"
-                    className="flex-1 h-full px-3.5 text-sm bg-transparent outline-none text-foreground placeholder:text-muted-foreground/40"
-                  />
-                </div>
-                {saveMode === "explicit" && draftCustomDomain !== customDomain && (
-                  <button
-                    type="button"
-                    onClick={commitCustomDomain}
-                    disabled={disabled}
-                    className="px-3 py-2 rounded-xl text-[12px] font-medium bg-primary text-primary-foreground hover:bg-primary/90 transition-colors disabled:opacity-50"
-                  >
-                    {w.save}
-                  </button>
-                )}
+                    {selectedRegisteredDomain ? (
+                      <>
+                        <input
+                          value={registeredSubdomain}
+                          onChange={(event) => {
+                            updateCustomDomain(
+                              buildRegisteredHostname(event.target.value, selectedRegisteredDomain),
+                            );
+                          }}
+                          onBlur={() => {
+                            if (saveMode === "explicit" && draftCustomDomain !== customDomain) {
+                              commitCustomDomain();
+                            }
+                          }}
+                          placeholder={normalizeSubdomain(projectName) || "app"}
+                          className="min-w-0 flex-1 h-full ps-3.5 text-sm bg-transparent outline-none text-foreground placeholder:text-muted-foreground/40"
+                        />
+                        <span className="shrink-0 ps-2 text-sm text-muted-foreground">.</span>
+                      </>
+                    ) : (
+                      <input
+                        value={currentCustomHostname}
+                        onChange={(event) => updateCustomDomain(event.target.value.toLowerCase())}
+                        onBlur={() => {
+                          if (saveMode === "explicit" && draftCustomDomain !== customDomain) {
+                            commitCustomDomain();
+                          }
+                        }}
+                        placeholder="app.example.com"
+                        className="min-w-0 flex-1 h-full px-3.5 text-sm bg-transparent outline-none text-foreground placeholder:text-muted-foreground/40"
+                      />
+                    )}
+                    {verifiedDomains.length > 0 && (
+                      <select
+                        value={selectedRegisteredDomain}
+                        onChange={(event) => {
+                          const nextDomain = event.target.value;
+                          setSelectedRegisteredDomain(nextDomain);
+                          if (!nextDomain) {
+                            setManualDomainMode(true);
+                            return;
+                          }
+                          setManualDomainMode(false);
+                          const nextSubdomain =
+                            registeredSubdomain || normalizeSubdomain(projectName) || "app";
+                          updateCustomDomain(buildRegisteredHostname(nextSubdomain, nextDomain));
+                        }}
+                        aria-label="Registered domain"
+                        className="h-full max-w-[55%] shrink-0 border-0 border-s border-border/50 bg-muted/30 px-3 text-sm text-foreground outline-none"
+                      >
+                        {verifiedDomains.map((registeredDomain) => (
+                          <option key={registeredDomain.id} value={registeredDomain.domain}>
+                            {registeredDomain.domain}
+                            {registeredDomain.isDefault ? " (default)" : ""}
+                          </option>
+                        ))}
+                        <option value="">Another domain…</option>
+                      </select>
+                    )}
+                  </div>
+                  {saveMode === "explicit" && draftCustomDomain !== customDomain && (
+                    <button
+                      type="button"
+                      onClick={commitCustomDomain}
+                      disabled={disabled}
+                      className="px-3 py-2 rounded-xl text-[12px] font-medium bg-primary text-primary-foreground hover:bg-primary/90 transition-colors disabled:opacity-50"
+                    >
+                      {w.save}
+                    </button>
+                  )}
                 </div>
                 {portInline && portInlineField}
                 {portInline && actionSlot}
@@ -339,31 +441,38 @@ export function RoutingSettingsCard({
               {/* DNS hint — lazy: only shown once records are resolvable (or
                   loading). No "enter a valid domain" nag; DNS isn't required up
                   front (verified later at preflight / in domain settings). */}
-              {(loadingRecords || hasRecords) && (
-                <div className="rounded-lg border border-border/50 bg-muted/20 overflow-hidden">
-                  <div className="flex items-center gap-2 px-3 py-2">
-                    <Server className="size-3 text-muted-foreground shrink-0" />
-                    {loadingRecords ? (
-                      <p className="text-sm text-muted-foreground flex-1">{w.checkingDns}</p>
-                    ) : (
-                      <p className="text-sm text-muted-foreground flex-1">
-                        {interpolate(w.addRecordHint, {
-                          primary: dnsRecords.find((record) => record.type !== "TXT")?.type ?? "",
-                          txt: "TXT",
-                        })}
-                      </p>
-                    )}
-                    {hasRecords && (
-                      <button
-                        type="button"
-                        onClick={() => setShowDnsModal(true)}
-                        className="text-xs text-primary hover:text-primary/80 font-medium shrink-0 transition-colors"
-                      >
-                        {w.viewRecords}
-                      </button>
-                    )}
-                  </div>
+              {selectedRegisteredDomain ? (
+                <div className="flex items-center gap-2 rounded-lg border border-success/20 bg-success/5 px-3 py-2 text-sm text-muted-foreground">
+                  <Shield className="size-3.5 shrink-0 text-success" />
+                  This subdomain uses a verified domain registered to your workspace.
                 </div>
+              ) : (
+                (loadingRecords || hasRecords) && (
+                  <div className="rounded-lg border border-border/50 bg-muted/20 overflow-hidden">
+                    <div className="flex items-center gap-2 px-3 py-2">
+                      <Server className="size-3 text-muted-foreground shrink-0" />
+                      {loadingRecords ? (
+                        <p className="text-sm text-muted-foreground flex-1">{w.checkingDns}</p>
+                      ) : (
+                        <p className="text-sm text-muted-foreground flex-1">
+                          {interpolate(w.addRecordHint, {
+                            primary: dnsRecords.find((record) => record.type !== "TXT")?.type ?? "",
+                            txt: "TXT",
+                          })}
+                        </p>
+                      )}
+                      {hasRecords && (
+                        <button
+                          type="button"
+                          onClick={() => setShowDnsModal(true)}
+                          className="text-xs text-primary hover:text-primary/80 font-medium shrink-0 transition-colors"
+                        >
+                          {w.viewRecords}
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                )
               )}
             </div>
           )}
@@ -372,7 +481,9 @@ export function RoutingSettingsCard({
             <div className="flex items-center gap-3">
               <div className="flex items-center gap-2">
                 <Hash className="size-3.5 text-muted-foreground" />
-                <span className="text-[13px] text-muted-foreground font-medium">{w.exposedPort}</span>
+                <span className="text-[13px] text-muted-foreground font-medium">
+                  {w.exposedPort}
+                </span>
               </div>
               <input
                 type="text"
@@ -436,11 +547,13 @@ export function RoutingSettingsCard({
               <div className="flex items-center gap-3">
                 <div className="flex items-center gap-2">
                   <Link2 className="size-3.5 text-muted-foreground" />
-                  <span className="text-[13px] text-muted-foreground font-medium">{w.staticPath}</span>
+                  <span className="text-[13px] text-muted-foreground font-medium">
+                    {w.staticPath}
+                  </span>
                 </div>
                 <div className="flex items-center gap-2 flex-1">
                   <input
-                    value={saveMode === "explicit" ? draftTargetPath : (targetPath || "/")}
+                    value={saveMode === "explicit" ? draftTargetPath : targetPath || "/"}
                     onChange={(event) => {
                       if (saveMode === "explicit") {
                         setDraftTargetPath(event.target.value);
@@ -469,15 +582,20 @@ export function RoutingSettingsCard({
               </p>
             </div>
           )}
-
         </div>
       )}
 
       {showDnsModal && hasRecords && (
-        <div className="fixed inset-0 bg-background/80 backdrop-blur-sm flex items-center justify-center z-50 p-4" onClick={() => setShowDnsModal(false)}>
+        <div
+          className="fixed inset-0 bg-background/80 backdrop-blur-sm flex items-center justify-center z-50 p-4"
+          onClick={() => setShowDnsModal(false)}
+        >
           <div className="max-w-xl w-full" onClick={(event) => event.stopPropagation()}>
             <div className="relative bg-card rounded-xl border border-border/50 shadow-lg overflow-hidden animate-in fade-in zoom-in-95 duration-200">
-              <button onClick={() => setShowDnsModal(false)} className="absolute top-3 end-3 w-8 h-8 bg-muted/50 rounded-lg flex items-center justify-center hover:bg-muted transition-colors z-10">
+              <button
+                onClick={() => setShowDnsModal(false)}
+                className="absolute top-3 end-3 w-8 h-8 bg-muted/50 rounded-lg flex items-center justify-center hover:bg-muted transition-colors z-10"
+              >
                 <X className="size-4 text-muted-foreground" />
               </button>
 
@@ -487,33 +605,64 @@ export function RoutingSettingsCard({
                 </div>
                 <div>
                   <h3 className="text-sm font-semibold text-foreground">{w.dnsConfiguration}</h3>
-                  <p className="text-xs text-muted-foreground">{interpolate(w.addRecordsFor, { hostname: previewHostname })}</p>
+                  <p className="text-xs text-muted-foreground">
+                    {interpolate(w.addRecordsFor, { hostname: previewHostname })}
+                  </p>
                 </div>
               </div>
 
               <div className="p-5 space-y-3">
                 {dnsRecords.map((record, index) => (
-                  <div key={`${record.type}-${index}`} className="bg-muted/30 rounded-xl border border-border/50 p-4">
+                  <div
+                    key={`${record.type}-${index}`}
+                    className="bg-muted/30 rounded-xl border border-border/50 p-4"
+                  >
                     <div className="flex items-center gap-3 mb-3">
-                      <span className="px-2.5 py-1 bg-foreground text-background text-xs font-bold rounded-lg">{record.type}</span>
-                      <span className="text-xs text-muted-foreground">{w.recordLabels[record.type] ?? ""}</span>
+                      <span className="px-2.5 py-1 bg-foreground text-background text-xs font-bold rounded-lg">
+                        {record.type}
+                      </span>
+                      <span className="text-xs text-muted-foreground">
+                        {w.recordLabels[record.type] ?? ""}
+                      </span>
                     </div>
                     <div className="grid grid-cols-2 gap-3">
                       <div>
-                        <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider mb-1.5">{w.nameHost}</p>
+                        <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider mb-1.5">
+                          {w.nameHost}
+                        </p>
                         <div className="flex items-center gap-2 bg-background rounded-lg border border-border/50 px-3 py-2">
-                          <code className="flex-1 text-sm font-medium text-foreground">{record.host}</code>
-                          <button onClick={() => copy(record.host, `${index}-host`)} className="p-1 hover:bg-muted rounded-md transition-colors shrink-0">
-                            {copied === `${index}-host` ? <Check className="size-3.5 text-success" /> : <Copy className="size-3.5 text-muted-foreground" />}
+                          <code className="flex-1 text-sm font-medium text-foreground">
+                            {record.host}
+                          </code>
+                          <button
+                            onClick={() => copy(record.host, `${index}-host`)}
+                            className="p-1 hover:bg-muted rounded-md transition-colors shrink-0"
+                          >
+                            {copied === `${index}-host` ? (
+                              <Check className="size-3.5 text-success" />
+                            ) : (
+                              <Copy className="size-3.5 text-muted-foreground" />
+                            )}
                           </button>
                         </div>
                       </div>
                       <div>
-                        <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider mb-1.5">{w.valueTarget}</p>
+                        <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider mb-1.5">
+                          {w.valueTarget}
+                        </p>
                         <div className="flex items-center gap-2 bg-background rounded-lg border border-border/50 px-3 py-2">
-                          <code className="flex-1 text-sm font-medium text-foreground truncate">{record.value}</code>
-                          <button onClick={() => copy(record.value, `${index}-value`)} className="p-1 hover:bg-muted rounded-md transition-colors shrink-0">
-                            {copied === `${index}-value` ? <Check className="size-3.5 text-success" /> : <Copy className="size-3.5 text-muted-foreground" />}
+                          <code className="flex-1 text-sm font-medium text-foreground truncate">
+                            {record.value}
+                          </code>
+                          <button
+                            onClick={() => copy(record.value, `${index}-value`)}
+                            className="p-1 hover:bg-muted rounded-md transition-colors shrink-0"
+                          >
+                            {copied === `${index}-value` ? (
+                              <Check className="size-3.5 text-success" />
+                            ) : (
+                              <Copy className="size-3.5 text-muted-foreground" />
+                            )}
                           </button>
                         </div>
                       </div>
@@ -524,7 +673,8 @@ export function RoutingSettingsCard({
                 <div className="flex items-start gap-2 p-3 bg-primary/5 rounded-xl border border-primary/10">
                   <Info className="size-3.5 text-primary shrink-0 mt-0.5" />
                   <p className="text-xs text-muted-foreground leading-relaxed">
-                    {dnsMode === "selfhosted" ? w.dnsHintSelfhosted : w.dnsHintCloud} {w.dnsPropagation}
+                    {dnsMode === "selfhosted" ? w.dnsHintSelfhosted : w.dnsHintCloud}{" "}
+                    {w.dnsPropagation}
                   </p>
                 </div>
               </div>

@@ -12,6 +12,7 @@ import { streamSSE } from "../../lib/sse";
 import * as domainService from "./domain.service";
 import { maybeProxyCloudProject } from "../../lib/cloud/project-router";
 import type { TAddDomainBody, TUploadCertBody } from "./domain.schema";
+import * as organizationDomainService from "./organization-domain.service";
 
 // ─── Handlers ────────────────────────────────────────────────────────────────
 
@@ -21,21 +22,92 @@ export async function list(c: Context) {
   if (!projectId) {
     return c.json({ error: "projectId query parameter required" }, 400);
   }
-  await permission.assert(getRequestContext(c), { resourceType: "project", resourceId: projectId, action: "read" });
+  await permission.assert(getRequestContext(c), {
+    resourceType: "project",
+    resourceId: projectId,
+    action: "read",
+  });
   const proxied = await maybeProxyCloudProject(c, projectId, getRequestContext(c).organizationId);
   if (proxied) return proxied;
   const domains = await domainService.listDomains(ctx, projectId);
   return c.json({ data: domains });
 }
 
+export async function listRegistered(c: Context) {
+  const data = await organizationDomainService.listOrganizationDomains(getRequestContext(c));
+  return c.json({ data });
+}
+
+export async function register(c: Context) {
+  const ctx = getRequestContext(c);
+  const body = await c.req.json<{ domain: string }>();
+  const data = await organizationDomainService.registerOrganizationDomain(ctx, body.domain);
+  audit.recordAsync(auditContextFrom(c, ctx.organizationId, ctx.userId), {
+    eventType: "domain.registered",
+    resourceType: "organization",
+    resourceId: ctx.organizationId,
+    after: { domain: data.domain.domain },
+  });
+  return c.json({ data: data.domain, records: data.records }, 201);
+}
+
+export async function registeredRecords(c: Context) {
+  const data = await organizationDomainService.getOrganizationDomainRecords(
+    getRequestContext(c),
+    param(c, "id"),
+  );
+  return c.json({ data });
+}
+
+export async function verifyRegistered(c: Context) {
+  const ctx = getRequestContext(c);
+  const id = param(c, "id");
+  const data = await organizationDomainService.verifyOrganizationDomain(ctx, id);
+  audit.recordAsync(auditContextFrom(c, ctx.organizationId, ctx.userId), {
+    eventType: data.verified ? "domain.registered_verified" : "domain.registered_verify_failed",
+    resourceType: "organization",
+    resourceId: ctx.organizationId,
+    after: { domainId: id, domain: data.domain.domain, verified: data.verified },
+  });
+  return c.json({ data }, data.verified ? 200 : 422);
+}
+
+export async function setRegisteredDefault(c: Context) {
+  const ctx = getRequestContext(c);
+  const data = await organizationDomainService.setDefaultOrganizationDomain(ctx, param(c, "id"));
+  return c.json({ data });
+}
+
+export async function removeRegistered(c: Context) {
+  const ctx = getRequestContext(c);
+  const id = param(c, "id");
+  await organizationDomainService.removeOrganizationDomain(ctx, id);
+  audit.recordAsync(auditContextFrom(c, ctx.organizationId, ctx.userId), {
+    eventType: "domain.registered_removed",
+    resourceType: "organization",
+    resourceId: ctx.organizationId,
+    after: { domainId: id },
+  });
+  return c.json({ success: true });
+}
+
 export async function add(c: Context) {
   const ctx = getRequestContext(c);
   const body = await c.req.json<TAddDomainBody>();
   if (body.projectId) {
-    await permission.assert(getRequestContext(c), { resourceType: "project", resourceId: body.projectId, action: "write" });
-    const proxied = await maybeProxyCloudProject(c, body.projectId, getRequestContext(c).organizationId, {
-      body: JSON.stringify(body),
+    await permission.assert(getRequestContext(c), {
+      resourceType: "project",
+      resourceId: body.projectId,
+      action: "write",
     });
+    const proxied = await maybeProxyCloudProject(
+      c,
+      body.projectId,
+      getRequestContext(c).organizationId,
+      {
+        body: JSON.stringify(body),
+      },
+    );
     if (proxied) return proxied;
   }
   const result = await domainService.addDomain(ctx, body);
@@ -55,7 +127,11 @@ export async function add(c: Context) {
 export async function remove(c: Context) {
   const ctx = getRequestContext(c);
   const id = param(c, "id");
-  await permission.assert(getRequestContext(c), { resourceType: "domain", resourceId: id, action: "admin" });
+  await permission.assert(getRequestContext(c), {
+    resourceType: "domain",
+    resourceId: id,
+    action: "admin",
+  });
   await domainService.removeDomain(ctx, id);
   audit.recordAsync(auditContextFrom(c, ctx.organizationId, ctx.userId), {
     eventType: "domain.removed",
@@ -69,7 +145,11 @@ export async function remove(c: Context) {
 export async function verify(c: Context) {
   const ctx = getRequestContext(c);
   const id = param(c, "id");
-  await permission.assert(getRequestContext(c), { resourceType: "domain", resourceId: id, action: "write" });
+  await permission.assert(getRequestContext(c), {
+    resourceType: "domain",
+    resourceId: id,
+    action: "write",
+  });
   const result = await domainService.verifyDomain(ctx, id);
 
   // Audit verify attempts (both success and failure) so DNS verification
@@ -145,9 +225,15 @@ export async function verifyStream(c: Context) {
         resourceId: id,
         after: { verified: result.verified },
       });
-      await emit("complete", JSON.stringify({ type: "complete", status: result.verified ? "completed" : "failed" }));
+      await emit(
+        "complete",
+        JSON.stringify({ type: "complete", status: result.verified ? "completed" : "failed" }),
+      );
     } catch (err) {
-      await emit("log", JSON.stringify({ type: "log", message: safeErrorMessage(err), level: "error" }));
+      await emit(
+        "log",
+        JSON.stringify({ type: "log", message: safeErrorMessage(err), level: "error" }),
+      );
       await emit("complete", JSON.stringify({ type: "complete", status: "failed" }));
     } finally {
       closed = true;
@@ -158,7 +244,11 @@ export async function verifyStream(c: Context) {
 export async function records(c: Context) {
   const ctx = getRequestContext(c);
   const id = param(c, "id");
-  await permission.assert(getRequestContext(c), { resourceType: "domain", resourceId: id, action: "read" });
+  await permission.assert(getRequestContext(c), {
+    resourceType: "domain",
+    resourceId: id,
+    action: "read",
+  });
   const result = await domainService.getDomainRecords(ctx, id);
   return c.json({ data: result });
 }
@@ -167,7 +257,11 @@ export async function records(c: Context) {
 export async function setPrimary(c: Context) {
   const ctx = getRequestContext(c);
   const id = param(c, "id");
-  await permission.assert(getRequestContext(c), { resourceType: "domain", resourceId: id, action: "write" });
+  await permission.assert(getRequestContext(c), {
+    resourceType: "domain",
+    resourceId: id,
+    action: "write",
+  });
   const domain = await domainService.setPrimaryDomain(ctx, id);
   audit.recordAsync(auditContextFrom(c, ctx.organizationId, ctx.userId), {
     eventType: "domain.set_primary",
@@ -192,7 +286,11 @@ export async function preview(c: Context) {
 export async function renewSsl(c: Context) {
   const ctx = getRequestContext(c);
   const id = param(c, "id");
-  await permission.assert(getRequestContext(c), { resourceType: "domain", resourceId: id, action: "write" });
+  await permission.assert(getRequestContext(c), {
+    resourceType: "domain",
+    resourceId: id,
+    action: "write",
+  });
   const result = await domainService.renewDomainSsl(ctx, id);
   return c.json({ data: result });
 }
@@ -201,7 +299,11 @@ export async function renewSsl(c: Context) {
 export async function verifySsl(c: Context) {
   const ctx = getRequestContext(c);
   const id = param(c, "id");
-  await permission.assert(getRequestContext(c), { resourceType: "domain", resourceId: id, action: "write" });
+  await permission.assert(getRequestContext(c), {
+    resourceType: "domain",
+    resourceId: id,
+    action: "write",
+  });
   const result = await domainService.verifyDomainSsl(ctx, id);
   return c.json({ data: result });
 }
@@ -216,7 +318,11 @@ export async function uploadCert(c: Context) {
 
   const ctx = getRequestContext(c);
   const id = param(c, "id");
-  await permission.assert(getRequestContext(c), { resourceType: "domain", resourceId: id, action: "write" });
+  await permission.assert(getRequestContext(c), {
+    resourceType: "domain",
+    resourceId: id,
+    action: "write",
+  });
   const body = await c.req.json<TUploadCertBody>();
   const result = await domainService.uploadDomainCert(ctx, id, body);
   audit.recordAsync(auditContextFrom(c, ctx.organizationId, ctx.userId), {
@@ -253,7 +359,7 @@ export async function verifyPending(c: Context) {
   // each domain's own project owner via verifyDomain, so the requester
   // can only kick off the sweep, not cross-tenant verify.
   type Body = { minAgeMinutes?: number; limit?: number };
-  const body: Body = await c.req.json<Body>().catch(() => ({} as Body));
+  const body: Body = await c.req.json<Body>().catch(() => ({}) as Body);
   const result = await domainService.verifyPendingDomains({
     minAgeMinutes: typeof body.minAgeMinutes === "number" ? body.minAgeMinutes : undefined,
     limit: typeof body.limit === "number" ? body.limit : undefined,
