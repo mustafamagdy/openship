@@ -19,6 +19,7 @@ import {
 } from "@/lib/api";
 import { useToast } from "@/context/ToastContext";
 import { encodeRepoSlug } from "@/utils/repoSlug";
+import { CustomSelect } from "@/components/ui/CustomSelect";
 
 export function AzureReposList() {
   const router = useRouter();
@@ -149,17 +150,19 @@ export function AzureReposList() {
               </option>
             ))}
           </select>
-          <select
+          <CustomSelect
             value={project}
-            onChange={(event) => setProject(event.target.value)}
-            className="rounded-xl border border-border/50 bg-muted/30 px-3.5 py-2.5 text-sm outline-none focus:ring-2 focus:ring-primary/20"
-          >
-            {projects.map((item) => (
-              <option key={item.id} value={item.name}>
-                {item.name}
-              </option>
-            ))}
-          </select>
+            onChange={setProject}
+            options={projects.map((item) => ({
+              value: item.name,
+              label: item.name,
+            }))}
+            placeholder="Select an Azure DevOps project"
+            searchable
+            searchPlaceholder="Search Azure DevOps projects"
+            emptyMessage="No matching Azure DevOps projects."
+            className="[&_button]:rounded-xl [&_button]:bg-muted/30 [&_button]:px-3.5 [&_button]:py-2.5 [&_button]:font-normal"
+          />
         </div>
         <div className="relative">
           <Search className="absolute start-3.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
