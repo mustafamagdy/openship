@@ -65,6 +65,10 @@ const DeployRepository: React.FC = () => {
     const force = searchParams.get("force") || undefined;
     const projectId = searchParams.get("projectId") || undefined;
     const branch = searchParams.get("branch") || undefined;
+    const provider =
+      searchParams.get("provider") === "azure-devops"
+        ? ("azure-devops" as const)
+        : undefined;
     // Folder-upload: the user picked the stack up front (no auto-detection);
     // carry it (and the folder name) so the wizard seeds from the stack defaults.
     const uploadStack = searchParams.get("stack") || undefined;
@@ -215,6 +219,7 @@ const DeployRepository: React.FC = () => {
                 result = await initializeFromRepo(decoded.owner, decoded.repo, force, {
                     branch: branch ?? decoded.branch,
                     projectId: projectId ?? decoded.projectId,
+                    provider,
                 });
             }
 
@@ -267,7 +272,7 @@ const DeployRepository: React.FC = () => {
         };
 
         initialize();
-    }, [slug, initializeFromRepo, initializeFromLocal, initializeFromUpload, initializeFromProject, isConfigEdit, force, projectId, branch, uploadStack, uploadName, toast, t]);
+    }, [slug, initializeFromRepo, initializeFromLocal, initializeFromUpload, initializeFromProject, isConfigEdit, force, projectId, branch, provider, uploadStack, uploadName, toast, t]);
 
     if (loading) {
         return <SkeletonLoader source={decodedSource} />;

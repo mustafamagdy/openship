@@ -27,6 +27,10 @@ export const mapRowToDeployment = (row: any): Deployment => {
     environment: row.environment ?? "production",
     owner: row.meta?.gitOwner,
     repo: row.meta?.gitRepo,
+    gitProvider:
+      row.gitProvider === "azure-devops" || row.meta?.gitProvider === "azure-devops"
+        ? "azure-devops"
+        : "github",
     branch: row.branch ?? undefined,
     projectId: row.projectId,
     projectName: row.projectName,
@@ -221,4 +225,3 @@ export const calculateDeploymentStats = (deployments: Deployment[]) => {
     canceled: deployments.filter((d) => d.status === "canceled" || d.status === "cancelled").length,
   };
 };
-

@@ -30,6 +30,7 @@ export async function assertGitHubAccessForDeployment(
   const dep = await getDeployment(deploymentId, organizationId);
   const project = await repos.project.findById(dep.projectId);
   if (!project) return;
+  if ((project.gitProvider ?? "github") !== "github") return;
   await assertGitHubRepoAccess(ctx, {
     owner: project.gitOwner,
     repo: project.gitRepo,
@@ -70,7 +71,11 @@ export async function listDeployments(
     const activeId = project.activeDeploymentId;
     return {
       ...result,
-      rows: result.rows.map((d) => ({ ...d, isActive: d.id === activeId })),
+      rows: result.rows.map((d) => ({
+        ...d,
+        gitProvider: project.gitProvider,
+        isActive: d.id === activeId,
+      })),
     };
   }
 
@@ -83,10 +88,19 @@ export async function listDeployments(
   });
 
   const projectIds = [...new Set(result.rows.map((d) => d.projectId))];
-  const projectMap = new Map<string, { name: string; activeDeploymentId: string | null }>();
+  const projectMap = new Map<
+    string,
+    { name: string; activeDeploymentId: string | null; gitProvider: string | null }
+  >();
   for (const pid of projectIds) {
     const p = await repos.project.findById(pid);
-    if (p) projectMap.set(pid, { name: p.name, activeDeploymentId: p.activeDeploymentId });
+    if (p) {
+      projectMap.set(pid, {
+        name: p.name,
+        activeDeploymentId: p.activeDeploymentId,
+        gitProvider: p.gitProvider,
+      });
+    }
   }
 
   const enriched = result.rows.map((d) => {
@@ -94,6 +108,7 @@ export async function listDeployments(
     return {
       ...d,
       projectName: proj?.name ?? "Unknown",
+      gitProvider: proj?.gitProvider ?? null,
       isActive: proj?.activeDeploymentId === d.id,
     };
   });
@@ -429,5 +444,3 @@ export async function getBuildLogs(
   }
   return buildSession.logs as LogEntry[];
 }
-
-

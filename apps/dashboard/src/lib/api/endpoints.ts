@@ -185,6 +185,18 @@ export const endpoints = {
     disconnect: "github/disconnect",
   },
 
+  azureDevops: {
+    connections: "azure-devops/connections",
+    connection: (organization: string) =>
+      `azure-devops/connections/${encodeURIComponent(organization)}`,
+    projects: (organization: string) =>
+      `azure-devops/connections/${encodeURIComponent(organization)}/projects`,
+    repos: (organization: string, project: string) =>
+      `azure-devops/connections/${encodeURIComponent(organization)}/projects/${encodeURIComponent(project)}/repos`,
+    branches: (organization: string, project: string, repo: string) =>
+      `azure-devops/connections/${encodeURIComponent(organization)}/projects/${encodeURIComponent(project)}/repos/${encodeURIComponent(repo)}/branches`,
+  },
+
   /* ---------------------------------------------------------------- */
   /*  Icons                                                           */
   /* ---------------------------------------------------------------- */

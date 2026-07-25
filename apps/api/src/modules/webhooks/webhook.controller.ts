@@ -5,7 +5,7 @@
  * The controller verifies the signature, then delegates to the registered
  * provider handler. This keeps provider-specific logic out of this file.
  *
- * Only GitHub registers here today. Stripe is NOT a generic provider — its
+ * GitHub and Azure Repos register here. Stripe is NOT a generic provider — its
  * webhook lives at `/api/billing/webhook/stripe` (verified via the Stripe SDK
  * `constructEvent`), so it is intentionally absent from the allowlist below.
  */
@@ -15,7 +15,7 @@ import { getWebhookProvider } from "./webhook.service";
 import type { WebhookProviderName } from "./webhook.types";
 
 /** Allowed provider names - rejects anything else at the route level. */
-const ALLOWED_PROVIDERS = new Set<string>(["github"]);
+const ALLOWED_PROVIDERS = new Set<string>(["github", "azure-devops"]);
 
 /**
  * Generic webhook handler - looks up the provider by route param

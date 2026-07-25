@@ -435,6 +435,20 @@
       "when": 1784881797507,
       "tag": "0061_notification_default_multi_kind",
       "breakpoints": true
+    },
+    {
+      "idx": 62,
+      "version": "7",
+      "when": 1784950000000,
+      "tag": "0062_add_azure_devops_connection",
+      "breakpoints": true
+    },
+    {
+      "idx": 63,
+      "version": "7",
+      "when": 1784950100000,
+      "tag": "0063_add_project_webhook_external_id",
+      "breakpoints": true
     }
   ]
 }

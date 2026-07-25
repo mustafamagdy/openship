@@ -239,6 +239,7 @@ export async function runBuildPipeline(
           const { cloneUrl, gitEnv: GIT_ENV, credFlag: CRED } = assembleGitClone({
             repoUrl: config.repoUrl,
             gitToken: config.gitToken,
+            gitUsername: config.gitUsername,
             gitCredentialHelperPath: config.gitCredentialHelperPath,
             ssh: sshFiles,
           });
@@ -391,4 +392,3 @@ export function detectBuildKillHint(output: string): string | null {
   }
   return null;
 }
-

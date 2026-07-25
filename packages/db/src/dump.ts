@@ -393,6 +393,7 @@ export interface EncryptedColumnSpec {
  * per-install), so it MUST be redacted on any cross-host move.
  */
 export const ENCRYPTED_COLUMNS: ReadonlyArray<EncryptedColumnSpec> = [
+  { table: "azure_devops_connection", column: "patEncrypted" },
   { table: "user_settings", column: "cloudSessionToken" },
   { table: "user_settings", column: "cloneTokenEncrypted" },
   { table: "project", column: "cloneTokenEncrypted" },

@@ -206,6 +206,11 @@ export function sharedWebhookUrl(): string {
   return `${resolveApiPublicUrl()}/api/webhooks/github`;
 }
 
+/** Azure DevOps service-hook callback for Azure Repos push events. */
+export function azureDevopsWebhookUrl(): string {
+  return `${resolveApiPublicUrl()}/api/webhooks/azure-devops`;
+}
+
 /**
  * The domain-strategy webhook callback URL: delivered directly to a project's
  * own verified domain via the `/_openship/hooks/` OpenResty location (proxied to

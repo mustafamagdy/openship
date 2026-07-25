@@ -3,7 +3,7 @@
  *
  * POST /api/webhooks/:provider - dispatches to the registered provider
  *
- * Only "github" is accepted. (Stripe has its own SDK-verified route at
+ * GitHub and Azure Repos are accepted. (Stripe has its own SDK-verified route at
  * /api/billing/webhook/stripe.) All other paths return 404. These routes do
  * NOT require session auth - they verify signatures instead.
  */
@@ -18,7 +18,7 @@ const r = secureRouter(new Hono(), {
   basePath: "/api/webhooks",
 });
 
-/** 5 MB - well above typical GitHub payloads (~200 KB). */
+/** 5 MB - well above typical Git-provider payloads (~200 KB). */
 const MAX_WEBHOOK_BODY = 5 * 1024 * 1024;
 
 // Rate-limit policy `webhook-ingress` is set in the route spec below —
@@ -28,7 +28,7 @@ r.public(
   "post",
   "/:provider",
   {
-    reason: "Provider webhook (GitHub/Stripe) - HMAC/signature verified in handler",
+    reason: "Provider webhook (GitHub/Azure Repos) - provider credentials verified in handler",
     rateLimit: "webhook-ingress",
   },
   bodyLimit({ maxSize: MAX_WEBHOOK_BODY }),
@@ -36,4 +36,3 @@ r.public(
 );
 
 export const webhookRoutes = r.hono;
-

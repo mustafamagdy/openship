@@ -1,0 +1,172 @@
+import { beforeEach, describe, expect, it, vi } from "vitest";
+
+const {
+  findByGitRepo,
+  claim,
+  markProcessed,
+  triggerDeployment,
+  resolveOrgOwner,
+  decrypt,
+} = vi.hoisted(() => ({
+  findByGitRepo: vi.fn(),
+  claim: vi.fn(),
+  markProcessed: vi.fn(),
+  triggerDeployment: vi.fn(),
+  resolveOrgOwner: vi.fn(),
+  decrypt: vi.fn((value: string) => value),
+}));
+
+vi.mock("@repo/db", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@repo/db")>();
+  return {
+    ...actual,
+    repos: {
+      project: { findByGitRepo },
+      githubWebhookEvent: { claim, markProcessed },
+    },
+  };
+});
+
+vi.mock("../../../src/lib/encryption", () => ({ decrypt }));
+vi.mock("../../../src/lib/org-actor", () => ({ resolveOrgOwner }));
+vi.mock("../../../src/modules/deployments/build.service", () => ({
+  triggerDeployment,
+}));
+
+import { azureDevopsWebhookProvider } from "../../../src/modules/azure-devops/azure-devops.webhook";
+
+function pushPayload(branch = "main") {
+  return {
+    id: `delivery-${branch}`,
+    subscriptionId: "subscription-1",
+    eventType: "git.push",
+    resource: {
+      refUpdates: [
+        {
+          name: `refs/heads/${branch}`,
+          oldObjectId: "1".repeat(40),
+          newObjectId: "2".repeat(40),
+        },
+      ],
+      commits: [
+        {
+          commitId: "2".repeat(40),
+          comment: `Push ${branch}`,
+        },
+      ],
+      repository: {
+        id: "repo-1",
+        name: "relay",
+        remoteUrl: "https://dev.azure.com/geeksclub/relay/_git/relay",
+        project: { id: "project-1", name: "relay" },
+      },
+    },
+    resourceContainers: {
+      account: { baseUrl: "https://dev.azure.com/geeksclub/" },
+    },
+  };
+}
+
+const project = {
+  id: "openship-project",
+  organizationId: "org-1",
+  gitProvider: "azure-devops",
+  gitOwner: "geeksclub/relay",
+  gitRepo: "relay",
+  gitBranch: "main",
+  autoDeploy: true,
+  webhookSecret: "hook-secret",
+  webhookExternalId: "subscription-1",
+};
+
+describe("azureDevopsWebhookProvider", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    findByGitRepo.mockResolvedValue([project]);
+    claim.mockResolvedValue(true);
+    markProcessed.mockResolvedValue(undefined);
+    resolveOrgOwner.mockResolvedValue({ userId: "owner-1" });
+    triggerDeployment.mockResolvedValue(undefined);
+  });
+
+  it("accepts only the per-repository Basic auth secret", async () => {
+    const payload = JSON.stringify(pushPayload());
+    const valid = await azureDevopsWebhookProvider.verify(payload, {
+      authorization: `Basic ${Buffer.from("openship:hook-secret").toString("base64")}`,
+    });
+    expect(valid).toEqual({ valid: true });
+
+    const invalid = await azureDevopsWebhookProvider.verify(payload, {
+      authorization: `Basic ${Buffer.from("openship:wrong").toString("base64")}`,
+    });
+    expect(invalid.valid).toBe(false);
+  });
+
+  it("routes a branch push to the matching auto-deploy project", async () => {
+    const result = await azureDevopsWebhookProvider.handle(pushPayload(), {
+      authorization: `Basic ${Buffer.from("openship:hook-secret").toString("base64")}`,
+    });
+
+    expect(result.success).toBe(true);
+    expect(findByGitRepo).toHaveBeenCalledWith("geeksclub/relay", "relay");
+    expect(triggerDeployment).toHaveBeenCalledWith(
+      expect.objectContaining({
+        userId: "owner-1",
+        organizationId: "org-1",
+      }),
+      {
+        projectId: "openship-project",
+        branch: "main",
+        trigger: "webhook",
+        commitSha: "2".repeat(40),
+        commitMessage: "Push main",
+      },
+    );
+    expect(markProcessed).toHaveBeenCalledWith(
+      "azure-devops:subscription-1:delivery-main",
+    );
+  });
+
+  it("does not deploy an environment tracking another branch", async () => {
+    const result = await azureDevopsWebhookProvider.handle(
+      pushPayload("develop"),
+      {
+        authorization: `Basic ${Buffer.from("openship:hook-secret").toString("base64")}`,
+      },
+    );
+    expect(result.success).toBe(true);
+    expect(triggerDeployment).not.toHaveBeenCalled();
+  });
+
+  it("ignores a duplicate delivery", async () => {
+    claim.mockResolvedValue(false);
+    const result = await azureDevopsWebhookProvider.handle(pushPayload(), {
+      authorization: `Basic ${Buffer.from("openship:hook-secret").toString("base64")}`,
+    });
+    expect(result.message).toBe("Duplicate delivery ignored");
+    expect(triggerDeployment).not.toHaveBeenCalled();
+  });
+
+  it("does not trigger a second OpenShip organization linked to the same Azure repo", async () => {
+    findByGitRepo.mockResolvedValue([
+      project,
+      {
+        ...project,
+        id: "other-project",
+        organizationId: "org-2",
+        webhookSecret: "other-secret",
+        webhookExternalId: "subscription-2",
+      },
+    ]);
+
+    await azureDevopsWebhookProvider.handle(pushPayload(), {
+      authorization: `Basic ${Buffer.from("openship:hook-secret").toString("base64")}`,
+    });
+
+    expect(triggerDeployment).toHaveBeenCalledTimes(1);
+    expect(triggerDeployment).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ projectId: "openship-project" }),
+    );
+  });
+});

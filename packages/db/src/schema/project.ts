@@ -309,6 +309,9 @@ export const project = pgTable(
     activeDeploymentId: text("active_deployment_id"),
     /** GitHub webhook ID registered on the repo */
     webhookId: integer("webhook_id"),
+    /** Provider-native webhook/subscription ID for providers whose IDs are not
+     * numeric (Azure DevOps service-hook subscription IDs are UUID strings). */
+    webhookExternalId: text("webhook_external_id"),
     /** Domain hostname used for receiving GitHub webhooks (null = edge relay or none) */
     webhookDomain: text("webhook_domain"),
     /**

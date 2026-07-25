@@ -45,6 +45,12 @@ export {
 export { tokensApi } from "./tokens";
 export type { AccessToken, CreatedAccessToken, McpClient } from "./tokens";
 export { githubApi } from "./github";
+export { azureDevopsApi } from "./azure-devops";
+export type {
+  AzureDevopsConnection,
+  AzureDevopsProject,
+  AzureDevopsRepository,
+} from "./azure-devops";
 export { iconsApi } from "./icons";
 export { imagesApi } from "./images";
 export type { ImageCatalogEntry, ListImagesResponse } from "./images";

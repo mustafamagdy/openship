@@ -32,6 +32,9 @@ export function handleApiError(err: unknown, c: Context) {
 
   if (err instanceof AppError) {
     const { message, code, statusCode } = err;
+    console.warn(
+      `[API ${statusCode}] ${c.req.method} ${c.req.path}: ${code} — ${message}`,
+    );
     return c.json(
       { error: message, code },
       statusCode as 400 | 401 | 403 | 404 | 409 | 500,

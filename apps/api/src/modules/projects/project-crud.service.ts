@@ -36,6 +36,13 @@ import { getInstallationIdByOrg, getInstallUrl } from "../github/github.auth";
 import { domainWebhookUrl } from "../../lib/public-url";
 import { ensureSharedWebhook } from "./project-git-webhook";
 import {
+  azureCloneUrl,
+  getRepository as getAzureRepository,
+  listBranches as listAzureBranches,
+  getLatestCommit as getLatestAzureCommit,
+  parseAzureRepoOwner,
+} from "../azure-devops/azure-devops.service";
+import {
   deriveEnvironmentPublicEndpoints,
   deriveNextProjectRouteState,
   persistProjectRouteState,
@@ -212,8 +219,16 @@ export async function enrichProjectsBatch(
   });
 }
 
-function projectGitUrl(owner?: string | null, repo?: string | null) {
-  return owner && repo ? `https://github.com/${owner}/${repo}.git` : undefined;
+function projectGitUrl(
+  provider: string | null | undefined,
+  owner?: string | null,
+  repo?: string | null,
+) {
+  if (!owner || !repo) return undefined;
+  if (provider === "azure-devops") {
+    return azureCloneUrl(parseAzureRepoOwner(owner, repo));
+  }
+  return `https://github.com/${owner}/${repo}.git`;
 }
 
 function resolveProjectSource(data: TCreateProjectBody) {
@@ -238,7 +253,7 @@ function resolveProjectSource(data: TCreateProjectBody) {
     gitOwner,
     gitRepo,
     gitProvider: isRelease ? "release" : safeLocalPath ? "local" : (data.gitProvider ?? "github"),
-    gitUrl: projectGitUrl(gitOwner, gitRepo),
+    gitUrl: projectGitUrl(data.gitProvider, gitOwner, gitRepo),
     releaseSource: isRelease ? ((data.releaseSource as ReleaseSource | undefined) ?? null) : null,
   };
 }
@@ -306,7 +321,9 @@ function buildProductionProjectInput(
     gitUrl: source.gitUrl,
     releaseSource: source.releaseSource,
     installationId: data.installationId,
-    autoDeploy: !!(env.CLOUD_MODE && source.gitOwner && source.gitRepo),
+    autoDeploy:
+      source.gitProvider === "github" &&
+      !!(env.CLOUD_MODE && source.gitOwner && source.gitRepo),
     framework: data.framework ?? "unknown",
     packageManager: data.packageManager ?? "npm",
     installCommand: data.installCommand,
@@ -438,7 +455,7 @@ export async function createServicesProjectWithId(opts: {
     gitProvider: opts.gitProvider ?? undefined,
     gitOwner: opts.gitOwner ?? undefined,
     gitRepo: opts.gitRepo ?? undefined,
-    gitUrl: projectGitUrl(opts.gitOwner, opts.gitRepo),
+    gitUrl: projectGitUrl(opts.gitProvider, opts.gitOwner, opts.gitRepo),
   });
 
   try {
@@ -456,7 +473,7 @@ export async function createServicesProjectWithId(opts: {
       gitOwner: opts.gitOwner ?? undefined,
       gitRepo: opts.gitRepo ?? undefined,
       gitBranch: opts.gitBranch ?? "main",
-      gitUrl: projectGitUrl(opts.gitOwner, opts.gitRepo),
+      gitUrl: projectGitUrl(opts.gitProvider, opts.gitOwner, opts.gitRepo),
       autoDeploy: !!opts.autoDeploy,
       framework: "unknown", // services project — the stack lives on each service row
       packageManager: "npm",
@@ -492,7 +509,13 @@ export type LinkProjectRepoOutcome =
 export async function linkProjectRepo(
   ctx: RequestContext,
   projectId: string,
-  input: { owner: string; repo: string; branch?: string; installationId?: number },
+  input: {
+    provider?: string;
+    owner: string;
+    repo: string;
+    branch?: string;
+    installationId?: number;
+  },
 ): Promise<LinkProjectRepoOutcome> {
   const { organizationId } = ctx;
   const owner = input.owner?.trim();
@@ -506,7 +529,54 @@ export async function linkProjectRepo(
     return { ok: false, code: "not_found" };
   }
 
-  const gitUrl = projectGitUrl(owner, repo);
+  if (input.provider === "azure-devops") {
+    let coords;
+    try {
+      coords = parseAzureRepoOwner(owner, repo);
+    } catch (error) {
+      return {
+        ok: false,
+        code: "invalid",
+        message: safeErrorMessage(error),
+      };
+    }
+    const repository = await getAzureRepository(ctx, coords, { withBranches: false });
+    const defaultBranch = input.branch?.trim() || repository.default_branch;
+    const gitUrl = azureCloneUrl(coords);
+    const sharedGitFields = {
+      gitProvider: "azure-devops",
+      gitOwner: owner,
+      gitRepo: repo,
+      gitUrl,
+      installationId: null,
+    };
+    await repos.project.update(projectId, {
+      ...sharedGitFields,
+      gitBranch: defaultBranch,
+      autoDeploy: false,
+      webhookId: null,
+      webhookExternalId: null,
+    });
+    if (project!.groupId) {
+      await repos.projectGroup.update(project!.groupId, sharedGitFields);
+      const siblings = await repos.project.listByGroup(project!.groupId);
+      await Promise.all(
+        siblings
+          .filter((sibling) => sibling.id !== projectId)
+          .map((sibling) => repos.project.update(sibling.id, sharedGitFields)),
+      );
+    }
+    return {
+      ok: true,
+      owner,
+      repo,
+      branch: defaultBranch,
+      strategy: "repo",
+      autoDeploy: false,
+    };
+  }
+
+  const gitUrl = projectGitUrl("github", owner, repo);
   const defaultBranch = await resolveDefaultBranch(ctx, owner, repo, input.branch);
 
   const gitFields: Record<string, unknown> = {
@@ -1105,9 +1175,15 @@ export async function createProjectEnvironment(
 
   let productionBranch = base.gitBranch ?? undefined;
   if (!productionBranch && environmentType === "production" && base.gitOwner && base.gitRepo) {
-    // userId here is the actor who triggered the action — used to authorize
-    // the GitHub call against their installation token.
-    productionBranch = await resolveDefaultBranch(ctx, base.gitOwner, base.gitRepo);
+    productionBranch =
+      base.gitProvider === "azure-devops"
+        ? (
+            await getAzureRepository(
+              ctx,
+              parseAzureRepoOwner(base.gitOwner, base.gitRepo),
+            )
+          ).default_branch
+        : await resolveDefaultBranch(ctx, base.gitOwner, base.gitRepo);
   }
 
   const gitBranch =
@@ -1115,7 +1191,13 @@ export async function createProjectEnvironment(
     (environmentType === "production" ? (productionBranch ?? "main") : environmentSlug);
 
   if ((data.sourceMode ?? "branch") === "branch" && base.gitOwner && base.gitRepo && gitBranch) {
-    const branches = await listGitHubBranches(ctx, base.gitOwner, base.gitRepo);
+    const branches =
+      base.gitProvider === "azure-devops"
+        ? await listAzureBranches(
+            ctx,
+            parseAzureRepoOwner(base.gitOwner, base.gitRepo),
+          )
+        : await listGitHubBranches(ctx, base.gitOwner, base.gitRepo);
     const exists = branches.some((branch) => branch.name === gitBranch);
     if (!exists) {
       throw new ValidationError(`Branch "${gitBranch}" was not found for ${base.gitOwner}/${base.gitRepo}`);
@@ -1164,6 +1246,10 @@ export async function createProjectEnvironment(
     cloudArchiveStrategy: base.cloudArchiveStrategy,
     webhookId: null,
     webhookDomain: null,
+    webhookExternalId:
+      base.gitProvider === "azure-devops" ? base.webhookExternalId : null,
+    webhookSecret:
+      base.gitProvider === "azure-devops" ? base.webhookSecret : null,
     autoDeploy: base.autoDeploy,
   });
 
@@ -1228,7 +1314,13 @@ export async function getProjectCommitStatus(
 
   const branch = p.gitBranch?.trim() || "main";
   const head = ctx
-    ? await getLatestCommit(ctx, p.gitOwner, p.gitRepo, branch).catch(() => null)
+    ? p.gitProvider === "azure-devops"
+      ? await getLatestAzureCommit(
+          ctx,
+          parseAzureRepoOwner(p.gitOwner, p.gitRepo),
+          branch,
+        ).catch(() => null)
+      : await getLatestCommit(ctx, p.gitOwner, p.gitRepo, branch).catch(() => null)
     : null;
 
   let deployedSha: string | null = null;
@@ -1409,6 +1501,7 @@ export async function getGitInfo(projectId: string, organizationId: string) {
     gitUrl: p.gitUrl,
     installationId: p.installationId,
     webhookId: p.webhookId,
+    webhookExternalId: p.webhookExternalId,
     webhookDomain: p.webhookDomain,
     autoDeploy: p.autoDeploy,
     defaultRollbackStrategy: p.defaultRollbackStrategy,
@@ -1518,4 +1611,3 @@ export async function getLatestDeploymentSession(
       : null,
   };
 }
-

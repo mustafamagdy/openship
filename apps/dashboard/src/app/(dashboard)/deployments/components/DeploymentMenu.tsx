@@ -15,6 +15,7 @@ import {
 import { generateIcon } from "@/utils/icons";
 import { deployApi, getApiErrorMessage } from "@/lib/api";
 import { useI18n, interpolate } from "@/components/i18n-provider";
+import { repositoryWebUrl } from "@/utils/gitProvider";
 
 interface Deployment {
   id: string;
@@ -22,6 +23,7 @@ interface Deployment {
   domain: string;
   owner?: string;
   repo?: string;
+  gitProvider?: "github" | "azure-devops";
   commit: {
     hash: string;
     /** Full SHA when known — required by "Redeploy this commit". */
@@ -182,7 +184,14 @@ export const DeploymentMenu: React.FC<DeploymentMenuProps> = ({
           {deployment.owner && deployment.repo && (
             <button
               onClick={() => {
-                window.open(`https://github.com/${deployment.owner}/${deployment.repo}`, "_blank");
+                window.open(
+                  repositoryWebUrl(
+                    deployment.gitProvider,
+                    deployment.owner!,
+                    deployment.repo!,
+                  ),
+                  "_blank",
+                );
                 setIsOpen(false);
               }}
               className="w-full px-4 py-2.5 text-start text-sm text-foreground/70 hover:bg-muted transition-colors flex items-center gap-3"
@@ -309,4 +318,3 @@ export const DeploymentMenu: React.FC<DeploymentMenuProps> = ({
     </div>
   );
 };
-
