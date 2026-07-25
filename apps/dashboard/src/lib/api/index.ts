@@ -10,13 +10,13 @@
 
 /* --- Low-level client (rarely needed directly) -------------------- */
 export {
-	api,
-	ApiError,
-	getApiErrorMessage,
-	isAbortError,
-	isNetworkError,
-	setNetworkErrorHandler,
-	getApiBaseUrl,
+  api,
+  ApiError,
+  getApiErrorMessage,
+  isAbortError,
+  isNetworkError,
+  setNetworkErrorHandler,
+  getApiBaseUrl,
 } from "./client";
 export type { RequestOptions } from "./client";
 
@@ -30,6 +30,7 @@ export { appsApi } from "./apps";
 export type { AppCatalogEntry, AppCatalogField, InstallAppResult } from "./apps";
 export { deployApi } from "./deploy";
 export { domainsApi } from "./domains";
+export type { RegisteredDomain, RegisteredDomainVerifyResult, DomainDnsRecord } from "./domains";
 export {
   jobsApi,
   type JobView,
@@ -166,10 +167,7 @@ export type {
 } from "./terminal";
 
 /* --- Service terminal --------------------------------------------- */
-export {
-  requestServiceTerminalTicket,
-  buildServiceTerminalWsUrl,
-} from "./service-terminal";
+export { requestServiceTerminalTicket, buildServiceTerminalWsUrl } from "./service-terminal";
 
 /* --- Notifications ------------------------------------------------- */
 export { notificationsApi } from "./notifications";

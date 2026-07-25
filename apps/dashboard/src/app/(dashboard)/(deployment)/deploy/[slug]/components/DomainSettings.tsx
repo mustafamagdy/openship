@@ -1,12 +1,15 @@
 "use client";
 
-import React, { useCallback } from "react";
+import React, { useCallback, useEffect, useRef } from "react";
 import { getApiErrorMessage, projectsApi } from "@/lib/api";
 import { useToast } from "@/context/ToastContext";
 import { useI18n, interpolate } from "@/components/i18n-provider";
 import { usePlatform } from "@/context/PlatformContext";
 import { RoutingModePicker, type RoutingMode } from "@/components/routing/RoutingModePicker";
 import { createPublicEndpoint, type PublicEndpoint } from "@/context/deployment/types";
+import { useRegisteredDomains } from "@/hooks/useRegisteredDomains";
+import { buildRegisteredHostname } from "@/utils/registeredDomain";
+import { normalizeSubdomain } from "@/utils/subdomain";
 
 interface DomainSettingsProps {
   projectId?: string;
@@ -75,37 +78,69 @@ const DomainSettings: React.FC<DomainSettingsProps> = ({
   const { showToast } = useToast();
   const { t } = useI18n();
   const { baseDomain } = usePlatform();
+  const { defaultDomain } = useRegisteredDomains();
+  const appliedRegisteredDefault = useRef(false);
 
-  const handleChange = useCallback(async (
-    nextEndpoints: PublicEndpoint[],
-    nextRuntimePort?: string,
-  ) => {
-    setEndpoints(nextEndpoints, nextRuntimePort);
+  const handleChange = useCallback(
+    async (nextEndpoints: PublicEndpoint[], nextRuntimePort?: string) => {
+      setEndpoints(nextEndpoints, nextRuntimePort);
 
-    if (!projectId) {
+      if (!projectId) {
+        return;
+      }
+
+      const payload = nextEndpoints
+        .map((endpoint) => buildPublicEndpointPayload(endpoint, hasServer))
+        .filter(
+          (endpoint): endpoint is NonNullable<ReturnType<typeof buildPublicEndpointPayload>> =>
+            endpoint !== null,
+        );
+
+      if (payload.length !== nextEndpoints.length || payload.length === 0) {
+        return;
+      }
+
+      const primaryPort = hasServer && "port" in payload[0] ? payload[0].port : undefined;
+
+      try {
+        await projectsApi.update(projectId, {
+          publicEndpoints: payload,
+          ...(typeof primaryPort === "number" ? { port: primaryPort } : {}),
+        });
+      } catch (error) {
+        console.error("Failed to persist deploy domains:", error);
+        showToast(
+          getApiErrorMessage(error, t.deploy.domainSettings.saveFailed),
+          "error",
+          t.deploy.domainSettings.toastTitle,
+        );
+      }
+    },
+    [hasServer, projectId, setEndpoints, showToast],
+  );
+
+  useEffect(() => {
+    if (
+      projectId ||
+      appliedRegisteredDefault.current ||
+      !defaultDomain ||
+      !endpoints[0] ||
+      endpoints[0].domainType !== "free"
+    ) {
       return;
     }
 
-    const payload = nextEndpoints
-      .map((endpoint) => buildPublicEndpointPayload(endpoint, hasServer))
-      .filter((endpoint): endpoint is NonNullable<ReturnType<typeof buildPublicEndpointPayload>> => endpoint !== null);
-
-    if (payload.length !== nextEndpoints.length || payload.length === 0) {
-      return;
-    }
-
-    const primaryPort = hasServer && "port" in payload[0] ? payload[0].port : undefined;
-
-    try {
-      await projectsApi.update(projectId, {
-        publicEndpoints: payload,
-        ...(typeof primaryPort === "number" ? { port: primaryPort } : {}),
-      });
-    } catch (error) {
-      console.error("Failed to persist deploy domains:", error);
-      showToast(getApiErrorMessage(error, t.deploy.domainSettings.saveFailed), "error", t.deploy.domainSettings.toastTitle);
-    }
-  }, [hasServer, projectId, setEndpoints, showToast]);
+    const subdomain = normalizeSubdomain(endpoints[0].domain || projectName) || "app";
+    appliedRegisteredDefault.current = true;
+    void handleChange([
+      {
+        ...endpoints[0],
+        domainType: "custom",
+        customDomain: buildRegisteredHostname(subdomain, defaultDomain),
+      },
+      ...endpoints.slice(1),
+    ]);
+  }, [defaultDomain, endpoints, handleChange, projectId, projectName]);
 
   const mode: RoutingMode = noPublicRoute
     ? "none"

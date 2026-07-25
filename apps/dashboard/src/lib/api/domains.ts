@@ -32,7 +32,60 @@ export interface DomainSslVerifyResult {
   verified: boolean;
 }
 
+export interface RegisteredDomain {
+  id: string;
+  domain: string;
+  status: string;
+  verified: boolean;
+  verifiedAt?: string | null;
+  isDefault: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface RegisteredDomainVerifyResult {
+  verified: boolean;
+  message: string;
+  domain: RegisteredDomain;
+}
+
 export const domainsApi = {
+  listRegistered: () => api.get<{ data: RegisteredDomain[] }>(endpoints.domains.registry),
+
+  register: (domain: string) =>
+    api.post<{ data: RegisteredDomain; records: DomainDnsRecord[] }>(endpoints.domains.registry, {
+      domain,
+    }),
+
+  registeredRecords: (id: string) =>
+    api.get<{ data: DomainDnsRecord[] }>(endpoints.domains.registryRecords(id)),
+
+  verifyRegistered: async (id: string): Promise<RegisteredDomainVerifyResult> => {
+    try {
+      const response = await api.post<{ data: RegisteredDomainVerifyResult }>(
+        endpoints.domains.registryVerify(id),
+      );
+      return response.data;
+    } catch (err) {
+      if (
+        err instanceof ApiError &&
+        err.status === 422 &&
+        err.body &&
+        typeof err.body === "object"
+      ) {
+        const body = err.body as { data?: RegisteredDomainVerifyResult };
+        if (body.data) return body.data;
+      }
+      throw err;
+    }
+  },
+
+  setRegisteredDefault: (id: string) =>
+    api.post<{ data: RegisteredDomain }>(endpoints.domains.registryDefault(id)),
+
+  removeRegistered: (id: string) =>
+    api.delete<{ success: boolean }>(endpoints.domains.registryRemove(id)),
+
   /** Get DNS records preview for a hostname (no domain creation needed). */
   previewRecords: (hostname: string) =>
     api.post<{ data: DomainDnsRecords }>(endpoints.domains.preview, { hostname }),
@@ -50,7 +103,12 @@ export const domainsApi = {
     try {
       return await api.post<DomainVerifyResult>(endpoints.domains.verify(domainId));
     } catch (err) {
-      if (err instanceof ApiError && err.status === 422 && err.body && typeof err.body === "object") {
+      if (
+        err instanceof ApiError &&
+        err.status === 422 &&
+        err.body &&
+        typeof err.body === "object"
+      ) {
         return err.body as DomainVerifyResult;
       }
       throw err;
