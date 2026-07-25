@@ -7,6 +7,7 @@ const {
   triggerDeployment,
   resolveOrgOwner,
   decrypt,
+  handlePullRequestPreview,
 } = vi.hoisted(() => ({
   findByGitRepo: vi.fn(),
   claim: vi.fn(),
@@ -14,6 +15,7 @@ const {
   triggerDeployment: vi.fn(),
   resolveOrgOwner: vi.fn(),
   decrypt: vi.fn((value: string) => value),
+  handlePullRequestPreview: vi.fn(),
 }));
 
 vi.mock("@repo/db", async (importOriginal) => {
@@ -31,6 +33,9 @@ vi.mock("../../../src/lib/encryption", () => ({ decrypt }));
 vi.mock("../../../src/lib/org-actor", () => ({ resolveOrgOwner }));
 vi.mock("../../../src/modules/deployments/build.service", () => ({
   triggerDeployment,
+}));
+vi.mock("../../../src/modules/projects/pull-request-preview.service", () => ({
+  handlePullRequestPreview,
 }));
 
 import { azureDevopsWebhookProvider } from "../../../src/modules/azure-devops/azure-devops.webhook";
@@ -87,6 +92,9 @@ describe("azureDevopsWebhookProvider", () => {
     markProcessed.mockResolvedValue(undefined);
     resolveOrgOwner.mockResolvedValue({ userId: "owner-1" });
     triggerDeployment.mockResolvedValue(undefined);
+    handlePullRequestPreview.mockResolvedValue([
+      { projectId: project.id, action: "deployed" },
+    ]);
   });
 
   it("accepts only the per-repository Basic auth secret", async () => {
@@ -168,5 +176,46 @@ describe("azureDevopsWebhookProvider", () => {
       expect.anything(),
       expect.objectContaining({ projectId: "openship-project" }),
     );
+  });
+
+  it("routes pull request updates to the authorized preview lifecycle", async () => {
+    const payload = {
+      id: "delivery-pr-42",
+      subscriptionId: "subscription-pr-updated",
+      eventType: "git.pullrequest.updated",
+      resource: {
+        pullRequestId: 42,
+        status: "active",
+        title: "Preview Azure change",
+        sourceRefName: "refs/heads/feature/preview",
+        lastMergeSourceCommit: { commitId: "3".repeat(40) },
+        repository: {
+          id: "repo-1",
+          name: "relay",
+          remoteUrl: "https://dev.azure.com/geeksclub/relay/_git/relay",
+          project: { id: "project-1", name: "relay" },
+        },
+      },
+      resourceContainers: {
+        account: { baseUrl: "https://dev.azure.com/geeksclub/" },
+      },
+    };
+
+    const result = await azureDevopsWebhookProvider.handle(payload, {
+      authorization: `Basic ${Buffer.from("openship:hook-secret").toString("base64")}`,
+    });
+
+    expect(result.success).toBe(true);
+    expect(handlePullRequestPreview).toHaveBeenCalledWith({
+      provider: "azure-devops",
+      action: "upsert",
+      owner: "geeksclub/relay",
+      repo: "relay",
+      pullRequestNumber: 42,
+      branch: "feature/preview",
+      commitSha: "3".repeat(40),
+      title: "Preview Azure change",
+      projectIds: [project.id],
+    });
   });
 });

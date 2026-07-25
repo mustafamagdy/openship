@@ -4,8 +4,11 @@ import { decrypt, encrypt } from "../../lib/encryption";
 import type { RequestContext } from "../../lib/request-context";
 import {
   createPushSubscription,
+  createPullRequestSubscriptions,
   deletePushSubscription,
   parseAzureRepoOwner,
+  parseAzureWebhookSubscriptions,
+  serializeAzureWebhookSubscriptions,
 } from "./azure-devops.service";
 
 async function siblingProjects(project: Project): Promise<Project[]> {
@@ -42,38 +45,74 @@ export async function ensureAzureDevopsPushWebhook(
   });
 
   if (reusable?.webhookExternalId && reusable.webhookSecret) {
+    const secret = decrypt(reusable.webhookSecret);
+    let subscriptions = parseAzureWebhookSubscriptions(reusable.webhookExternalId);
+    if (
+      subscriptions &&
+      (!subscriptions.pullRequestCreated || !subscriptions.pullRequestUpdated)
+    ) {
+      const coords = parseAzureRepoOwner(project.gitOwner, project.gitRepo);
+      const previewSubscriptions = await createPullRequestSubscriptions(
+        ctx,
+        coords,
+        secret,
+      );
+      subscriptions = {
+        push: subscriptions.push,
+        pullRequestCreated: previewSubscriptions.created,
+        pullRequestUpdated: previewSubscriptions.updated,
+      };
+    }
+    const externalId = subscriptions
+      ? serializeAzureWebhookSubscriptions(subscriptions)
+      : reusable.webhookExternalId;
     await Promise.all(
       siblings
         .filter(
           (row) =>
-            row.webhookExternalId !== reusable.webhookExternalId ||
+            row.webhookExternalId !== externalId ||
             row.webhookSecret !== reusable.webhookSecret,
         )
         .map((row) =>
           repos.project.update(row.id, {
-            webhookExternalId: reusable.webhookExternalId,
+            webhookExternalId: externalId,
             webhookSecret: reusable.webhookSecret,
           }),
         ),
     );
-    return reusable.webhookExternalId;
+    return externalId;
   }
 
   const coords = parseAzureRepoOwner(project.gitOwner, project.gitRepo);
   const secret = randomBytes(32).toString("hex");
   const subscription = await createPushSubscription(ctx, coords, secret);
+  const previewSubscriptions = await createPullRequestSubscriptions(
+    ctx,
+    coords,
+    secret,
+  ).catch(async (error) => {
+    await deletePushSubscription(ctx, coords.organization, subscription.id).catch(
+      () => undefined,
+    );
+    throw error;
+  });
+  const externalId = serializeAzureWebhookSubscriptions({
+    push: subscription.id,
+    pullRequestCreated: previewSubscriptions.created,
+    pullRequestUpdated: previewSubscriptions.updated,
+  });
   const encryptedSecret = encrypt(secret);
   const targets = siblings.length > 0 ? siblings : [project];
 
   await Promise.all(
     targets.map((row) =>
       repos.project.update(row.id, {
-        webhookExternalId: subscription.id,
+        webhookExternalId: externalId,
         webhookSecret: encryptedSecret,
       }),
     ),
   );
-  return subscription.id;
+  return externalId;
 }
 
 /** Delete the shared subscription only after the final environment opts out. */

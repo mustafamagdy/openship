@@ -135,6 +135,42 @@ export interface GitHubPushPayload {
   hook_id?: number;
 }
 
+// ─── Pull request webhook payload ────────────────────────────────────────────
+
+export interface GitHubPullRequestPayload {
+  action:
+    | "opened"
+    | "reopened"
+    | "synchronize"
+    | "closed"
+    | "edited"
+    | "ready_for_review"
+    | "converted_to_draft";
+  number: number;
+  pull_request: {
+    number: number;
+    title: string;
+    state: "open" | "closed";
+    draft?: boolean;
+    merged?: boolean;
+    head: {
+      ref: string;
+      sha: string;
+      repo?: { full_name?: string } | null;
+    };
+    base: {
+      ref: string;
+      sha: string;
+    };
+  };
+  repository: {
+    name: string;
+    full_name: string;
+    owner: { login: string; id: number };
+  };
+  sender: { id: number; login: string };
+}
+
 // ─── Check run webhook payload ───────────────────────────────────────────────
 
 export interface GitHubCheckRunPayload {

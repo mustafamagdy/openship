@@ -5,6 +5,7 @@ import { decrypt } from "../../lib/encryption";
 import { buildBackgroundContext } from "../../lib/request-context";
 import { resolveOrgOwner } from "../../lib/org-actor";
 import { triggerDeployment } from "../deployments/build.service";
+import { handlePullRequestPreview } from "../projects/pull-request-preview.service";
 import type {
   WebhookHandlerResult,
   WebhookProvider,
@@ -26,6 +27,13 @@ interface AzurePushPayload {
       commitId?: string;
       comment?: string;
     }>;
+    pullRequestId?: number;
+    status?: string;
+    title?: string;
+    sourceRefName?: string;
+    lastMergeSourceCommit?: {
+      commitId?: string;
+    };
     repository?: {
       id?: string;
       name?: string;
@@ -176,7 +184,11 @@ async function handle(
 ): Promise<WebhookHandlerResult> {
   const payload = raw as AzurePushPayload;
   const event = payload.eventType ?? "unknown";
-  if (event !== "git.push") {
+  if (
+    event !== "git.push" &&
+    event !== "git.pullrequest.created" &&
+    event !== "git.pullrequest.updated"
+  ) {
     return { success: true, event, message: `Event '${event}' is not handled` };
   }
 
@@ -196,6 +208,62 @@ async function handle(
     if (!claimed) {
       return { success: true, event, message: "Duplicate delivery ignored" };
     }
+  }
+
+  if (
+    event === "git.pullrequest.created" ||
+    event === "git.pullrequest.updated"
+  ) {
+    const coords = coordinates(payload);
+    const pullRequestId = payload.resource?.pullRequestId;
+    const sourceRef = payload.resource?.sourceRefName;
+    if (
+      !coords ||
+      !pullRequestId ||
+      !sourceRef?.startsWith("refs/heads/")
+    ) {
+      return {
+        success: false,
+        event,
+        message: "Missing Azure Repos pull request coordinates",
+      };
+    }
+
+    const status = payload.resource?.status?.toLowerCase();
+    const results = await handlePullRequestPreview({
+      provider: "azure-devops",
+      action:
+        status === "completed" || status === "abandoned" ? "close" : "upsert",
+      owner: coords.owner,
+      repo: coords.repo,
+      pullRequestNumber: pullRequestId,
+      branch: sourceRef.replace(/^refs\/heads\//, ""),
+      commitSha: payload.resource?.lastMergeSourceCommit?.commitId,
+      title: payload.resource?.title,
+      projectIds: projects.map((project) => project.id),
+    });
+    if (dedupKey) {
+      await repos.githubWebhookEvent
+        .markProcessed(dedupKey)
+        .catch(() => undefined);
+    }
+    const failures = results.filter((result) => result.action === "failed");
+    return {
+      success: failures.length === 0,
+      event,
+      message:
+        results.length === 0
+          ? "No auto-deploy production project is linked to this repository"
+          : `${results.length - failures.length} preview operation(s) completed, ${failures.length} failed`,
+      ...(failures.length > 0
+        ? {
+            error: failures
+              .map((result) => result.message)
+              .filter(Boolean)
+              .join("; "),
+          }
+        : {}),
+    };
   }
 
   const commits = payload.resource?.commits ?? [];

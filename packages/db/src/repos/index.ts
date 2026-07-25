@@ -49,6 +49,11 @@ export {
   type BuildSession,
   type NewBuildSession,
 } from "./deployment.repo";
+export {
+  createDeploymentCheckRunRepo,
+  type DeploymentCheckRun as DeploymentCheckRunRecord,
+  type NewDeploymentCheckRun,
+} from "./deployment-check-run.repo";
 export { createDomainRepo, type Domain, type NewDomain } from "./domain.repo";
 export { createRouteRuleRepo, type RouteRule, type NewRouteRule } from "./route-rule.repo";
 export {
@@ -226,6 +231,7 @@ import { createGithubInstallStateRepo } from "./github-install-state.repo";
 import { createProjectGroupRepo } from "./project-group.repo";
 import { createProjectRepo } from "./project.repo";
 import { createDeploymentRepo } from "./deployment.repo";
+import { createDeploymentCheckRunRepo } from "./deployment-check-run.repo";
 import { createDomainRepo } from "./domain.repo";
 import { createRouteRuleRepo } from "./route-rule.repo";
 import { createWebhookSourceRepo } from "./webhook-source.repo";
@@ -297,6 +303,7 @@ export const repos = {
   projectGroup: createProjectGroupRepo(db),
   project: createProjectRepo(db),
   deployment: createDeploymentRepo(db),
+  deploymentCheckRun: createDeploymentCheckRunRepo(db),
   domain: createDomainRepo(db),
   routeRule: createRouteRuleRepo(db),
   webhookSource: createWebhookSourceRepo(db),

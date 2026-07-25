@@ -1,10 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { GitHubPushPayload } from "../../../src/modules/github/github.types";
 
-const { findByGitRepo, getRepository, triggerDeployment } = vi.hoisted(() => ({
+const { findByGitRepo, getRepository, triggerDeployment, handlePullRequest } = vi.hoisted(() => ({
   findByGitRepo: vi.fn(),
   getRepository: vi.fn(),
   triggerDeployment: vi.fn(),
+  handlePullRequest: vi.fn(),
 }));
 
 vi.mock("@repo/db", async (importOriginal) => {
@@ -35,6 +36,10 @@ vi.mock("../../../src/modules/deployments/build.service", () => ({
 
 vi.mock("../../../src/modules/github/github.service", () => ({
   getRepository,
+}));
+
+vi.mock("../../../src/modules/github/webhook-pull-request", () => ({
+  handlePullRequest,
 }));
 
 import { githubWebhookProvider } from "../../../src/modules/github/github.webhook";
@@ -72,6 +77,7 @@ describe("githubWebhookProvider", () => {
     findByGitRepo.mockReset();
     getRepository.mockReset();
     triggerDeployment.mockReset();
+    handlePullRequest.mockReset();
   });
 
   // TODO(webhook-test-rewrite): the three push-routing cases below assert
@@ -139,11 +145,20 @@ describe("githubWebhookProvider", () => {
     });
   });
 
-  it("does not deploy pull request events", async () => {
-    const result = await githubWebhookProvider.handle({}, { "x-github-event": "pull_request" });
+  it("routes pull request events to the preview handler", async () => {
+    handlePullRequest.mockResolvedValue({
+      success: true,
+      event: "pull_request",
+      message: "1 preview operation(s) completed, 0 failed",
+    });
+    const payload = { action: "opened", number: 12 };
+    const result = await githubWebhookProvider.handle(payload, {
+      "x-github-event": "pull_request",
+    });
 
     expect(result.success).toBe(true);
-    expect(result.message).toBe("Event 'pull_request' not handled");
+    expect(result.message).toContain("1 preview");
+    expect(handlePullRequest).toHaveBeenCalledWith(payload);
     expect(findByGitRepo).not.toHaveBeenCalled();
     expect(triggerDeployment).not.toHaveBeenCalled();
   });

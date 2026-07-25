@@ -28,6 +28,7 @@ import {
   markWebmailInstalled,
   mailServerIdFromWebmailSlug,
 } from "../mail/webmail/webmail-project.service";
+import { completePullRequestPreviewStatus } from "./pull-request-preview-status";
 
 export interface LifecycleContext {
   /**
@@ -235,13 +236,16 @@ export async function onFailure(
       },
     },
   );
+  await completePullRequestPreviewStatus(project, dep, "failure", {
+    error: errorMessage,
+  }).catch(() => undefined);
 }
 
 export async function onCancelled(
   ctx: LifecycleContext,
   durationMs?: number,
 ): Promise<void> {
-  const { runtime, dep, buildSessionId, persistLogs, provisioned } = ctx;
+  const { runtime, project, dep, buildSessionId, persistLogs, provisioned } = ctx;
 
   if (runtime && provisioned.imageRef) {
     try {
@@ -283,6 +287,9 @@ export async function onCancelled(
   await repos.deployment.updateStatus(dep.id, "cancelled");
   await repos.deployment.finishBuildSession(buildSessionId, "cancelled", durationMs ?? 0, persistLogs());
   sessionManager.updateStatus(dep.id, "cancelled");
+  await completePullRequestPreviewStatus(project, dep, "cancelled").catch(
+    () => undefined,
+  );
 }
 
 export async function onSuccess(
@@ -402,6 +409,9 @@ export async function onSuccess(
   if (result.url) {
     void detectAndStoreFavicon(project.id, result.url);
   }
+  await completePullRequestPreviewStatus(project, dep, "success", {
+    previewUrl: result.url,
+  }).catch(() => undefined);
 
   // Webmail: flip mail-state `installed=true` so the /emails Open-webmail
   // CTA can finally surface. Slug is the only carrier of mailServerId

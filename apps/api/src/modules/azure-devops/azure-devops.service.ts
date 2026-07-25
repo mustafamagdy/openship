@@ -397,10 +397,51 @@ export async function resolveCloneCredential(
   return { token: decrypt(connection.patEncrypted), username: "openship" };
 }
 
-export async function createPushSubscription(
+type AzureServiceHookEvent =
+  | "git.push"
+  | "git.pullrequest.created"
+  | "git.pullrequest.updated";
+
+export interface AzureWebhookSubscriptions {
+  push: string;
+  pullRequestCreated?: string;
+  pullRequestUpdated?: string;
+}
+
+export function parseAzureWebhookSubscriptions(
+  value?: string | null,
+): AzureWebhookSubscriptions | null {
+  if (!value) return null;
+  try {
+    const parsed = JSON.parse(value) as Partial<AzureWebhookSubscriptions>;
+    if (typeof parsed.push === "string" && parsed.push) {
+      return {
+        push: parsed.push,
+        ...(typeof parsed.pullRequestCreated === "string"
+          ? { pullRequestCreated: parsed.pullRequestCreated }
+          : {}),
+        ...(typeof parsed.pullRequestUpdated === "string"
+          ? { pullRequestUpdated: parsed.pullRequestUpdated }
+          : {}),
+      };
+    }
+  } catch {
+    // Legacy rows stored the push subscription id directly.
+  }
+  return { push: value };
+}
+
+export function serializeAzureWebhookSubscriptions(
+  subscriptions: AzureWebhookSubscriptions,
+): string {
+  return JSON.stringify(subscriptions);
+}
+
+async function createServiceHookSubscription(
   ctx: Pick<RequestContext, "organizationId">,
   coords: AzureRepoCoordinates,
   secret: string,
+  eventType: AzureServiceHookEvent,
 ): Promise<{ id: string; status?: string }> {
   const connection = await requireConnection(ctx, coords.organization);
   const callbackUrl = azureDevopsWebhookUrl();
@@ -423,8 +464,8 @@ export async function createPushSubscription(
       method: "POST",
       body: JSON.stringify({
         publisherId: "tfs",
-        eventType: "git.push",
-        resourceVersion: "1.0",
+        eventType,
+        resourceVersion: eventType === "git.push" ? "1.0" : "2.0",
         consumerId: "webHooks",
         consumerActionId: "httpRequest",
         publisherInputs: {
@@ -448,7 +489,42 @@ export async function createPushSubscription(
   return { id: data.id, status: data.status };
 }
 
-export async function deletePushSubscription(
+export async function createPushSubscription(
+  ctx: Pick<RequestContext, "organizationId">,
+  coords: AzureRepoCoordinates,
+  secret: string,
+): Promise<{ id: string; status?: string }> {
+  return createServiceHookSubscription(ctx, coords, secret, "git.push");
+}
+
+export async function createPullRequestSubscriptions(
+  ctx: Pick<RequestContext, "organizationId">,
+  coords: AzureRepoCoordinates,
+  secret: string,
+): Promise<{ created: string; updated: string }> {
+  const created = await createServiceHookSubscription(
+    ctx,
+    coords,
+    secret,
+    "git.pullrequest.created",
+  );
+  try {
+    const updated = await createServiceHookSubscription(
+      ctx,
+      coords,
+      secret,
+      "git.pullrequest.updated",
+    );
+    return { created: created.id, updated: updated.id };
+  } catch (error) {
+    await deleteServiceHookSubscription(ctx, coords.organization, created.id).catch(
+      () => undefined,
+    );
+    throw error;
+  }
+}
+
+async function deleteServiceHookSubscription(
   ctx: Pick<RequestContext, "organizationId">,
   azureOrganization: string,
   subscriptionId: string,
@@ -459,4 +535,51 @@ export async function deletePushSubscription(
     `_apis/hooks/subscriptions/${encodeURIComponent(subscriptionId)}`,
     { method: "DELETE" },
   );
+}
+
+export async function deletePushSubscription(
+  ctx: Pick<RequestContext, "organizationId">,
+  azureOrganization: string,
+  subscriptionValue: string,
+): Promise<void> {
+  const subscriptions = parseAzureWebhookSubscriptions(subscriptionValue);
+  if (!subscriptions) return;
+  const ids = [
+    subscriptions.push,
+    subscriptions.pullRequestCreated,
+    subscriptions.pullRequestUpdated,
+  ].filter((id): id is string => Boolean(id));
+  const results = await Promise.allSettled(
+    ids.map((id) => deleteServiceHookSubscription(ctx, azureOrganization, id)),
+  );
+  const failure = results.find(
+    (result): result is PromiseRejectedResult => result.status === "rejected",
+  );
+  if (failure) throw failure.reason;
+}
+
+export async function publishPullRequestStatus(
+  ctx: Pick<RequestContext, "organizationId">,
+  coords: AzureRepoCoordinates,
+  pullRequestId: number,
+  status: {
+    state: "pending" | "succeeded" | "failed" | "error" | "notApplicable";
+    description: string;
+    targetUrl?: string;
+  },
+): Promise<void> {
+  const connection = await requireConnection(ctx, coords.organization);
+  const url =
+    `${encodeURIComponent(coords.project)}/_apis/git/repositories/` +
+    `${encodeURIComponent(coords.repo)}/pullRequests/${pullRequestId}/statuses` +
+    "?api-version=7.1";
+  await azureFetch(connection, url, {
+    method: "POST",
+    body: JSON.stringify({
+      state: status.state,
+      description: status.description.slice(0, 255),
+      context: { name: "preview", genre: "openship" },
+      ...(status.targetUrl ? { targetUrl: status.targetUrl } : {}),
+    }),
+  });
 }
