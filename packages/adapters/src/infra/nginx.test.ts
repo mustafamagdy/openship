@@ -25,7 +25,9 @@ function makeExecutor(files: Map<string, string>, opts: FakeOpts, calls: string[
   const exec = async (command: string): Promise<string> => {
     calls.push(command);
     // openresty path detection (reload re-detects) → fail so cached paths stick.
-    if (/\s-V\b|command -v|which\s/.test(command)) throw new Error("no openresty in test");
+    if (/\s-V\b|^command -v openresty\b|^which\s+openresty\b/.test(command)) {
+      throw new Error("no openresty in test");
+    }
     const mv = command.match(/^mv '([^']+)' '([^']+)'$/);
     if (mv) {
       const c = files.get(mv[1]);
@@ -126,6 +128,25 @@ describe("NginxProvider config generation", () => {
     expect(certbot).toContain(String(ACME_HTTP01_PORT));
     expect(certbot).toContain("--cert-name");
     expect(certbot).not.toContain("--webroot");
+  });
+
+  test("user-writable Certbot state keeps certificates out of root-owned directories", async () => {
+    const files = new Map<string, string>();
+    const calls: string[] = [];
+    const stateDir = "/home/openship/.openship/edge/certbot";
+    const nginx = new NginxProvider({
+      paths: PATHS,
+      executor: makeExecutor(files, {}, calls),
+      certbotStateDir: stateDir,
+    });
+
+    await nginx.registerRoute(PROXY);
+    await expect(nginx.provisionCert("app.example.com")).rejects.toThrow();
+
+    const certbot = calls.find((c) => c.startsWith("certbot "));
+    expect(certbot).toContain(`--config-dir' '${stateDir}/config`);
+    expect(certbot).toContain(`--work-dir' '${stateDir}/work`);
+    expect(certbot).toContain(`--logs-dir' '${stateDir}/logs`);
   });
 
   test("webhook proxy adds the /_openship/hooks/ location", async () => {

@@ -7,6 +7,7 @@ export { orphanedResource } from "./orphaned-resource";
 export { resourceGrant } from "./resource-grant";
 export { invitationPendingGrant } from "./invitation-pending-grant";
 export { gitInstallation } from "./github";
+export { azureDevopsConnection } from "./azure-devops";
 export { githubInstallState } from "./github-install-state";
 export { projectGroup, project, envVar } from "./project";
 export { deployment, buildSession } from "./deployment";

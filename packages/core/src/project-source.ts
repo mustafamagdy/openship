@@ -8,6 +8,7 @@
 /** Values stored in `project.gitProvider` (free-text column). */
 export const SOURCE_PROVIDERS = [
   "github",
+  "azure-devops",
   "gitlab",
   "bitbucket",
   "local",

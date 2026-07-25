@@ -309,13 +309,14 @@ export async function buildRespond(c: Context) {
  * POST /deployments/prepare - resolve project info from GitHub or local path.
  *
  * Body (GitHub): { source: "github", owner, repo, branch? }
+ * Body (Azure Repos): { source: "azure-devops", owner: "org/project", repo, branch? }
  * Body (local):  { source: "local", path: "/abs/path" }
  * Callers may omit `source` and send { owner, repo }; treated as GitHub.
  */
 export async function prepare(c: Context) {
   const ctx = getRequestContext(c);
   const body = await c.req.json<{
-    source?: "github" | "local";
+    source?: "github" | "azure-devops" | "local";
     owner?: string;
     repo?: string;
     branch?: string;
@@ -333,6 +334,17 @@ export async function prepare(c: Context) {
         return c.json({ error: "owner and repo are required" }, 400);
       }
       input = { source: "github", owner: body.owner, repo: body.repo, branch: body.branch, ctx };
+    } else if (source === "azure-devops") {
+      if (!body.owner || !body.repo) {
+        return c.json({ error: "owner and repo are required" }, 400);
+      }
+      input = {
+        source: "azure-devops",
+        owner: body.owner,
+        repo: body.repo,
+        branch: body.branch,
+        ctx,
+      };
     } else if (source === "local") {
       if (env.CLOUD_MODE) {
         return c.json({ error: "Local projects are not available in cloud mode" }, 403);
@@ -342,7 +354,7 @@ export async function prepare(c: Context) {
       }
       input = { source: "local", path: body.path };
     } else {
-      return c.json({ error: "source must be 'github' or 'local'" }, 400);
+      return c.json({ error: "source must be 'github', 'azure-devops', or 'local'" }, 400);
     }
 
     const info = await prepareService.resolveProjectInfo(input);

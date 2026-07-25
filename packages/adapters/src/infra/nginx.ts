@@ -168,6 +168,12 @@ export interface NginxProviderOptions {
    */
   certDir?: string;
   /**
+   * User-writable Certbot state root. When set, Certbot stores its config,
+   * work files, logs, and live certificates below this directory instead of
+   * root-owned /etc/letsencrypt and /var/lib/letsencrypt.
+   */
+  certbotStateDir?: string;
+  /**
    * Command executor for file operations.
    * When provided, all ops go through the executor (SSH remote).
    * When omitted, uses node:fs directly (local).
@@ -270,13 +276,17 @@ export class NginxProvider implements RoutingProvider, SslProvider {
   private sitesDir: string;
   private readonly acmeEmail: string | undefined;
   private readonly certDir: string;
+  private readonly certbotStateDir: string | undefined;
   private readonly executor: CommandExecutor | null;
   private reloadCommand: string;
 
   constructor(opts: NginxProviderOptions) {
     this.sitesDir = opts.paths.sitesDir;
     this.acmeEmail = opts.acmeEmail;
-    this.certDir = opts.certDir ?? DEFAULT_CERT_DIR;
+    this.certbotStateDir = opts.certbotStateDir?.replace(/\/+$/, "") || undefined;
+    this.certDir =
+      opts.certDir ??
+      (this.certbotStateDir ? join(this.certbotStateDir, "config", "live") : DEFAULT_CERT_DIR);
     this.executor = opts.executor ?? null;
     this.reloadCommand = buildReloadCommand(opts.paths);
   }
@@ -378,12 +388,27 @@ export class NginxProvider implements RoutingProvider, SslProvider {
    * still sees the real cause.
    */
   private async _execCertbot(args: string[], onLog?: (line: string) => void): Promise<string> {
+    const stateArgs = this.certbotStateDir
+      ? [
+          "--config-dir", join(this.certbotStateDir, "config"),
+          "--work-dir", join(this.certbotStateDir, "work"),
+          "--logs-dir", join(this.certbotStateDir, "logs"),
+        ]
+      : [];
+    if (this.certbotStateDir) {
+      await Promise.all([
+        this._mkdir(join(this.certbotStateDir, "config")),
+        this._mkdir(join(this.certbotStateDir, "work")),
+        this._mkdir(join(this.certbotStateDir, "logs")),
+      ]);
+    }
+    const effectiveArgs = [...args, ...stateArgs];
     if (!onLog || !this.executor) {
-      const out = await this._exec("certbot", args);
+      const out = await this._exec("certbot", effectiveArgs);
       if (out) onLog?.(out);
       return out;
     }
-    const full = `certbot ${args.map(sq).join(" ")}`;
+    const full = `certbot ${effectiveArgs.map(sq).join(" ")}`;
     let output = "";
     const { code } = await this.executor.streamExec(full, (log) => {
       output += log.message;

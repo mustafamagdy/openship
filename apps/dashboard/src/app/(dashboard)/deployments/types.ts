@@ -47,6 +47,7 @@ export interface Deployment {
   environment: string;
   owner?: string;
   repo?: string;
+  gitProvider?: "github" | "azure-devops";
   branch?: string;
   projectId?: string;
   projectName?: string;
@@ -79,4 +80,3 @@ export interface DeploymentStats {
   pending?: number;
   canceled?: number;
 }
-

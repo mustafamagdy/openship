@@ -59,6 +59,11 @@ import {
 import { getInstallationIdByOrg, getInstallUrl } from "../github/github.auth";
 import { ensureSharedWebhook, findSharedWebhookId } from "./project-git-webhook";
 import { listProjectRouteRows, resolveProjectRouteState } from "../domains/project-route.service";
+import * as azureDevopsService from "../azure-devops/azure-devops.service";
+import {
+  deleteAzureDevopsPushWebhookIfUnused,
+  ensureAzureDevopsPushWebhook,
+} from "../azure-devops/azure-devops.webhook-management";
 
 // Track which servers have had Lua scripts deployed this session
 const luaDeployedServers = new Set<string>();
@@ -1255,6 +1260,7 @@ export async function getGitInfo(c: Context) {
   const id = param(c, "id");
   await permission.assert(getRequestContext(c), { resourceType: "project", resourceId: id, action: "read" });
   const info = await projectService.getGitInfo(id, organizationId);
+  const isAzureDevops = info.gitProvider === "azure-devops";
 
   // No repo linked yet — the normal state for upload/local projects, not a
   // failure. The `code` lets the client render an inline "connect a repo" empty
@@ -1263,25 +1269,27 @@ export async function getGitInfo(c: Context) {
     return c.json({ success: false, error: "No repository connected", code: "NO_REPOSITORY" });
   }
 
-  const strategy = await resolveWebhookStrategy(info);
+  const strategy = isAzureDevops ? "repo" : await resolveWebhookStrategy(info);
 
   // Cloud projects (deployTarget=cloud) need the GitHub App installed - regardless
   // of whether this server is the SaaS or a local instance connected to cloud.
   const isCloudProject = info.deployTarget === "cloud";
   let installationInstalled = false;
-  if (isCloudProject && info.gitOwner) {
+  if (!isAzureDevops && isCloudProject && info.gitOwner) {
     const instId = await getInstallationIdByOrg(organizationId, info.gitOwner);
     installationInstalled = !!instId;
   }
 
   let sharedWebhookId = info.webhookId ?? null;
-  if (!sharedWebhookId && info.gitOwner && info.gitRepo) {
+  if (!isAzureDevops && !sharedWebhookId && info.gitOwner && info.gitRepo) {
     sharedWebhookId = await findSharedWebhookId(organizationId, info.gitOwner, info.gitRepo);
   }
 
   // Derive webhook_active from strategy + state
   const webhookActive =
-    strategy === "app"
+    isAzureDevops
+      ? !!(info.autoDeploy && info.webhookExternalId)
+      : strategy === "app"
       ? installationInstalled
       : strategy === "domain"
         ? !!(info.autoDeploy && sharedWebhookId)
@@ -1290,7 +1298,9 @@ export async function getGitInfo(c: Context) {
           : false;
 
   // Get available strategies for the UI
-  const strategies = await getAvailableStrategies(ctx, info);
+  const strategies = isAzureDevops
+    ? { available: ["repo"] }
+    : await getAvailableStrategies(ctx, info);
 
   // Get project domains for webhook domain picker
   const domains = await repos.domain.listByProject(id);
@@ -1300,10 +1310,24 @@ export async function getGitInfo(c: Context) {
 
   let branch = info.gitBranch ?? "";
   if (!branch && info.gitOwner && info.gitRepo) {
-    branch = await resolveDefaultBranch(ctx, info.gitOwner, info.gitRepo);
+    branch = isAzureDevops
+      ? (
+          await azureDevopsService.getRepository(
+            ctx,
+            azureDevopsService.parseAzureRepoOwner(info.gitOwner, info.gitRepo),
+          )
+        ).default_branch
+      : await resolveDefaultBranch(ctx, info.gitOwner, info.gitRepo);
   }
   const commits = branch
-    ? await getRecentCommits(ctx, info.gitOwner, info.gitRepo, branch, 10)
+    ? isAzureDevops
+      ? await azureDevopsService.getRecentCommits(
+          ctx,
+          azureDevopsService.parseAzureRepoOwner(info.gitOwner, info.gitRepo),
+          branch,
+          10,
+        )
+      : await getRecentCommits(ctx, info.gitOwner, info.gitRepo, branch, 10)
     : [];
 
   return c.json({
@@ -1312,6 +1336,12 @@ export async function getGitInfo(c: Context) {
     repo: info.gitRepo,
     branch,
     provider: info.gitProvider ?? "github",
+    repository_url:
+      info.gitProvider === "azure-devops"
+        ? azureDevopsService.azureRepositoryWebUrl(
+            azureDevopsService.parseAzureRepoOwner(info.gitOwner, info.gitRepo),
+          )
+        : `https://github.com/${encodeURIComponent(info.gitOwner)}/${encodeURIComponent(info.gitRepo)}`,
     commits: commits.map((c) => ({
       sha: c.sha,
       message: c.message,
@@ -1327,7 +1357,10 @@ export async function getGitInfo(c: Context) {
     available_strategies: strategies.available,
     verified_domains: verifiedDomains,
     installation_installed: installationInstalled,
-    install_url: isCloudProject && !installationInstalled ? getInstallUrl() : undefined,
+    install_url:
+      !isAzureDevops && isCloudProject && !installationInstalled
+        ? getInstallUrl()
+        : undefined,
     default_rollback_strategy: info.defaultRollbackStrategy ?? "git",
   });
 }
@@ -1343,7 +1376,13 @@ export async function listBranches(c: Context) {
     return c.json({ success: false, error: "No repository connected" }, 400);
   }
 
-  const branches = await listGitHubBranches(ctx, info.gitOwner, info.gitRepo);
+  const branches =
+    info.gitProvider === "azure-devops"
+      ? await azureDevopsService.listBranches(
+          ctx,
+          azureDevopsService.parseAzureRepoOwner(info.gitOwner, info.gitRepo),
+        )
+      : await listGitHubBranches(ctx, info.gitOwner, info.gitRepo);
   return c.json({
     success: true,
     data: branches.map((branch) => ({
@@ -1363,14 +1402,21 @@ export async function linkRepo(c: Context) {
   const ctx = getRequestContext(c);
   const id = param(c, "id");
   await permission.assert(ctx, { resourceType: "project", resourceId: id, action: "write" });
-  const { owner, repo, branch, installationId } = await c.req.json<{
+  const { provider, owner, repo, branch, installationId } = await c.req.json<{
+    provider?: string;
     owner: string;
     repo: string;
     branch?: string;
     installationId?: number;
   }>();
 
-  const result = await projectService.linkProjectRepo(ctx, id, { owner, repo, branch, installationId });
+  const result = await projectService.linkProjectRepo(ctx, id, {
+    provider,
+    owner,
+    repo,
+    branch,
+    installationId,
+  });
 
   if (!result.ok) {
     if (result.code === "not_found") return c.json({ error: "Project not found" }, 404);
@@ -1397,6 +1443,7 @@ export async function linkRepo(c: Context) {
       gitOwner: result.owner,
       gitRepo: result.repo,
       gitBranch: result.branch,
+      gitProvider: provider ?? "github",
       webhookStrategy: result.strategy,
       autoDeploy: result.autoDeploy,
     },
@@ -1450,6 +1497,47 @@ export async function setAutoDeploy(c: Context) {
 
   if (!owner || !repo) {
     return c.json({ success: false, error: "No repository linked" }, 400);
+  }
+
+  if (project.gitProvider === "azure-devops") {
+    try {
+      if (enabled) {
+        await ensureAzureDevopsPushWebhook(ctx, project);
+        await repos.project.update(id, { autoDeploy: true });
+      } else {
+        await repos.project.update(id, { autoDeploy: false });
+        const updated = await repos.project.findById(id);
+        if (updated) {
+          await deleteAzureDevopsPushWebhookIfUnused(ctx, updated);
+        }
+      }
+    } catch (error) {
+      return c.json(
+        {
+          success: false,
+          error: safeErrorMessage(error),
+          webhook_strategy: "repo",
+        },
+        400,
+      );
+    }
+    const updated = await repos.project.findById(id);
+    audit.recordAsync(auditContextFrom(c, organizationId, userId), {
+      eventType: "project.updated",
+      resourceType: "project",
+      resourceId: id,
+      after: {
+        action: "autoDeploy.set",
+        provider: "azure-devops",
+        autoDeploy: updated?.autoDeploy ?? false,
+        webhookStrategy: "repo",
+      },
+    });
+    return c.json({
+      success: true,
+      auto_deploy: updated?.autoDeploy ?? false,
+      webhook_strategy: "repo",
+    });
   }
 
   const strategy = await resolveWebhookStrategy(project);

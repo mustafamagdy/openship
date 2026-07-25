@@ -21,6 +21,7 @@ import {
   ChevronRight,
   Container,
 } from "lucide-react";
+import { repositoryWebUrl } from "@/utils/gitProvider";
 
 export const OverviewTab = () => {
   const {
@@ -246,7 +247,11 @@ export const OverviewTab = () => {
               <div className="h-[14px] w-28 rounded bg-muted-foreground/20 animate-pulse" />
             ) : hasGit ? (
               <a
-                href={`https://github.com/${projectData.gitOwner}/${projectData.gitRepo}`}
+                href={repositoryWebUrl(
+                  projectData.gitProvider,
+                  projectData.gitOwner,
+                  projectData.gitRepo,
+                )}
                 target="_blank"
                 rel="noopener noreferrer"
                 className="text-[13px] font-medium text-foreground hover:text-primary transition-colors inline-flex items-center gap-1.5 truncate max-w-[180px]"

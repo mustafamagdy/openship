@@ -62,6 +62,7 @@ export interface ComposePipelineOpts {
   buildResources: ResourceConfig;
   runtimeResources: ResourceConfig;
   gitToken?: string;
+  gitUsername?: string;
   /** Path to the git-credential relay helper on the build host (desktop relay).
    *  When set, service clones authenticate through it instead of a token. */
   gitCredentialHelperPath?: string;
@@ -96,6 +97,7 @@ export async function executeComposePipeline(opts: ComposePipelineOpts): Promise
     buildResources,
     runtimeResources,
     gitToken,
+    gitUsername,
     gitCredentialHelperPath,
     gitSsh,
     cloneOnServer,
@@ -123,6 +125,7 @@ export async function executeComposePipeline(opts: ComposePipelineOpts): Promise
     buildEnvVars,
     buildResources,
     gitToken,
+    gitUsername,
     gitCredentialHelperPath,
     gitSsh,
     cloneOnServer,
@@ -231,5 +234,4 @@ export async function executeComposePipeline(opts: ComposePipelineOpts): Promise
     },
   });
 }
-
 

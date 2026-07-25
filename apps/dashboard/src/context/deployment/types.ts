@@ -241,6 +241,8 @@ export interface DeploymentConfig {
   projectName: string;
   repo: string;
   owner: string;
+  /** Source provider for git-backed projects. */
+  gitProvider?: "github" | "azure-devops";
   /** Absolute path for local projects (mutually exclusive with owner/repo git source) */
   localPath?: string;
   /** Folder-upload deploy: the upload session whose workspace/staging dir holds
@@ -337,6 +339,7 @@ export const DEFAULT_CONFIG: DeploymentConfig = {
   projectName: "",
   repo: "",
   owner: "",
+  gitProvider: "github",
   localPath: undefined,
   uploadSessionId: undefined,
   buildStrategy: "server",
@@ -738,7 +741,11 @@ export interface DeploymentContextType {
     owner: string,
     repo: string,
     force?: string,
-    context?: { branch?: string; projectId?: string },
+    context?: {
+      branch?: string;
+      projectId?: string;
+      provider?: "github" | "azure-devops";
+    },
   ) => Promise<{ success: boolean; error?: string; errorType?: string; buildInProgress?: boolean }>;
   initializeFromLocal: (
     path: string,

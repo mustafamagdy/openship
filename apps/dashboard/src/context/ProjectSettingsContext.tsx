@@ -15,6 +15,7 @@ import { useRouter } from "next/navigation";
 import { useI18n } from "@/components/i18n-provider";
 import { projectsApi, servicesApi, type Service } from "@/lib/api";
 import { PROJECT_INFO_NOT_FOUND, useProjectInfo } from "@/hooks/useProjectEndpoints";
+import { gitProviderLabel, repositoryWebUrl } from "@/utils/gitProvider";
 
 interface ProjectDomain {
   domain: string;
@@ -482,8 +483,10 @@ export const ProjectSettingsProvider: React.FC<ProviderProps> = ({
         setGitData({
           repository: {
             name: `${response.owner}/${response.repo}`,
-            provider: "GitHub",
-            url: `https://github.com/${response.owner}/${response.repo}`,
+            provider: gitProviderLabel(response.provider),
+            url:
+              response.repository_url ||
+              repositoryWebUrl(response.provider, response.owner, response.repo),
           },
           branch: response.branch || "main",
           recentCommits: mappedCommits,

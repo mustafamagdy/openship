@@ -10,6 +10,7 @@ import { GitBranch, Clock, ExternalLink, MoreVertical, Archive, Pin, Activity } 
 import { getFrameworkConfig } from "@/components/import-project/Frameworks";
 import { AppLogo } from "@/components/AppLogo";
 import { useI18n, interpolate } from "@/components/i18n-provider";
+import { commitWebUrl } from "@/utils/gitProvider";
 
 type ServiceStatusLabels = {
   deployed: string;
@@ -282,7 +283,12 @@ export const DeploymentCard: React.FC<DeploymentCardProps> = ({
               e.stopPropagation();
               if (deployment.owner && deployment.repo) {
                 window.open(
-                  `https://github.com/${deployment.owner}/${deployment.repo}/commit/${deployment.commit.fullHash || deployment.commit.hash}`,
+                  commitWebUrl(
+                    deployment.gitProvider,
+                    deployment.owner,
+                    deployment.repo,
+                    deployment.commit.fullHash || deployment.commit.hash,
+                  ),
                   "_blank",
                 );
               } else {

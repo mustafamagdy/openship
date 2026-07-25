@@ -30,7 +30,11 @@ import {
 import { platform } from "../../lib/controller-helpers";
 import { resolveUpstreamUrl, resolveRouteStrategy } from "../../lib/upstream-url";
 import { webhookProxyTarget } from "../../config";
-import { resolveDeploymentRuntime, resolveDeploymentPlatform } from "../../lib/deployment-runtime";
+import {
+  resolveDeploymentRuntime,
+  resolveDeploymentPlatform,
+  resolveWorkloadRuntimeMode,
+} from "../../lib/deployment-runtime";
 import { syncProjectToServerManifest } from "../../lib/openship-manifest-sync";
 import { syncManagedEdgeRoutes, edgeUnsyncedWarning } from "../../lib/managed-edge-proxy";
 import { decryptEnvMap } from "../../lib/encryption";
@@ -56,8 +60,11 @@ import { buildBackgroundContext } from "../../lib/request-context";
 import * as sessionManager from "./session-manager";
 import { onFailure, onSuccess, onCancelled, setDeploymentStatus, type LifecycleContext } from "./deployment-lifecycle";
 import { auditPorts } from "./port-audit.service";
-import { createBuildConfig } from "./build-config";
-import { resolveClonePlan } from "./clone-plan";
+import {
+  createBuildConfig,
+  resolveStaticRuntimeDirectory,
+} from "./build-config";
+import { needsGitClone, resolveClonePlan } from "./clone-plan";
 import { collapseTerminalLogs } from "./terminal-logs";
 import {
   executeComposePipeline,
@@ -399,12 +406,15 @@ async function executeBuildAndDeploy(project: Project, dep: Deployment, buildSes
     // also flips; otherwise it resolves to bare and the service deploy dies with
     // "services are not supported on the bare runtime". Already-Docker projects
     // skip the check.
-    if (snapshot.runtimeMode !== "docker") {
-      const willRunServices = (await resolveServicePipelineMode(project, snapshot)).useServicePipeline;
-      if (willRunServices) {
-        logger.log("→ Services require the Docker runtime — running this service deploy on Docker.\n");
-        snapshot.runtimeMode = "docker";
-      }
+    const willRunServices = (await resolveServicePipelineMode(project, snapshot)).useServicePipeline;
+    const workloadRuntimeMode = resolveWorkloadRuntimeMode(snapshot, willRunServices);
+    if (workloadRuntimeMode !== snapshot.runtimeMode) {
+      logger.log(
+        workloadRuntimeMode === "docker"
+          ? "→ Services require the Docker runtime — running this service deploy on Docker.\n"
+          : "→ Static sites are published as files — using the direct runtime for OpenResty routing.\n",
+      );
+      snapshot.runtimeMode = workloadRuntimeMode;
     }
 
     const resolved = await resolveDeploymentPlatform(snapshot, {
@@ -541,7 +551,8 @@ async function executeBuildAndDeploy(project: Project, dep: Deployment, buildSes
       buildStrategy,
       isDesktop: plat.target === "desktop",
       forwardGitCredentials: snapshot.forwardGitCredentials,
-      repoIsGithub: !!project.gitOwner,
+      repoIsGithub:
+        (project.gitProvider ?? "github") === "github" && !!project.gitOwner,
     });
     const cloneOnServer = clonePlan.runsOnServer;
     // The relay needs a real SSH reverse tunnel — `reverseForward` exists on every
@@ -560,11 +571,7 @@ async function executeBuildAndDeploy(project: Project, dep: Deployment, buildSes
     // so the two can't disagree. One-click app installs (Convex, n8n, …) are
     // exactly this case: image services, hasBuild=false. This is what makes the
     // app-install and advanced-deploy paths converge on one behavior.
-    const enabledSvcs = (snapshot.composeServices ?? []).filter((s) => s.enabled !== false);
-    const needsGitSource =
-      enabledSvcs.length > 0
-        ? enabledSvcs.some((s) => s.kind === "monorepo" || !!s.build || !!s.dockerfile)
-        : snapshot.hasBuild !== false;
+    const needsGitSource = needsGitClone(snapshot);
 
     const gitCred: Awaited<ReturnType<typeof resolveBuildGitToken>> = needsGitSource
       ? await resolveBuildGitToken({
@@ -574,6 +581,7 @@ async function executeBuildAndDeploy(project: Project, dep: Deployment, buildSes
             label: "build:resolve-git-token",
           }),
           projectId: project.id,
+          provider: project.gitProvider,
           owner: project.gitOwner ?? undefined,
           repo: project.gitRepo ?? undefined,
           buildStrategy: clonePlan.cloneBuildStrategy,
@@ -626,6 +634,7 @@ async function executeBuildAndDeploy(project: Project, dep: Deployment, buildSes
       envVars: buildEnv.envVars,
       resources: buildResources,
       gitToken: gitCred.token,
+      gitUsername: gitCred.username,
     });
     // Folder-upload cloud deploy: the browser uploaded the source straight into
     // a pre-provisioned workspace — adopt it and skip clone + transfer. (The
@@ -731,6 +740,7 @@ async function executeBuildAndDeploy(project: Project, dep: Deployment, buildSes
           buildResources,
           runtimeResources: prodResources,
           gitToken: gitCred.token,
+          gitUsername: gitCred.username,
           gitCredentialHelperPath: composeRelay?.scriptPath,
           gitSsh: gitCred.ssh,
           cloneOnServer: effectiveCloneOnServer,
@@ -1134,7 +1144,12 @@ async function executeServerDeploy(phase: DeployPhaseInputs): Promise<void> {
     restartPolicy: isStaticSelfHosted ? "no" : "always",
     runtimeName: project.slug ?? project.id,
     publicEndpoints: routeState.publicEndpoints,
-    outputDirectory: snapshot.outputDirectory,
+    outputDirectory: isStaticSelfHosted
+      ? resolveStaticRuntimeDirectory(
+          snapshot.rootDirectory,
+          snapshot.outputDirectory,
+        )
+      : snapshot.outputDirectory,
     productionPaths: snapshot.productionPaths.length ? snapshot.productionPaths : undefined,
     // Bare uses this to hard-link identical files across releases.
     // Other runtimes ignore it.

@@ -155,6 +155,12 @@ const Sidebar: React.FC = () => {
   const { showToast } = useToast();
   const router = useRouter();
   const isServices = usesServiceDeployment(config);
+  const isAzureRepos = config.gitProvider === "azure-devops";
+  const repositoryUrl = isAzureRepos
+    ? `https://dev.azure.com/${config.owner.split("/")[0]}/${encodeURIComponent(
+        config.owner.split("/").slice(1).join("/"),
+      )}/_git/${encodeURIComponent(config.repo)}`
+    : `https://github.com/${config.owner}/${config.repo}`;
 
   // Copy a ready-to-run `git clone` command with a short-lived GitHub App
   // installation token. Cloud / GitHub-App mode only — surfaces a clear
@@ -256,7 +262,11 @@ const Sidebar: React.FC = () => {
       // gh counts as a remote credential now — forwarded over the relay on
       // desktop, or (self-hosted) it just lets the backend gracefully degrade
       // to an api-host clone rather than dead-end.
-      let remoteCredential = appAvailable || cloneGate.hasGlobalToken || ghAvailable;
+      let remoteCredential =
+        isAzureRepos ||
+        appAvailable ||
+        cloneGate.hasGlobalToken ||
+        ghAvailable;
       const willBuildLocal = cloneGate.preference === "local";
 
       // The target server may hold its OWN GitHub credential (device-login
@@ -406,7 +416,7 @@ const Sidebar: React.FC = () => {
     }
 
     await continueDeploy(buildStrategyOverride ? { buildStrategy: buildStrategyOverride } : undefined);
-  }, [baseDomain, canConnectCloud, cloneGate.hasGlobalToken, cloneGate.preference, config.buildStrategy, config.deployTarget, config.owner, config.projectId, config.serverId, config.publicEndpoints, config.services, continueDeploy, githubState, hideModal, installUrl, isServices, openGithubConnect, requireCloud, selfHosted, showModal, showToast, updateConfig, t]);
+  }, [baseDomain, canConnectCloud, cloneGate.hasGlobalToken, cloneGate.preference, config.buildStrategy, config.deployTarget, config.owner, config.projectId, config.serverId, config.publicEndpoints, config.services, continueDeploy, githubState, hideModal, installUrl, isAzureRepos, isServices, openGithubConnect, requireCloud, selfHosted, showModal, showToast, updateConfig, t]);
 
   // Edit mode (opened from the project Runtime page with ?mode=config): the
   // finish button SAVES the config to the project and returns — no deploy, no
@@ -442,11 +452,15 @@ const Sidebar: React.FC = () => {
         </div>
         <div className="p-4 pt-3">
           <div className="flex items-center gap-3">
-            <Github className="size-4 text-muted-foreground shrink-0" />
+            {isAzureRepos ? (
+              <GitBranch className="size-4 text-muted-foreground shrink-0" />
+            ) : (
+              <Github className="size-4 text-muted-foreground shrink-0" />
+            )}
             <div className="flex-1 min-w-0">
               {config.owner && config.owner !== "local" && config.repo ? (
                 <a
-                  href={`https://github.com/${config.owner}/${config.repo}`}
+                  href={repositoryUrl}
                   target="_blank"
                   rel="noopener noreferrer"
                   title={`${config.owner}/${config.repo}`}
@@ -461,7 +475,10 @@ const Sidebar: React.FC = () => {
                 </p>
               )}
             </div>
-            {config.owner && config.owner !== "local" && config.repo && (
+            {!isAzureRepos &&
+              config.owner &&
+              config.owner !== "local" &&
+              config.repo && (
               <DropdownMenu
                 align="right"
                 triggerClassName="p-1.5 -me-1 rounded-lg text-muted-foreground hover:bg-muted transition-colors"

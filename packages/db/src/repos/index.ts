@@ -7,6 +7,11 @@ export {
   type NewGitInstallation,
 } from "./git-installation.repo";
 export {
+  createAzureDevopsConnectionRepo,
+  type AzureDevopsConnection,
+  type NewAzureDevopsConnection,
+} from "./azure-devops-connection.repo";
+export {
   createGithubInstallStateRepo,
   type GithubInstallState,
   type NewGithubInstallState,
@@ -198,6 +203,7 @@ import { createUserRepo } from "./user.repo";
 import { createSessionRepo } from "./session.repo";
 import { createAccountRepo } from "./account.repo";
 import { createGitInstallationRepo } from "./git-installation.repo";
+import { createAzureDevopsConnectionRepo } from "./azure-devops-connection.repo";
 import { createGithubInstallStateRepo } from "./github-install-state.repo";
 import { createProjectGroupRepo } from "./project-group.repo";
 import { createProjectRepo } from "./project.repo";
@@ -267,6 +273,7 @@ export const repos = {
   session: createSessionRepo(db),
   account: createAccountRepo(db),
   gitInstallation: createGitInstallationRepo(db),
+  azureDevopsConnection: createAzureDevopsConnectionRepo(db),
   githubInstallState: createGithubInstallStateRepo(db),
   projectGroup: createProjectGroupRepo(db),
   project: createProjectRepo(db),

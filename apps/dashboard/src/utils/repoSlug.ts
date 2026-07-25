@@ -26,6 +26,14 @@ function encodeBase64Url(data: string): string {
  * Encodes owner and repo into a URL-safe base64 slug
  */
 export function encodeRepoSlug(owner: string, repo: string): string {
+  // Provider namespaces such as Azure Repos need more than one path segment
+  // (`organization/project`). The legacy `owner/repo` decoder splits on the
+  // first slash, so use the existing structured v2 envelope in that case.
+  if (owner.includes("/")) {
+    return encodeBase64Url(
+      REPO_V2_PREFIX + JSON.stringify({ owner, repo }),
+    );
+  }
   return encodeBase64Url(`${owner}/${repo}`);
 }
 

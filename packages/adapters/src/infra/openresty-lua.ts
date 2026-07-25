@@ -149,7 +149,13 @@ export async function detectOpenRestyPaths(
  * Fallback: if reload fails (e.g. not running), kill everything and start fresh.
  */
 export function buildReloadCommand(paths: OpenRestyPaths): string {
-  return `${paths.bin} -t 2>&1 || exit 1
+  return `if command -v systemctl >/dev/null 2>&1 && systemctl is-active --quiet openresty.service; then
+  if systemctl reload openresty.service || sudo -n systemctl reload openresty.service; then
+    exit 0
+  fi
+fi
+
+${paths.bin} -t 2>&1 || exit 1
 
 if ${paths.bin} -s reload 2>/dev/null; then
   exit 0
@@ -194,7 +200,9 @@ export async function ensureOpenRestyConfig(
 
   // Check if the EXACT correct include path is already present
   const hasCorrectInclude = await executor
-    .exec(`grep -qF 'include ${paths.sitesDir}/' ${paths.confPath}`)
+    .exec(
+      `grep -RqsF --include='*.conf' 'include ${paths.sitesDir}/' ${paths.confDir}`,
+    )
     .then(() => true)
     .catch(() => false);
 
@@ -555,13 +563,13 @@ export async function deployLuaScripts(
 
   // Shared dict: analytics counters (256 MB)
   await executor.exec(
-    `grep -q 'lua_shared_dict analytics ' ${paths.confPath} || ` +
+    `grep -RqsF --include='*.conf' 'lua_shared_dict analytics ' ${paths.confDir} || ` +
       `sed -i '/http *{/a \\    lua_shared_dict analytics 256m;' ${paths.confPath}`,
   );
 
   // Shared dict: request data - ring buffers + live-log pipe (128 MB)
   await executor.exec(
-    `grep -q 'lua_shared_dict request_data ' ${paths.confPath} || ` +
+    `grep -RqsF --include='*.conf' 'lua_shared_dict request_data ' ${paths.confDir} || ` +
       `sed -i '/http *{/a \\    lua_shared_dict request_data 128m;' ${paths.confPath}`,
   );
 
@@ -569,7 +577,7 @@ export async function deployLuaScripts(
   // `POST /rules`, read by rules_guard.lua in the access phase. The DB
   // (route_rule table) is the source of truth.
   await executor.exec(
-    `grep -q 'lua_shared_dict rules ' ${paths.confPath} || ` +
+    `grep -RqsF --include='*.conf' 'lua_shared_dict rules ' ${paths.confDir} || ` +
       `sed -i '/http *{/a \\    lua_shared_dict rules 32m;' ${paths.confPath}`,
   );
 
@@ -577,13 +585,13 @@ export async function deployLuaScripts(
   // high-cardinality flood (a fresh key per source IP per second) can't LRU-evict
   // the rulesets and silently disable enforcement mid-attack.
   await executor.exec(
-    `grep -q 'lua_shared_dict rl_counters ' ${paths.confPath} || ` +
+    `grep -RqsF --include='*.conf' 'lua_shared_dict rl_counters ' ${paths.confDir} || ` +
       `sed -i '/http *{/a \\    lua_shared_dict rl_counters 16m;' ${paths.confPath}`,
   );
 
   // Lua module search path (OpenResty default + openship modules)
   await executor.exec(
-    `grep -q 'lua_package_path' ${paths.confPath} || ` +
+    `grep -RqsF --include='*.conf' 'lua_package_path' ${paths.confDir} || ` +
       `sed -i '/http *{/a \\    lua_package_path "/usr/local/openresty/site/lualib/?.lua;;";' ${paths.confPath}`,
   );
 

@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 
-import { resolveClonePlan, type ClonePlanInput } from "../../../src/modules/deployments/clone-plan";
+import {
+  needsGitClone,
+  resolveClonePlan,
+  type ClonePlanInput,
+} from "../../../src/modules/deployments/clone-plan";
 
 const base: ClonePlanInput = {
   effectiveTarget: "server",
@@ -74,5 +78,53 @@ describe("resolveClonePlan", () => {
     expect(plan.runsOnServer).toBe(false);
     expect(plan.runsLocally).toBe(false);
     expect(plan.cloneBuildStrategy).toBe("server");
+  });
+});
+
+describe("needsGitClone", () => {
+  it("requires Git source for a static single-app deployment with no build step", () => {
+    expect(
+      needsGitClone({
+        repoUrl: "https://dev.azure.com/org/project/_git/static-site",
+      }),
+    ).toBe(true);
+  });
+
+  it("does not require Git source for an image-only services deployment", () => {
+    expect(
+      needsGitClone({
+        repoUrl: "https://dev.azure.com/org/project/_git/stack",
+        composeServices: [
+          { kind: "compose", image: "postgres:17" } as {
+            kind: string;
+            image: string;
+          },
+        ],
+      }),
+    ).toBe(false);
+  });
+
+  it("requires Git source when an enabled service builds from the repository", () => {
+    expect(
+      needsGitClone({
+        repoUrl: "https://dev.azure.com/org/project/_git/stack",
+        composeServices: [{ kind: "compose", dockerfile: "Dockerfile" }],
+      }),
+    ).toBe(true);
+  });
+
+  it("does not resolve a Git credential for local or pre-staged source", () => {
+    expect(
+      needsGitClone({
+        repoUrl: "https://dev.azure.com/org/project/_git/app",
+        localPath: "/srv/app",
+      }),
+    ).toBe(false);
+    expect(
+      needsGitClone({
+        repoUrl: "https://dev.azure.com/org/project/_git/app",
+        sourceStaged: true,
+      }),
+    ).toBe(false);
   });
 });

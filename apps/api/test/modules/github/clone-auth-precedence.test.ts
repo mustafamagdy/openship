@@ -2,19 +2,30 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 // Isolate the resolver: every credential source it consults is mocked, so the
 // test asserts ONLY the precedence/fall-through wiring in resolveBuildGitToken.
-const { tokenFor, requireTokenFor, isPublicRepo, resolveServerGitCredential, getLocalGhToken } =
+const {
+  tokenFor,
+  requireTokenFor,
+  isPublicRepo,
+  resolveServerGitCredential,
+  getLocalGhToken,
+  resolveAzureCloneCredential,
+} =
   vi.hoisted(() => ({
     tokenFor: vi.fn(),
     requireTokenFor: vi.fn(),
     isPublicRepo: vi.fn(),
     resolveServerGitCredential: vi.fn(),
     getLocalGhToken: vi.fn(),
+    resolveAzureCloneCredential: vi.fn(),
   }));
 
 vi.mock("../../../src/modules/github/github.token", () => ({ tokenFor, requireTokenFor }));
 vi.mock("../../../src/modules/github/github.http", () => ({ isPublicRepo }));
 vi.mock("../../../src/modules/github/server-github.service", () => ({ resolveServerGitCredential }));
 vi.mock("../../../src/modules/github/github.local-auth", () => ({ getLocalGhToken }));
+vi.mock("../../../src/modules/azure-devops/azure-devops.service", () => ({
+  resolveCloneCredential: resolveAzureCloneCredential,
+}));
 
 import { resolveBuildGitToken } from "../../../src/modules/github/clone-auth";
 
@@ -27,7 +38,26 @@ beforeEach(() => {
   tokenFor.mockResolvedValue(null);
   isPublicRepo.mockResolvedValue(false);
   resolveServerGitCredential.mockResolvedValue(null);
+  resolveAzureCloneCredential.mockResolvedValue({
+    token: "azdo-pat",
+    username: "openship",
+  });
   requireTokenFor.mockRejectedValue(new Error("GITHUB_REMOTE_TOKEN_REQUIRED"));
+});
+
+describe("resolveBuildGitToken — Azure Repos", () => {
+  it("uses the encrypted Azure connection credential without consulting GitHub", async () => {
+    const res = await resolveBuildGitToken({
+      ...base,
+      provider: "azure-devops",
+      owner: "geeksclub/relay",
+      buildStrategy: "server",
+    });
+    expect(res).toEqual({ token: "azdo-pat", username: "openship" });
+    expect(resolveAzureCloneCredential).toHaveBeenCalledWith(ctx, "geeksclub/relay");
+    expect(tokenFor).not.toHaveBeenCalled();
+    expect(resolveServerGitCredential).not.toHaveBeenCalled();
+  });
 });
 
 describe("resolveBuildGitToken — local build", () => {
