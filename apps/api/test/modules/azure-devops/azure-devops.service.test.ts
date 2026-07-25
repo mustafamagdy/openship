@@ -3,7 +3,9 @@ import {
   azureCloneUrl,
   azureRepoOwner,
   normalizeAzureOrganization,
+  parseAzureWebhookSubscriptions,
   parseAzureRepoOwner,
+  serializeAzureWebhookSubscriptions,
 } from "../../../src/modules/azure-devops/azure-devops.service";
 
 describe("Azure Repos coordinates", () => {
@@ -43,5 +45,21 @@ describe("Azure Repos coordinates", () => {
     ).toBe(
       "https://dev.azure.com/geeksclub/Relay%20Platform/_git/web%20app",
     );
+  });
+
+  it("supports both legacy push ids and the multi-event subscription bundle", () => {
+    expect(parseAzureWebhookSubscriptions("legacy-push-id")).toEqual({
+      push: "legacy-push-id",
+    });
+    const serialized = serializeAzureWebhookSubscriptions({
+      push: "push-id",
+      pullRequestCreated: "created-id",
+      pullRequestUpdated: "updated-id",
+    });
+    expect(parseAzureWebhookSubscriptions(serialized)).toEqual({
+      push: "push-id",
+      pullRequestCreated: "created-id",
+      pullRequestUpdated: "updated-id",
+    });
   });
 });

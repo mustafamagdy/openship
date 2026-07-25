@@ -77,6 +77,7 @@ import {
 } from "../domains/project-route.service";
 import { type DeploymentConfigSnapshot } from "./build.service";
 import * as settingsService from "../settings/settings.service";
+import { completePullRequestPreviewStatus } from "./pull-request-preview-status";
 
 // Build env = CI/telemetry defaults (BUILD_ENV_VARS) + the customer's own env
 // vars. NODE_ENV is deliberately NOT set or overridden here: it's the customer's
@@ -226,6 +227,12 @@ async function markDeploymentFailedFromOutside(deploymentId: string, error: unkn
       level: "error",
     });
     sessionManager.updateStatus(deploymentId, "failed");
+    const project = await repos.project.findById(dep.projectId).catch(() => undefined);
+    if (project) {
+      await completePullRequestPreviewStatus(project, dep, "failure", {
+        error: message,
+      }).catch(() => undefined);
+    }
   } catch (handlerErr) {
     console.error(`[DEPLOY] markDeploymentFailedFromOutside crashed for ${deploymentId}:`, handlerErr);
   }

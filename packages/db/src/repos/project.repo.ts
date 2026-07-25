@@ -115,6 +115,25 @@ export function createProjectRepo(db: Database) {
       });
     },
 
+    /**
+     * Production GitHub projects with an active repository webhook. Used by
+     * the bounded boot reconciliation that upgrades legacy push-only hooks to
+     * also receive pull-request events.
+     */
+    async listRegisteredGitHubDeployWebhooks(limit = 5000) {
+      return db.query.project.findMany({
+        where: and(
+          eq(project.gitProvider, "github"),
+          eq(project.environmentType, "production"),
+          eq(project.autoDeploy, true),
+          isNotNull(project.webhookId),
+          isNull(project.deletedAt),
+        ),
+        orderBy: [desc(project.createdAt)],
+        limit,
+      });
+    },
+
     async listByGroup(groupId: string) {
       return db.query.project.findMany({
         where: and(eq(project.groupId, groupId), isNull(project.deletedAt)),

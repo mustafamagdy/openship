@@ -1,7 +1,15 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const { githubFetch } = vi.hoisted(() => ({
+const {
+  githubFetch,
+  listRegisteredGitHubDeployWebhooks,
+  resolveOrgOwner,
+  decrypt,
+} = vi.hoisted(() => ({
   githubFetch: vi.fn(),
+  listRegisteredGitHubDeployWebhooks: vi.fn(),
+  resolveOrgOwner: vi.fn(),
+  decrypt: vi.fn(),
 }));
 
 vi.mock("../../../src/modules/github/github.auth", () => ({
@@ -21,7 +29,39 @@ vi.mock("../../../src/config/env", () => ({
   runtimeTarget: { id: "local" },
 }));
 
-import { listRepositoryTree } from "../../../src/modules/github/github.service";
+vi.mock("@repo/db", () => ({
+  repos: {
+    project: {
+      listRegisteredGitHubDeployWebhooks,
+    },
+  },
+}));
+
+vi.mock("../../../src/lib/org-actor", () => ({
+  resolveOrgOwner,
+}));
+
+vi.mock("../../../src/lib/request-context", () => ({
+  buildBackgroundContext: vi.fn((input) => input),
+}));
+
+vi.mock("../../../src/lib/encryption", () => ({
+  encrypt: vi.fn(),
+  decrypt,
+}));
+
+vi.mock("../../../src/lib/public-url", () => ({
+  resolveApiPublicUrl: vi.fn(() => "https://openship.example.com"),
+  sharedWebhookUrl: vi.fn(() => "https://openship.example.com/api/webhooks/github"),
+  domainWebhookUrl: vi.fn(
+    (domain: string) => `https://${domain}/_openship/hooks/github`,
+  ),
+}));
+
+import {
+  listRepositoryTree,
+  reconcileGitHubDeployWebhookEvents,
+} from "../../../src/modules/github/github.service";
 
 function createFile(name: string, path: string) {
   return {
@@ -84,5 +124,50 @@ describe("listRepositoryTree", () => {
       { path: "apps/web/package.json", type: "file" },
     ]);
     expect(githubFetch).toHaveBeenCalledTimes(4);
+  });
+});
+
+describe("reconcileGitHubDeployWebhookEvents", () => {
+  beforeEach(() => {
+    githubFetch.mockReset();
+    listRegisteredGitHubDeployWebhooks.mockReset();
+    resolveOrgOwner.mockReset();
+    decrypt.mockReset();
+  });
+
+  it("upgrades an existing production webhook to push and pull-request events", async () => {
+    listRegisteredGitHubDeployWebhooks.mockResolvedValue([
+      {
+        id: "project-1",
+        organizationId: "org-1",
+        gitOwner: "oblien",
+        gitRepo: "openship",
+        webhookId: 42,
+        webhookSecret: "encrypted-secret",
+        webhookDomain: null,
+      },
+    ]);
+    resolveOrgOwner.mockResolvedValue({ userId: "user-1" });
+    decrypt.mockReturnValue("plain-secret");
+    githubFetch.mockResolvedValue({
+      id: 42,
+      active: true,
+      events: ["push", "pull_request"],
+    });
+
+    await reconcileGitHubDeployWebhookEvents();
+
+    expect(githubFetch).toHaveBeenCalledWith(
+      expect.objectContaining({
+        owner: "oblien",
+        method: "PATCH",
+        url: "https://api.github.com/repos/oblien/openship/hooks/42",
+        params: expect.objectContaining({
+          active: true,
+          events: ["push", "pull_request"],
+          config: expect.objectContaining({ secret: "plain-secret" }),
+        }),
+      }),
+    );
   });
 });
