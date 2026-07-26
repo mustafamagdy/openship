@@ -21,6 +21,8 @@ export type ClientDeploymentInfo = {
   authMode: "cloud" | "local" | "none";
   /** Running server release (self-hosted). Absent on older servers. */
   version?: string;
+  /** GitHub repository that supplies this instance's updates. */
+  releaseRepo?: string;
 };
 
 let cached: Promise<ClientDeploymentInfo> | null = null;
