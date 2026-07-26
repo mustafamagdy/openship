@@ -17,6 +17,8 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
+import { systemCatalog, type EnvironmentProfile } from "@repo/adapters";
+
 import { OS_DIR } from "./paths";
 
 declare const __CLI_VERSION__: string;
@@ -57,6 +59,60 @@ export function hasDockerCompose(): boolean {
  */
 export function composeIsViableDefault(): boolean {
   return process.platform === "linux" && hasDockerCompose();
+}
+
+/** Single-quote a string for `sh -c`. */
+function shQuote(s: string): string {
+  return `'${s.replace(/'/g, `'\\''`)}'`;
+}
+
+/**
+ * Command prefix for unattended elevation. An installed `sudo` binary is not
+ * enough: without `-n`, a headless setup can block forever at a password
+ * prompt. `null` tells the caller to fall back to the bare install.
+ */
+export function nonInteractiveSudoPrefix(
+  asRoot: boolean,
+  probe: () => number | null = () =>
+    spawnSync("sudo", ["-n", "true"], { stdio: "ignore" }).status,
+): "" | "sudo -n " | null {
+  if (asRoot) return "";
+  return probe() === 0 ? "sudo -n " : null;
+}
+
+/**
+ * Ensure Docker + Compose are usable, auto-installing Docker if missing. Reuses
+ * the SAME install command the deploy pipeline uses to provision target servers
+ * (`systemCatalog.installs.docker` → get.docker.com), so there's one definition
+ * of "how we install Docker". Returns true once `docker compose` works.
+ *
+ * Only attempts on Linux — Docker Desktop on macOS/Windows can't be installed
+ * unattended (and its edge container lacks host networking), so those return
+ * false and the caller falls back to the bare service. The installer's own
+ * output is inherited (that's the real progress the operator sees).
+ */
+export async function ensureDocker(): Promise<boolean> {
+  if (hasDockerCompose()) return true;
+  if (process.platform !== "linux") return false;
+
+  const plan = systemCatalog.installs.docker({
+    os: "linux",
+    serviceManager: "systemd",
+  } as unknown as EnvironmentProfile);
+  if (!plan.supported || !plan.installCommand) return false;
+
+  const asRoot = typeof process.getuid === "function" && process.getuid() === 0;
+  const sudo = nonInteractiveSudoPrefix(asRoot);
+  if (sudo === null) return false;
+  const sh = (script: string): number =>
+    spawnSync("sh", ["-c", sudo ? `${sudo}sh -c ${shQuote(script)}` : script], {
+      stdio: "inherit",
+    }).status ?? 1;
+
+  if (sh(plan.installCommand) !== 0) return false;
+  // Best-effort daemon start (get.docker.com already enables it on systemd).
+  if (plan.startCommand) sh(plan.startCommand);
+  return hasDockerCompose();
 }
 
 export interface ComposeUpOpts {
