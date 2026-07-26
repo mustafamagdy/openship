@@ -85,6 +85,10 @@ export type {
   MigrationPreviewService,
   MigrationRun,
   MigrationStatus,
+  TransferProgress,
+  CustomPath,
+  PendingItem,
+  ConflictAction,
 } from "./server-migration";
 export type {
   DomainChoice,

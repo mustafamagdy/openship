@@ -44,6 +44,11 @@ export interface DiscoveredService {
   containerName?: string;
   running: boolean;
   image?: string;
+  /** Content-addressable image ID (sha256:…) from the container inspect. Stable
+   *  even when the `image` tag has drifted/been pruned — so it's the reliable
+   *  ref for sizing, presence checks, and `docker save` (the tag can fail to
+   *  resolve for a locally-built compose image). */
+  imageId?: string;
   /** compose build context (set → adoption builds this Dockerfile). */
   build?: string;
   dockerfile?: string;
@@ -64,15 +69,18 @@ export interface DiscoveredService {
    *  stripped from an imported non-proxy service; the signal that a proxy owns
    *  the edge. */
   edgePorts?: number[];
-  /** A route the server's EXISTING (foreign) reverse proxy already serves for
-   *  this container, matched by a published host port — so the wizard can show
-   *  the current domain(s)+SSL and offer to keep them. Absent = no proxied route
-   *  detected (or no foreign proxy). */
-  existingRoute?: {
+  /** Routes the server's EXISTING (foreign) reverse proxy already serves for this
+   *  container, matched by published host port — so the wizard can show the
+   *  current domain(s)+path+SSL and offer to keep them. ONE ENTRY PER (port,path):
+   *  a container behind a path-fan-out domain (`/ → :1010`, `/v3 → :1020`) or with
+   *  several published ports collects several. Absent = no proxied route detected. */
+  existingRoute?: Array<{
+    port: number;
+    path: string;
     domains: string[];
     ssl: { enabled: boolean; certPath?: string; keyPath?: string };
     source?: string;
-  };
+  }>;
   warnings: string[];
 }
 
@@ -140,6 +148,10 @@ export interface DiscoveredStack {
   /** Openship projects recovered from the server (see {@link OpenshipProjectGroup});
    *  `knownHere: false` entries are re-importable. Empty when none found. */
   openshipProjects: OpenshipProjectGroup[];
+  /** Every route the foreign proxy serves, flattened (one per port+path). Lets the
+   *  wizard SHOW each detected domain/path + its guessed service, so a fan-out
+   *  path isn't silently dropped; unmatched ones also appear in `warnings`. */
+  proxyRoutes: ExistingRoute[];
 }
 
 // Docker-injected / shell env that should never be imported as app config.
@@ -263,7 +275,7 @@ export function toDiscoveredService(
   declared: ComposeService | undefined,
   imageDefaults?: Set<string>,
   imageCmd?: string[],
-  proxyRoutesByPort?: Map<number, ExistingRoute>,
+  proxyRoutesByPort?: Map<number, ExistingRoute[]>,
 ): DiscoveredService {
   const mounts = toDiscoveredMounts(detail.mounts);
   const warnings: string[] = [];
@@ -294,7 +306,15 @@ export function toDiscoveredService(
     declared?.advanced?.healthcheck ??
     (detail.healthcheck ? inspectHealthcheckToCompose(detail.healthcheck) : undefined);
 
-  const name = declared?.name ?? detail.composeService ?? detail.name;
+  // Prefer the compose-service identity over the container name. Openship
+  // deploys compose services as plain dockerode containers named
+  // `openship-<slug>-<svc>` WITHOUT a `com.docker.compose.service` label — they
+  // carry `openship.service=<svc>` instead. Without this fallback the generic
+  // adopt path named the moved service after the container (`openship-openship-web`),
+  // which no longer matched its git-compose definition (`web`) → the reconcile
+  // created a DUPLICATE bare-name row instead of updating the moved one in place.
+  const name =
+    declared?.name ?? detail.composeService ?? detail.labels?.["openship.service"] ?? detail.name;
   const image = detail.image || declared?.image;
   const ports = portsToComposeStrings(detail.ports);
 
@@ -307,17 +327,19 @@ export function toDiscoveredService(
       ? classifyProxy([image, command, name].filter(Boolean).join(" "))
       : undefined;
 
-  // Match a route the foreign proxy already serves, by any published host port.
+  // Match every route the foreign proxy serves, across ALL published host ports —
+  // no break, so a path-fan-out domain (its paths live on different ports) and a
+  // multi-port container both collect all their routes.
   let existingRoute: DiscoveredService["existingRoute"];
   if (proxyRoutesByPort && proxyRoutesByPort.size > 0) {
+    const routes: NonNullable<DiscoveredService["existingRoute"]> = [];
     for (const p of detail.ports) {
       if (!p.publicPort) continue;
-      const hit = proxyRoutesByPort.get(p.publicPort);
-      if (hit) {
-        existingRoute = { domains: hit.domains, ssl: hit.ssl, source: hit.source };
-        break;
+      for (const hit of proxyRoutesByPort.get(p.publicPort) ?? []) {
+        routes.push({ port: hit.port, path: hit.path, domains: hit.domains, ssl: hit.ssl, source: hit.source });
       }
     }
+    if (routes.length > 0) existingRoute = routes;
   }
 
   return {
@@ -327,6 +349,7 @@ export function toDiscoveredService(
     containerName: detail.name,
     running: detail.state === "running",
     image,
+    imageId: detail.imageId,
     build: declared?.build,
     dockerfile: declared?.dockerfile,
     ports,
@@ -364,7 +387,7 @@ export function reconcileStack(opts: {
   openshipProjects?: OpenshipProjectGroup[];
   /** published host port → route the foreign proxy already serves (from the
    *  IO-shell proxy scan). Attached per-service by matching published ports. */
-  proxyRoutesByPort?: Map<number, ExistingRoute>;
+  proxyRoutesByPort?: Map<number, ExistingRoute[]>;
 }): DiscoveredStack {
   const { serverId, details, volumes, networks, declared, alreadyManaged, imageDefaults, imageCmds, proxyRoutesByPort } = opts;
 
@@ -432,6 +455,22 @@ export function reconcileStack(opts: {
     );
   }
 
+  // Every route the foreign proxy serves, flattened for the wizard's route review
+  // (so a domain/path can be seen + reassigned, not silently dropped). A route
+  // whose upstream port matches NO discovered service is UNMATCHED — surface it
+  // as a warning so a fan-out path (e.g. api.onvo.me/v3 → an unselected/hidden
+  // container) is never lost without the operator knowing.
+  const proxyRoutes = [...(proxyRoutesByPort?.values() ?? [])].flat();
+  const matchedPorts = new Set(services.flatMap((s) => (s.existingRoute ?? []).map((r) => r.port)));
+  for (const r of proxyRoutes) {
+    if (!matchedPorts.has(r.port)) {
+      warnings.push(
+        `Reverse-proxy route ${r.domains[0] ?? "?"}${r.path === "/" ? "" : r.path} → :${r.port} ` +
+          `has no matching adopted service — it won't be published. Import the service on that port to keep it.`,
+      );
+    }
+  }
+
   return {
     serverId,
     composeProjects,
@@ -443,6 +482,7 @@ export function reconcileStack(opts: {
     adoptable: services.length > 0,
     alreadyManaged,
     openshipProjects: opts.openshipProjects ?? [],
+    proxyRoutes,
   };
 }
 

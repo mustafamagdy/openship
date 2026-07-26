@@ -22,6 +22,20 @@ function remoteRuntime() {
   return { runtime, executor, files };
 }
 
+function localRuntime() {
+  const tag = vi.fn(async () => {});
+  const runtime = Object.create(DockerRuntime.prototype) as DockerRuntime;
+  Object.defineProperties(runtime, {
+    transport: { value: { kind: "socket" } },
+    _docker: {
+      value: {
+        getImage: vi.fn(() => ({ tag })),
+      },
+    },
+  });
+  return { runtime, tag };
+}
+
 describe("Docker registry distribution", () => {
   it("pushes with an ephemeral Docker config and returns an immutable digest", async () => {
     const { runtime, executor, files } = remoteRuntime();
@@ -41,5 +55,24 @@ describe("Docker registry distribution", () => {
       Buffer.from("acme:top-secret-token").toString("base64"),
     );
     expect(executor.rm).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not mistake a registry port for an image tag", async () => {
+    const { runtime, tag } = localRuntime();
+
+    await runtime.tagImage("sha256:abc", "localhost:5000/team/app");
+
+    expect(tag).toHaveBeenCalledWith({ repo: "localhost:5000/team/app" });
+  });
+
+  it("splits an explicit image tag after the registry path", async () => {
+    const { runtime, tag } = localRuntime();
+
+    await runtime.tagImage("sha256:abc", "localhost:5000/team/app:release");
+
+    expect(tag).toHaveBeenCalledWith({
+      repo: "localhost:5000/team/app",
+      tag: "release",
+    });
   });
 });

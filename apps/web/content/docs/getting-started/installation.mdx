@@ -17,7 +17,7 @@ own (npm), buy the ready-to-use boxed version (the desktop app), or wire it into
 
 ## Install
 
-<Tabs items={['Install script', 'npm', 'Desktop app', 'Docker Compose']}>
+<Tabs items={['Install script', 'npm', 'From source (dev)', 'Desktop app', 'Docker Compose']}>
 
 <Tab value="Install script">
 
@@ -63,6 +63,39 @@ bun add -g openship       # bun
 ```
 
 That gives you the same `openship` command as the install script. Head to [Run Openship](#run-openship).
+
+</Tab>
+
+<Tab value="From source (dev)">
+
+Want to preview an unreleased build — a branch, a tag, or `main` ahead of the next release? This builds the
+CLI **from source** (the same way `bun dev` does) and installs it as a **separate `openship-dev` command**:
+
+```bash
+curl -fsSL https://get.openship.io/dev | sh
+```
+
+Pick a branch/tag with `OPENSHIP_REF` (default `main`):
+
+```bash
+OPENSHIP_REF=my-branch curl -fsSL https://get.openship.io/dev | sh
+```
+
+The from-source build runs **fully isolated** from a production install — its own home (`~/.openship-dev`),
+its own tokens/ports/data, and its own boot service — so your production `openship` is never touched. Use it
+just like the normal CLI, under the `openship-dev` name:
+
+```bash
+openship-dev            # interactive setup + control panel
+openship-dev up         # run locally
+openship-dev update     # pull the latest source + rebuild in place (no npm release needed)
+```
+
+<Callout title="It's a dev/preview build" type="warn">
+The build is unverified (no signed release asset) and compiling the dashboard needs real RAM/CPU — small
+boxes can OOM. It requires **Bun** and **git**. Not a production path; for production use the install script
+or npm above. Remove it with `rm -f "$(command -v openship-dev)" && rm -rf ~/.openship-dev`.
+</Callout>
 
 </Tab>
 
@@ -202,6 +235,54 @@ reboots:
 On a Linux box without systemd, `openship up` can't install a persistent service. Run
 `openship up --foreground` instead, or use the Docker Compose stack for always-on.
 </Callout>
+
+### Fully unattended install (headless)
+
+`openship up` on its own installs only the *service* — the first admin is created in the dashboard (or via the
+interactive `openship` wizard). Add `--non-interactive` (alias `--yes`) plus the install flags to provision a box
+**with no prompts** — admin account and (where supported) domain included. Ideal for CI, cloud-init, or scripted
+fleets.
+
+The admin bootstrap and the `byo` / `free` / `none` domain steps run on **both** install methods (Compose and
+bare). The one difference is a managed **custom** domain (Openship issues the Let's Encrypt cert itself), which is
+wired only for the bare install — see below.
+
+**Bare install** (`--bare`, embedded DB, no Docker) — Openship manages the host's OpenResty, so `--domain-kind
+custom` provisions the cert end-to-end:
+
+```bash
+OPENSHIP_ADMIN_PASSWORD='a-strong-password' openship up --bare --non-interactive \
+  --admin-email you@example.com --admin-name "You" \
+  --domain-kind custom --hostname ops.example.com \
+  --acme-email you@example.com --edge takeover
+```
+
+**Compose install** (the default on Linux with Docker) — the edge runs as a container. Headless creates the admin
+and registers a `byo`/`free`/`none` domain; put your own TLS-terminating proxy in front, or add a custom domain
+afterward from the dashboard's **Domains** tab (the container edge issues its Let's Encrypt cert there):
+
+```bash
+OPENSHIP_ADMIN_PASSWORD='a-strong-password' openship up --non-interactive \
+  --admin-email you@example.com --admin-name "You" \
+  --domain-kind byo --hostname ops.example.com
+```
+
+- **Admin** — `--admin-email` (required) + optional `--admin-name`. The password comes from
+  `--admin-password` or, preferably, the **`OPENSHIP_ADMIN_PASSWORD`** env var (keeps it out of your shell
+  history). Idempotent: re-running resets the existing admin's password instead of failing. Works on both methods.
+- **Domain** — `--domain-kind`:
+  - `byo` — front Openship with your own reverse proxy (`--hostname`, or derived from `--public-url`). Both methods.
+  - `custom` — Openship's edge issues a Let's Encrypt cert for `--hostname`; `--acme-email` and
+    `--edge migrate|takeover|cancel` pre-answer the `:80/:443` takeover. **Bare install only** — on the Compose
+    stack, add the custom domain from the dashboard's Domains tab (the container edge certs it), or use `--bare`.
+  - `free` — a `<slug>.opsh.io` subdomain (`--slug`). **Requires the box to already be connected to Openship
+    Cloud** (the free-domain connect is an interactive browser step) — connect first, then run the headless
+    install, or use `byo`.
+  - `none` (default when no domain flags) — a private box with no public domain.
+
+On the bare install, any missing or invalid flag exits non-zero with a precise message, so it's safe to script.
+On the Compose default, `--domain-kind custom` is not provisioned headlessly — the install warns and continues
+(admin still created). Add `--dry-run` to preview the installed service without provisioning.
 
 ## Open it and check it's working
 

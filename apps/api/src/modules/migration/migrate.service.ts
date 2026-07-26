@@ -25,7 +25,6 @@ import { createServerDockerRuntime } from "../../lib/deployment-runtime";
 import { sshManager } from "../../lib/ssh-manager";
 import { readProjectSnapshot } from "../../lib/openship-manifest";
 import { discoverServerStack } from "./docker-inspect.service";
-import { isPortableRegistryImage } from "./migration-preflight";
 import {
   EDGE_PORTS,
   parseComposePort,
@@ -204,7 +203,9 @@ function buildAdoptedServiceRows(
       // Adopt the running container AS-IS via its current image — we don't have
       // its original build source, so never carry a build context (which would
       // make the deploy rebuild-from-source and fail preflight). Only an
-      // image-less container (rare) falls back to its build context.
+      // image-less container (rare) falls back to its build context. Cross-server,
+      // the image itself is TRANSFERRED as data (docker save|load) so the target
+      // has the exact same image to adopt — no registry, no rebuild.
       image: s.image,
       build: s.image ? undefined : s.build,
       dockerfile: s.image ? undefined : s.dockerfile,
@@ -255,22 +256,12 @@ export async function adoptServerStack(opts: {
     throw new Error("None of the selected services were found on the server.");
   }
 
-  // Cross-server can't move a LOCALLY-BUILT image: it isn't in a registry, so a
-  // different target host has nothing to pull. Registry-image stacks migrate
-  // across servers fine (the target pulls them); built ones must be taken over
-  // IN PLACE (same server, where the built image already exists). Moving built
-  // images across hosts (docker save|load stream) is coming soon.
-  if (!sameServer) {
-    const built = chosen
-      .filter((s) => Boolean(s.build) && !isPortableRegistryImage(s.image))
-      .map((s) => s.name);
-    if (built.length > 0) {
-      throw new Error(
-        `Cross-server migration can't move locally-built images yet (${built.join(", ")}). ` +
-          `Publish these services to a connected OCI registry first, or take them over in place on the same server.`,
-      );
-    }
-  }
+  // Cross-server DOES move locally-built images now: moving_data streams the
+  // running image A→B as data (docker save | docker load), so the target adopts
+  // the exact same image — no registry, no rebuild. Registry-image stacks still
+  // migrate fine (the target pulls). The only unmovable case is a container with
+  // a build config but NO resolvable image (nothing to save) — guarded below and
+  // in the orchestrator's `blocked` check.
 
   // Only a container with NO resolvable image genuinely needs a build source.
   // A container that was originally built from source still RUNS an image on the
@@ -378,7 +369,12 @@ async function reattachRuntime(opts: {
       containerId: "compose", // multi-service sentinel (single-app modeled as 1 service)
       imageRef: chosen.find((c) => c.image)?.image ?? null,
       trigger: "manual",
-      meta: { serverId, runtimeMode: "docker", adopt: true, serviceDeploymentMode: "services" },
+      // deployTarget:"server" is REQUIRED, not implied by serverId: target
+      // re-derivation (resolveSnapshotTarget) drops serverId unless the meta
+      // says deployTarget==="server", so without it a redeploy re-resolves to
+      // the desktop cloud default and misroutes to Oblien. These reattach paths
+      // always run against a migration serverId, so the target is always server.
+      meta: { deployTarget: "server", serverId, runtimeMode: "docker", adopt: true, serviceDeploymentMode: "services" },
     });
     if (!dep) return null;
 
@@ -462,7 +458,9 @@ export async function attachLiveRuntime(opts: {
         containerId: "compose", // multi-service sentinel
         imageRef: attach.find((c) => c.image)?.image ?? null,
         trigger: "manual",
-        meta: { serverId, runtimeMode: "docker", adopt: true, adoptLive: true, serviceDeploymentMode: "services" },
+        // deployTarget:"server" required — see reattachRuntime above; without it a
+        // later redeploy of this migrated project re-resolves to the cloud default.
+        meta: { deployTarget: "server", serverId, runtimeMode: "docker", adopt: true, adoptLive: true, serviceDeploymentMode: "services" },
       });
       if (!dep) return;
     }

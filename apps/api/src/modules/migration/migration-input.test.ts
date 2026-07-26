@@ -4,7 +4,44 @@ import {
   sanitizeSubpaths,
   sanitizeVolumeStrategies,
   sanitizeServiceEnv,
+  sanitizeCustomPaths,
+  sanitizeRoutes,
 } from "./migration-input";
+
+describe("sanitizeCustomPaths", () => {
+  it("keeps well-formed absolute source→dest pairs, trimmed", () => {
+    expect(
+      sanitizeCustomPaths([
+        { source: " /a/data ", dest: " /b/data " },
+        { source: "/x", dest: "/y" },
+      ]),
+    ).toEqual([
+      { source: "/a/data", dest: "/b/data" },
+      { source: "/x", dest: "/y" },
+    ]);
+  });
+  it("drops non-absolute, traversal, and malformed entries", () => {
+    expect(
+      sanitizeCustomPaths([
+        { source: "rel/path", dest: "/ok" },
+        { source: "/ok", dest: "rel" },
+        { source: "/a/../etc", dest: "/b" },
+        { source: "/a", dest: "/b/../c" },
+        { source: "/a" },
+        "nope",
+        null,
+      ]),
+    ).toBeUndefined();
+  });
+  it("returns undefined for a non-array / empty", () => {
+    expect(sanitizeCustomPaths(undefined)).toBeUndefined();
+    expect(sanitizeCustomPaths([])).toBeUndefined();
+  });
+  it("caps at 50 entries", () => {
+    const many = Array.from({ length: 60 }, (_, i) => ({ source: `/s${i}`, dest: `/d${i}` }));
+    expect(sanitizeCustomPaths(many)).toHaveLength(50);
+  });
+});
 
 describe("sanitizeGitSource", () => {
   it("accepts a well-formed GitHub source and trims", () => {
@@ -85,5 +122,33 @@ describe("sanitizeServiceEnv", () => {
     expect(sanitizeServiceEnv(undefined)).toBeUndefined();
     expect(sanitizeServiceEnv({})).toBeUndefined();
     expect(sanitizeServiceEnv({ api: "nope" as unknown as Record<string, unknown> })).toBeUndefined();
+  });
+});
+
+describe("sanitizeRoutes", () => {
+  it("keeps a domain-bearing spec and normalizes a non-root targetPath (fan-out)", () => {
+    expect(
+      sanitizeRoutes({
+        web: { domainType: "custom", customDomain: "API.onvo.me" },
+        api: { domainType: "custom", customDomain: "api.onvo.me", targetPath: "v3", exposedPort: 1020 },
+      }),
+    ).toEqual({
+      web: { domainType: "custom", customDomain: "api.onvo.me" },
+      api: { domainType: "custom", customDomain: "api.onvo.me", exposedPort: "1020", targetPath: "/v3" },
+    });
+  });
+
+  it("omits a root ('/') targetPath and rejects `..` traversal → root (no targetPath)", () => {
+    expect(sanitizeRoutes({ a: { domainType: "custom", customDomain: "x.com", targetPath: "/" } })).toEqual({
+      a: { domainType: "custom", customDomain: "x.com" },
+    });
+    expect(sanitizeRoutes({ a: { domainType: "custom", customDomain: "x.com", targetPath: "/../etc" } })).toEqual({
+      a: { domainType: "custom", customDomain: "x.com" },
+    });
+  });
+
+  it("drops a spec with no resolvable domain, and returns undefined when nothing is left", () => {
+    expect(sanitizeRoutes({ a: { domainType: "free" } })).toBeUndefined();
+    expect(sanitizeRoutes(undefined)).toBeUndefined();
   });
 });

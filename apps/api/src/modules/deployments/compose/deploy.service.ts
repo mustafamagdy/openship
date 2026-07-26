@@ -17,7 +17,8 @@ import {
   getAppPrepareSteps,
   type ComposeAdvanced,
 } from "@repo/core";
-import { getRuntimeTemplate } from "../../apps/catalog-source";
+import { getTemplateForOrg } from "../../apps/catalog-source";
+import { attachLinkedNetworks } from "../attach-linked-networks";
 import {
   BuildLogger,
   DEFAULT_RESOURCE_CONFIG,
@@ -55,7 +56,7 @@ import * as sessionManager from "../session-manager";
 import { auditPorts } from "../port-audit.service";
 import type { PortCheckResult } from "../../../lib/deployment-runtime";
 import { resolveServicePort } from "./domain-helpers";
-import { buildCompositeRegistration } from "./composite-route";
+import { buildCompositeRegistration, buildDomainFanoutRegistrations } from "./composite-route";
 import { serviceKind } from "./project-services";
 import { buildUpstreamUrl, resolveRouteStrategy } from "../../../lib/upstream-url";
 import { withLoopbackPublish } from "../../../lib/loopback-publish";
@@ -1292,40 +1293,33 @@ export async function deployComposeServices(
   }
 
   // ── Cross-project service links (internal / shared-network mode) ────────────
-  // If this project consumes database apps over the INTERNAL mode, attach its
-  // containers to each source app's `openship-<slug>` network so they resolve
-  // the DB service alias (e.g. mongo:27017) with no public port. Advisory —
-  // mirrors routing/prepare; a link networking failure never fails the deploy.
-  if (runtime.attachToExternalNetworks) {
-    try {
-      const links = await repos.projectConnection.listByTarget(project.id);
-      const nets: string[] = [];
-      for (const link of links) {
-        if (link.mode !== "internal") continue;
-        const src = await repos.project.findById(link.sourceProjectId);
-        if (src?.slug) nets.push(`openship-${src.slug}`);
-      }
-      if (nets.length > 0) {
-        await runtime.attachToExternalNetworks(project.id, nets);
-        logger.log(`Attached to ${nets.length} connected service network(s).\n`, "info");
-      }
-    } catch (err) {
-      logger.log(
-        `Warning: could not attach linked service networks: ${err instanceof Error ? err.message : String(err)}\n`,
-        "warn",
-      );
-    }
-  }
+  // Attach this consumer's containers to each internally-linked source app's
+  // `openship-<slug>` network so injected internal hosts resolve (see the shared
+  // helper). Advisory — a link-networking failure never fails the deploy.
+  await attachLinkedNetworks(project.id, runtime, (m, level) => logger.log(`${m}\n`, level));
 
-  // ── App post-deploy prepare steps ──────────────────────────────────────────
-  // Run any template-declared prepare command INSIDE the target service's
-  // container (e.g. Convex mints its admin key from INSTANCE_SECRET+INSTANCE_NAME)
-  // and persist the captured value as a service env var, so the app's Connection
-  // card can surface it — the user never shells in. Advisory: mirrors the port
-  // audit; a failure is logged and never fails the deploy.
+  // ── App prepare steps (in-container lifecycle hooks) ────────────────────────
+  // Run template-declared prepare commands INSIDE the target service's container
+  // (e.g. Convex mints its admin key from INSTANCE_SECRET+INSTANCE_NAME) and
+  // persist the captured value as a service env var, so the app's Connection card
+  // can surface it — the user never shells in. All execution is strictly
+  // in-container. `phase`: "post-start" (default) runs once the container is up;
+  // "post-ready" waits on a readiness probe first; "pre-deploy" is reserved (no
+  // init-container yet) and skipped with a notice. Advisory by default (failure
+  // logged, deploy unaffected); a `mustSucceed` step fails the deploy.
+  let prepareFailure: string | null = null;
   if (project.appTemplateId) {
-    const template = getRuntimeTemplate(project.appTemplateId);
+    const template = await getTemplateForOrg(project.organizationId, project.appTemplateId);
     for (const step of template ? getAppPrepareSteps(template) : []) {
+      const phase = step.phase ?? "post-start";
+      if (phase === "pre-deploy") {
+        logger.log(
+          `Skipping prepare step "${step.capture}": phase "pre-deploy" isn't supported yet ` +
+            `(use files + dependsOn + healthcheck for pre-run init).\n`,
+          "warn",
+        );
+        continue;
+      }
       try {
         const service = services.find((s) => s.name === step.service);
         const result = service ? results.find((r) => r.serviceId === service.id) : undefined;
@@ -1342,6 +1336,23 @@ export async function deployComposeServices(
         const containerId = await containerIdForService(dep, service);
         const exec = containerId ? await runtime.inContainerExecutor?.(containerId) : null;
         if (!exec) continue;
+
+        // phase:"post-ready" — gate on the readiness probe passing (a real
+        // signal) before running the command, rather than the fixed retry below.
+        if (phase === "post-ready" && step.readiness) {
+          const { test, interval = 3_000, retries = 10 } = step.readiness;
+          let ready = false;
+          for (let i = 0; i < retries; i++) {
+            try {
+              await exec.exec(test, { timeout: 15_000 });
+              ready = true;
+              break;
+            } catch {
+              await new Promise((r) => setTimeout(r, interval));
+            }
+          }
+          if (!ready) throw new Error("readiness probe never passed");
+        }
 
         // The backend may still be finishing startup right after "running", so
         // retry a few times until the in-container command succeeds.
@@ -1360,6 +1371,7 @@ export async function deployComposeServices(
           ? (new RegExp(step.capturePattern).exec(stdout)?.[1] ?? "").trim()
           : stdout.trim();
         if (!value) {
+          if (step.mustSucceed) throw new Error("produced no output");
           logger.log(`Warning: prepare step "${step.capture}" produced no output\n`, "warn");
           continue;
         }
@@ -1380,12 +1392,35 @@ export async function deployComposeServices(
           logger.log(`Prepared ${step.capture} → ${step.persistAs.key}\n`, "info");
         }
       } catch (err) {
-        logger.log(
-          `Warning: app prepare step "${step.capture}" failed: ${err instanceof Error ? err.message : String(err)}\n`,
-          "warn",
-        );
+        const detail = err instanceof Error ? err.message : String(err);
+        if (step.mustSucceed) {
+          // Critical init failed → fail the deploy. Return BEFORE the container
+          // reaping below so a redeploy's previous version isn't torn down.
+          prepareFailure = `Required app setup step "${step.capture}" failed: ${detail}`;
+          logger.log(`${prepareFailure}\n`, "error");
+          break;
+        }
+        logger.log(`Warning: app prepare step "${step.capture}" failed: ${detail}\n`, "warn");
       }
     }
+  }
+  if (prepareFailure) {
+    const failedNow = results.filter((r) => r.status === "failed");
+    logger.step("deploy", "failed", prepareFailure);
+    return {
+      status: "failed",
+      summary: {
+        total: ordered.length,
+        successful,
+        failed: failedNow.length,
+        indeterminate: 0,
+        failedServices: failedNow.map((r) => r.serviceName),
+      },
+      services: results,
+      error: prepareFailure,
+      publicUrl: firstPublicUrl,
+      portChecks,
+    };
   }
 
   // Final service-mesh convergence pass (cloud only — docker has live DNS and
@@ -1417,22 +1452,23 @@ export async function deployComposeServices(
   if (routeContext?.routing && runtime.name !== "cloud") {
     try {
       // Reusable routing core (shared with the routing API): resolve each
-      // service's live upstream from this deploy's results + its public domain.
+      // service's live upstream from this deploy's results.
+      const resolveTargetUrl = (serviceId: string) => {
+        const svc = enabled.find((s) => s.id === serviceId);
+        const res = results.find((r) => r.serviceId === serviceId);
+        const port = svc ? resolveServicePublicPort(svc) : undefined;
+        if (!port) return null;
+        return buildUpstreamUrl({
+          strategy: resolveRouteStrategy(project.routeStrategy),
+          ip: res?.ip,
+          hostPort: res?.hostPort,
+          containerPort: port,
+        });
+      };
       const composite = buildCompositeRegistration({
         services: enabled,
         routingConfig: project.routingConfig,
-        resolveTargetUrl: (serviceId) => {
-          const svc = enabled.find((s) => s.id === serviceId);
-          const res = results.find((r) => r.serviceId === serviceId);
-          const port = svc ? resolveServicePublicPort(svc) : undefined;
-          if (!port) return null;
-          return buildUpstreamUrl({
-            strategy: resolveRouteStrategy(project.routeStrategy),
-            ip: res?.ip,
-            hostPort: res?.hostPort,
-            containerPort: port,
-          });
-        },
+        resolveTargetUrl,
         resolveDomain: (serviceId) => {
           const svc = enabled.find((s) => s.id === serviceId);
           // Composite (vercel-style single-domain) uses the service's PRIMARY route.
@@ -1461,6 +1497,24 @@ export async function deployComposeServices(
         });
         logger.log(
           `Composed single domain ${r.hostname}: frontend at "/", backend proxied per vercel.json.\n`,
+        );
+      }
+
+      // Re-emit any migration path-fan-out domains (a domain whose paths route to
+      // DIFFERENT services) from this deploy's live upstreams — persisted on the
+      // project so a redeploy reproduces `/v3 → api` instead of dropping it.
+      for (const reg of buildDomainFanoutRegistrations({
+        routes: project.compositeRoutes,
+        resolveTargetUrl,
+      })) {
+        await routeContext.routing.registerRoute({
+          domain: reg.hostname,
+          tls: true,
+          targetUrl: reg.targetUrl!,
+          ...(reg.proxyLocations?.length ? { proxyLocations: reg.proxyLocations } : {}),
+        });
+        logger.log(
+          `Composed path-routed domain ${reg.hostname}: ${reg.proxyLocations?.length ?? 0} extra path location(s).\n`,
         );
       }
     } catch (err) {

@@ -53,7 +53,7 @@ import {
   executeCleanup,
   type CleanupManifest,
 } from "../projects/project-cleanup.service";
-import { runPreflightChecks, type PreflightResult } from "./preflight";
+import { runPreflightChecks, PREFLIGHT_ERROR_CODES, type PreflightResult } from "./preflight";
 import {
   isMultiServiceProject,
   listProjectComposeServices,
@@ -78,10 +78,21 @@ function throwPreflightFailure(preflight: PreflightResult): never {
       failedChecks.map((check) => check.code).filter((code): code is string => Boolean(code)),
     ),
   );
+  // A github-credential failure is ACTIONABLE — the dashboard maps these codes
+  // to the DeployCredentialModal (install App / add token / connect server /
+  // build local). Surface one even when other checks also failed, so the user
+  // gets the modal instead of a generic "checks failed" toast.
+  const CREDENTIAL_CODES: string[] = [
+    PREFLIGHT_ERROR_CODES.GITHUB_CLI_REMOTE_BUILD_REJECTED,
+    PREFLIGHT_ERROR_CODES.GITHUB_REMOTE_TOKEN_REQUIRED,
+    PREFLIGHT_ERROR_CODES.GITHUB_APP_INSTALLATION_REQUIRED,
+  ];
+  const credentialCode = CREDENTIAL_CODES.find((c) => codes.includes(c));
   const errorCode =
-    codes.length === 1 && failedChecks.every((check) => check.code === codes[0])
+    credentialCode ??
+    (codes.length === 1 && failedChecks.every((check) => check.code === codes[0])
       ? codes[0]
-      : "PRE_DEPLOY_CHECKS_FAILED";
+      : "PRE_DEPLOY_CHECKS_FAILED");
 
   throw new AppError(`Pre-deploy checks failed: ${failures}`, 403, errorCode);
 }
@@ -541,10 +552,20 @@ export async function resolveSnapshotTarget(
         ?.meta as DeploymentConfigSnapshot | null)
     : null;
 
-  const deployTarget: DeployTarget | undefined =
-    override?.deployTarget ??
-    (project.cloudWorkspaceId ? "cloud" : (activeMeta?.deployTarget ?? undefined)) ??
-    undefined;
+  // Target priority, highest first:
+  //   1. explicit override (the caller chose a target for this deploy)
+  //   2. cloud — a promoted project (canonical on the SaaS)
+  //   3. the active deployment's stamped target
+  //   4. inferred "server" when the active meta carries a serverId
+  // Step 4 matches resolveEffectiveTarget (which routes ANY serverId over SSH)
+  // and repairs migrated (adopt/reattach) metas that set serverId but historically
+  // omitted deployTarget — without it this resolver dropped the serverId (gate
+  // below) and redeploy fell back to the desktop cloud default.
+  let deployTarget: DeployTarget | undefined;
+  if (override?.deployTarget) deployTarget = override.deployTarget;
+  else if (project.cloudWorkspaceId) deployTarget = "cloud";
+  else if (activeMeta?.deployTarget) deployTarget = activeMeta.deployTarget;
+  else if (activeMeta?.serverId) deployTarget = "server";
 
   const serverId =
     deployTarget === "server"
@@ -829,6 +850,8 @@ export async function requestBuildAccess(ctx: RequestContext, input: BuildAccess
     runtimeMode,
     serviceDeploymentMode,
     services,
+    serviceIds,
+    refreshServiceIds,
     cloudResourceTier,
     cloudResourceCustom,
     forwardGitCredentials,
@@ -1058,6 +1081,12 @@ export async function requestBuildAccess(ctx: RequestContext, input: BuildAccess
     envVars: deploymentEnvVars,
     rollbackStrategy,
     commitShaBefore,
+    // Service-scoped folder-upload/MCP deploy: only these services are (re)built;
+    // the rest carry forward on their existing containers. Without this a
+    // folder-upload deploy rebuilt the WHOLE stack and needlessly recreated
+    // stateful services (DBs/caches) on an unrelated change.
+    serviceIds,
+    refreshServiceIds,
   });
 
   // Store env vars on project as "latest defaults"

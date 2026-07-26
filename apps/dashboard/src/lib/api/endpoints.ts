@@ -38,6 +38,14 @@ export const endpoints = {
     branch: (id: string | number) => `projects/${id}/branch`,
     autoDeploy: (id: string | number) => `projects/${id}/auto-deploy`,
     webhookDomain: (id: string | number) => `projects/${id}/webhook-domain`,
+    incomingWebhooks: (id: string | number) => `projects/${id}/incoming-webhooks`,
+    incomingWebhook: (id: string | number, hookId: string) =>
+      `projects/${id}/incoming-webhooks/${hookId}`,
+    incomingWebhookRotate: (id: string | number, hookId: string) =>
+      `projects/${id}/incoming-webhooks/${hookId}/rotate`,
+    webhookDeliveries: (id: string | number) => `projects/${id}/webhook-deliveries`,
+    incomingWebhookDeliveries: (id: string | number, hookId: string) =>
+      `projects/${id}/incoming-webhooks/${hookId}/deliveries`,
     resources: (id: string | number) => `projects/${id}/resources`,
     cloneToken: (id: string | number) => `projects/${id}/clone-token`,
     sleepMode: (id: string | number) => `projects/${id}/sleep-mode`,
@@ -60,6 +68,8 @@ export const endpoints = {
     catalog: "apps/catalog",
     catalogEntry: (id: string) => `apps/catalog/${id}`,
     install: "apps",
+    custom: "apps/custom",
+    customEntry: (appId: string) => `apps/custom/${appId}`,
     settings: (projectId: string | number) => `projects/${projectId}/app-settings`,
     connection: (projectId: string | number) => `projects/${projectId}/app-connection`,
   },
@@ -72,6 +82,8 @@ export const endpoints = {
     create: (projectId: string | number) => `projects/${projectId}/services`,
     get: (projectId: string | number, serviceId: string) =>
       `projects/${projectId}/services/${serviceId}`,
+    volumeSizes: (projectId: string | number, serviceId: string) =>
+      `projects/${projectId}/services/${serviceId}/volume-sizes`,
     update: (projectId: string | number, serviceId: string) =>
       `projects/${projectId}/services/${serviceId}`,
     delete: (projectId: string | number, serviceId: string) =>
@@ -131,6 +143,7 @@ export const endpoints = {
     registryDefault: (id: string) => `domains/registry/${encodeURIComponent(id)}/default`,
     registryRemove: (id: string) => `domains/registry/${encodeURIComponent(id)}`,
     preview: "domains/preview",
+    byId: (id: string) => `domains/${encodeURIComponent(id)}`,
     verify: (id: string) => `domains/${encodeURIComponent(id)}/verify`,
     verifySsl: (id: string) => `domains/${encodeURIComponent(id)}/verify-ssl`,
     certificate: (id: string) => `domains/${encodeURIComponent(id)}/certificate`,
@@ -378,6 +391,11 @@ export const endpoints = {
     migrate: "migration/migrate",
     migration: (id: string) => `migration/migrations/${id}`,
     cutover: (id: string) => `migration/migrations/${id}/cutover`,
+    cancel: (id: string) => `migration/migrations/${id}/cancel`,
+    resume: (id: string) => `migration/migrations/${id}/resume`,
+    cleanupTarget: (id: string) => `migration/migrations/${id}/cleanup-target`,
+    active: "migration/active",
+    runs: "migration/runs",
   },
 
   /* ---------------------------------------------------------------- */

@@ -72,6 +72,11 @@ export {
   type NewWebhookSource,
 } from "./webhook-source.repo";
 export {
+  createIncomingWebhookRepo,
+  type IncomingWebhook,
+  type NewIncomingWebhook,
+} from "./incoming-webhook.repo";
+export {
   createSystemNoticeRepo,
   type SystemNotice,
   type NewSystemNotice,
@@ -92,10 +97,12 @@ export {
   type NewCloudWebhookBinding,
 } from "./cloud-webhook-binding.repo";
 export {
-  createGithubWebhookEventRepo,
-  type GithubWebhookEvent,
-  type NewGithubWebhookEvent,
-} from "./github-webhook-event.repo";
+  createWebhookDeliveryRepo,
+  type WebhookDelivery,
+  type NewWebhookDelivery,
+  type WebhookDeliveryInput,
+  type WebhookDeliveryResult,
+} from "./webhook-delivery.repo";
 export {
   createServiceRepo,
   normalizeRoutingFields,
@@ -247,12 +254,14 @@ import { createDeploymentCheckRunRepo } from "./deployment-check-run.repo";
 import { createDomainRepo } from "./domain.repo";
 import { createRouteRuleRepo } from "./route-rule.repo";
 import { createWebhookSourceRepo } from "./webhook-source.repo";
+import { createIncomingWebhookRepo } from "./incoming-webhook.repo";
 import { createSystemNoticeRepo } from "./system-notice.repo";
 import { createUpdateStatusRepo } from "./update-status.repo";
 import { createServerModuleStatusRepo } from "./server-module-status.repo";
 import { createCloudWebhookBindingRepo } from "./cloud-webhook-binding.repo";
 import { createProjectConnectionRepo } from "./project-connection.repo";
-import { createGithubWebhookEventRepo } from "./github-webhook-event.repo";
+import { createCustomAppTemplateRepo } from "./custom-app-template.repo";
+import { createWebhookDeliveryRepo } from "./webhook-delivery.repo";
 import { createServiceRepo } from "./service.repo";
 import { createServiceDeploymentRepo } from "./service-deployment.repo";
 import { createSettingsRepo } from "./settings.repo";
@@ -321,12 +330,14 @@ export const repos = {
   domain: createDomainRepo(db),
   routeRule: createRouteRuleRepo(db),
   webhookSource: createWebhookSourceRepo(db),
+  incomingWebhook: createIncomingWebhookRepo(db),
   notice: createSystemNoticeRepo(db),
   updateStatus: createUpdateStatusRepo(db),
   serverModuleStatus: createServerModuleStatusRepo(db),
   cloudWebhookBinding: createCloudWebhookBindingRepo(db),
   projectConnection: createProjectConnectionRepo(db),
-  githubWebhookEvent: createGithubWebhookEventRepo(db),
+  customAppTemplate: createCustomAppTemplateRepo(db),
+  webhookDelivery: createWebhookDeliveryRepo(db),
   service: createServiceRepo(db),
   serviceDeployment: createServiceDeploymentRepo(db),
   settings: createSettingsRepo(db),

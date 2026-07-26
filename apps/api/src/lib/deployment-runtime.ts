@@ -361,23 +361,19 @@ export async function resolveTargetPlatform(
 ): Promise<Platform> {
   // For SSH server targets, use the managed connection pool
   if (target === "server") {
-    // One org-scoped resolution — returns the verified row, so no second
-    // fetch and no non-org fallback. (resolveOrgServer throws if the org
-    // is missing or the server isn't in it.)
-    const server = await resolveOrgServer(serverId, organizationId);
+    // ONE resolution for the server's executor + transport (isLocal → host
+    // executor + socket docker; else → pooled SSH). Shared with
+    // createServerDockerRuntime / createServerCommandExecutor — no drift.
+    const { id, executor, isLocal, ssh } = await resolveServerExecutor(
+      serverId,
+      organizationId,
+    );
 
     // The auto-registered "This Server" row IS the OpenShip host (VPS /
-    // server-host mode). It has no real SSH — resolve it to the LOCAL host
-    // executor (createHostExecutor: LocalExecutor when bare, SSH→host when the
-    // API is containerized), exactly like the self-deploy path. Docker uses the
-    // host's socket (DooD). Everything downstream (routing/SSL) is on-box.
-    // Compatibility for self-hosted installs whose host was added manually
-    // before the auto-registered `isLocal` server row existed. An SSH target
-    // at a loopback literal is necessarily this API host; tunnelling Docker
-    // back into the same machine can deadlock dockerode's single SSH stream
-    // after a build session. Resolve it through the local executor/socket.
-    if (server.isLocal || isLoopbackServerHost(server.sshHost)) {
-      const executor = createHostExecutor();
+    // server-host mode): local host executor, host docker socket (DooD),
+    // everything on-box. resolveServerExecutor also treats legacy loopback
+    // server rows as local, so every caller shares the same compatibility rule.
+    if (isLocal) {
       return createPlatform({
         target: "selfhosted",
         runtime: runtimeMode,
@@ -389,27 +385,18 @@ export async function resolveTargetPlatform(
       });
     }
 
-    const executor = await sshManager.acquire(server.id);
-
-    // SSH config for the Docker SSH transport (dockerode uses its own connection).
-    const ssh = server.sshHost ? await buildSshConfig(server) : null;
-
-    if (!ssh) {
-      throw new Error("Invalid SSH configuration. Check host, auth method, and credentials.");
-    }
-
     return createPlatform({
       target: "selfhosted",
       runtime: runtimeMode,
       executor, // ← managed executor from pool
       bare: runtimeMode === "bare" ? await resolveBareOptions(executor) : undefined,
-      ssh,
+      ssh: ssh!,
       docker: runtimeMode === "docker"
-        ? toDockerSshTransport(ssh, executor)
+        ? toDockerSshTransport(ssh!, executor)
         : undefined,
       // Serialize provisioning per target server, so concurrent deploys (across
       // projects / single-app + compose) never race apt/openresty/networks/state.
-      provisionLock: createProvisionLock(`provision:server:${server.id}`),
+      provisionLock: createProvisionLock(`provision:server:${id}`),
     });
   }
 
@@ -451,13 +438,66 @@ export async function createServerDockerRuntime(
   serverId: string,
   organizationId: string,
 ): Promise<DockerRuntime> {
+  const { executor, isLocal, ssh } = await resolveServerExecutor(serverId, organizationId);
+  // isLocal ("This Server") → the host daemon over the local/mounted socket
+  // (bare host, or DooD when the API is containerized) — no SSH bridge. Others
+  // → dockerode over the pooled SSH connection.
+  if (isLocal) {
+    return DockerRuntime.create({ transport: "socket" });
+  }
+  return DockerRuntime.create(toDockerSshTransport(ssh!, executor));
+}
+
+/**
+ * THE single server → {executor, endpoint, transport} resolver. One place
+ * decides how to reach a server, so resolveTargetPlatform (deploy),
+ * createServerDockerRuntime (docker/migrate), and createServerCommandExecutor
+ * (direct transfer) never drift:
+ *   - isLocal "This Server" → the LOCAL host executor (createHostExecutor:
+ *     LocalExecutor bare / SSH→host when containerized) + host docker socket;
+ *     `ssh` is null (no bridge). Closes the gap where callers assumed SSH.
+ *   - remote → the pooled SSH executor + its decrypted SshConfig.
+ * `conn` is the box's SSH endpoint as a PEER would dial it (a placeholder for an
+ * isLocal peer — the direct-transfer both-direction probe routes around it by
+ * making the local box the initiator).
+ */
+export async function resolveServerExecutor(
+  serverId: string | undefined,
+  organizationId: string | undefined,
+): Promise<{
+  id: string;
+  executor: CommandExecutor;
+  conn: { host: string; port: number; user: string };
+  isLocal: boolean;
+  ssh: SshConfig | null;
+}> {
   const server = await resolveOrgServer(serverId, organizationId);
+  const conn = {
+    host: server.sshHost || "127.0.0.1",
+    port: server.sshPort ?? 22,
+    user: server.sshUser || "root",
+  };
+  if (server.isLocal || isLoopbackServerHost(server.sshHost)) {
+    return { id: server.id, executor: createHostExecutor(), conn, isLocal: true, ssh: null };
+  }
   const executor = await sshManager.acquire(server.id);
   const ssh = server.sshHost ? await buildSshConfig(server) : null;
   if (!ssh) {
     throw new Error("Invalid SSH configuration. Check host, auth method, and credentials.");
   }
-  return DockerRuntime.create(toDockerSshTransport(ssh, executor));
+  return { id: server.id, executor, conn, isLocal: false, ssh };
+}
+
+/**
+ * A server's raw CommandExecutor + SSH endpoint, for the direct
+ * server-to-server migration transfer. Thin façade over resolveServerExecutor.
+ */
+export async function createServerCommandExecutor(
+  serverId: string,
+  organizationId: string,
+): Promise<{ executor: CommandExecutor; conn: { host: string; port: number; user: string }; isLocal: boolean }> {
+  const { executor, conn, isLocal } = await resolveServerExecutor(serverId, organizationId);
+  return { executor, conn, isLocal };
 }
 
 /** Map the shared SSH config → dockerode SSH transport options with pooled executor. */

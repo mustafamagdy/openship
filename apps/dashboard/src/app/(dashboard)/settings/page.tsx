@@ -33,6 +33,7 @@ import { PersonalAccessTokens } from "./_components/PersonalAccessTokens";
 import { McpConnection } from "./_components/McpConnection";
 import { InstanceInfo } from "./_components/InstanceInfo";
 import { LanguageSetting } from "./_components/LanguageSetting";
+import { PreferencesSetting } from "./_components/PreferencesSetting";
 import { UpdatesTab } from "./_components/UpdatesTab";
 import { TeamTab } from "./_components/TeamTab";
 import { NotificationsTab } from "./_components/NotificationsTab";
@@ -110,6 +111,7 @@ function SettingsPageInner() {
               {showBuildPreferences && <BuildPreferences />}
               {showBuildPreferences && <RoutePreferences />}
               <LanguageSetting />
+              <PreferencesSetting />
             </>
           )}
 
