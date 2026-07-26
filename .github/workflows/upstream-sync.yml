@@ -4,9 +4,6 @@ on:
   schedule:
     - cron: "17 3 * * *"
   workflow_dispatch: {}
-  push:
-    branches:
-      - main
 
 permissions:
   contents: write
@@ -74,15 +71,14 @@ jobs:
 
       - name: Report merge conflict
         if: steps.merge.outputs.conflict == 'true'
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          TITLE="Upstream synchronization requires conflict resolution"
-          EXISTING="$(gh issue list --state open --search "\"${TITLE}\" in:title" --json number --jq '.[0].number // empty')"
           UPSTREAM_SHA="$(git rev-parse upstream/main)"
-          BODY="The merge of \`oblien/openship:main\` at \`${UPSTREAM_SHA}\` into this fork conflicts with fork changes. Resolve it on a dedicated branch; no production branch was modified."
-          if [[ -n "${EXISTING}" ]]; then
-            gh issue edit "${EXISTING}" --body "${BODY}"
-          else
-            gh issue create --title "${TITLE}" --body "${BODY}"
-          fi
+          {
+            echo "## Upstream synchronization requires conflict resolution"
+            echo
+            echo "The merge of \`oblien/openship:main\` at \`${UPSTREAM_SHA}\` into this fork conflicts with fork changes."
+            echo
+            echo "Resolve it on a dedicated branch. No production branch was modified."
+          } >> "$GITHUB_STEP_SUMMARY"
+          echo "::error title=Upstream synchronization conflict::Manual conflict resolution is required for upstream ${UPSTREAM_SHA}."
+          exit 1

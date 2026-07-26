@@ -268,27 +268,30 @@ async function sendDiscord(
   const webhookUrl = decrypt(config.webhookUrl);
 
   const { title, body } = renderMessage(delivery);
+  // Guard the embed timestamp: a missing/invalid createdAt (e.g. a synthetic test
+  // delivery) makes `new Date(...).toISOString()` throw "Invalid time value" — the
+  // reported Discord "invalid time" error. Fall back to now.
+  const at = delivery.createdAt ? new Date(delivery.createdAt) : new Date();
   const discordPayload = buildDiscordMessage({
     title,
     body,
-    timestamp: new Date(delivery.createdAt).toISOString(),
+    timestamp: (Number.isNaN(at.getTime()) ? new Date() : at).toISOString(),
   });
 
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 10_000);
-  try {
-    const res = await fetch(webhookUrl, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(discordPayload),
-      signal: controller.signal,
-    });
-    if (!res.ok) {
-      const text = await res.text().catch(() => "");
-      throw new Error(`Discord webhook returned ${res.status}: ${text.slice(0, 200)}`);
-    }
-  } finally {
-    clearTimeout(timer);
+  // SSRF-safe: pin the resolved IP and never follow a redirect, like the other
+  // webhook workers. Discord's host is fixed so this is defense-in-depth, but it
+  // removes the last raw-fetch redirect-follower on the delivery path.
+  const allowPrivate = !env.CLOUD_MODE && env.NOTIFY_WEBHOOK_ALLOW_INTERNAL;
+  const res = await safeFetch(webhookUrl, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(discordPayload),
+    timeoutMs: 10_000,
+    allowPrivate,
+  });
+  if (!res.ok) {
+    const text = await res.text().catch(() => "");
+    throw new Error(`Discord webhook returned ${res.status}: ${text.slice(0, 200)}`);
   }
 }
 
@@ -360,23 +363,25 @@ async function sendMSTeams(
     ],
   };
 
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 10_000);
-  try {
-    const res = await fetch(webhookUrl, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(teamsPayload),
-      signal: controller.signal,
-    });
-    // Note: Power Automate Workflows respond 202 even when the flow fails
-    // downstream — a 2xx means "accepted", not "delivered".
-    if (!res.ok) {
-      const text = await res.text().catch(() => "");
-      throw new Error(`Microsoft Teams webhook returned ${res.status}: ${text.slice(0, 200)}`);
-    }
-  } finally {
-    clearTimeout(timer);
+  // SSRF-safe: the Teams webhook URL is user-configured. Creation-time
+  // validation restricts the host to *.logic.azure.com / *.webhook.office.com,
+  // but an attacker-provisioned Azure Logic App passes that suffix check and can
+  // 302-redirect the server-side POST into the internal network / metadata IP.
+  // So pin the resolved IP and never follow a redirect (maxRedirects defaults to
+  // 0 → a 3xx is non-2xx → thrown), exactly like the Slack/webhook workers.
+  const allowPrivate = !env.CLOUD_MODE && env.NOTIFY_WEBHOOK_ALLOW_INTERNAL;
+  const res = await safeFetch(webhookUrl, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(teamsPayload),
+    timeoutMs: 10_000,
+    allowPrivate,
+  });
+  // Note: Power Automate Workflows respond 202 even when the flow fails
+  // downstream — a 2xx means "accepted", not "delivered".
+  if (!res.ok) {
+    const text = await res.text().catch(() => "");
+    throw new Error(`Microsoft Teams webhook returned ${res.status}: ${text.slice(0, 200)}`);
   }
 }
 
@@ -405,6 +410,7 @@ export async function sendTestToChannel(channel: NotificationChannel): Promise<v
   const testDelivery = {
     id: "test",
     category: "test",
+    createdAt: new Date(),
     payload: {
       message: "Openship test notification — this channel is configured correctly.",
     },

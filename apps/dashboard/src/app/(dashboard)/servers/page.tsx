@@ -2,6 +2,8 @@
 
 import { useState, useEffect, useCallback } from "react";
 import { useRouter } from "next/navigation";
+import Link from "next/link";
+import { BlurIp } from "@/components/BlurIp";
 import {
   Server,
   Plus,
@@ -226,9 +228,9 @@ export default function ServersPage() {
                   const AuthIcon = server.auth === "password" ? Lock : KeyRound;
                   const fwd = forwardCounts[server.id] ?? 0;
                   return (
-                    <button
+                    <Link
                       key={server.id}
-                      onClick={() => router.push(`/servers/${server.id}`)}
+                      href={`/servers/${server.id}`}
                       className="group flex w-full items-center gap-3.5 px-5 py-3 text-start transition-colors hover:bg-muted/40"
                     >
                       {/* Avatar — full country flag when we can geolocate the IP, else glyph.
@@ -260,7 +262,7 @@ export default function ServersPage() {
                           )}
                         </p>
                         <p className="mt-0.5 truncate font-mono text-xs text-muted-foreground">
-                          {server.isLocal ? t.servers.list.currentHost : server.host}
+                          {server.isLocal ? t.servers.list.currentHost : <BlurIp>{server.host}</BlurIp>}
                         </p>
                       </div>
 
@@ -302,7 +304,7 @@ export default function ServersPage() {
                         </span>
                         <ArrowRight className="size-4 text-muted-foreground/40 transition-colors group-hover:text-muted-foreground rtl:rotate-180" />
                       </div>
-                    </button>
+                    </Link>
                   );
                 })}
               </div>

@@ -201,13 +201,22 @@ async function handle(
     password,
   );
   const dedupKey = deliveryKey(payload, projects);
+  let anchorId = "";
   if (dedupKey) {
-    const claimed = await repos.githubWebhookEvent
-      .claim(dedupKey, event)
-      .catch(() => true);
-    if (!claimed) {
+    const claim = await repos.webhookDelivery
+      .claim({
+        organizationId: projects[0]?.organizationId,
+        source: "azure-devops",
+        deliveryId: dedupKey,
+        event,
+        authResult: "ok",
+        outcome: "received",
+      })
+      .catch(() => ({ claimed: true, id: "" }));
+    if (!claim.claimed) {
       return { success: true, event, message: "Duplicate delivery ignored" };
     }
+    anchorId = claim.id;
   }
 
   if (
@@ -242,12 +251,23 @@ async function handle(
       title: payload.resource?.title,
       projectIds: projects.map((project) => project.id),
     });
-    if (dedupKey) {
-      await repos.githubWebhookEvent
-        .markProcessed(dedupKey)
+    const failures = results.filter((result) => result.action === "failed");
+    if (anchorId) {
+      await repos.webhookDelivery
+        .markProcessed(anchorId, {
+          outcome: failures.length === 0 ? "dispatched" : "failed",
+          error: failures
+            .map((result) => result.message)
+            .filter(Boolean)
+            .join("; ") || undefined,
+          summary: {
+            pullRequestId,
+            repo: `${coords.owner}/${coords.repo}`,
+            branch: sourceRef.replace(/^refs\/heads\//, ""),
+          },
+        })
         .catch(() => undefined);
     }
-    const failures = results.filter((result) => result.action === "failed");
     return {
       success: failures.length === 0,
       event,
@@ -287,14 +307,31 @@ async function handle(
     );
   }
 
-  if (dedupKey) {
-    await repos.githubWebhookEvent
-      .markProcessed(dedupKey)
-      .catch(() => undefined);
-  }
   const failures = results.filter(
     (result): result is PromiseRejectedResult => result.status === "rejected",
   );
+  if (anchorId) {
+    await repos.webhookDelivery
+      .markProcessed(anchorId, {
+        outcome:
+          failures.length > 0
+            ? "failed"
+            : results.length > 0
+              ? "dispatched"
+              : "skipped",
+        error:
+          failures
+            .map((failure) => safeErrorMessage(failure.reason))
+            .join("; ") || undefined,
+        summary: {
+          repo: coordinates(payload)
+            ? `${coordinates(payload)!.owner}/${coordinates(payload)!.repo}`
+            : undefined,
+          deployments: results.length,
+        },
+      })
+      .catch(() => undefined);
+  }
   if (failures.length > 0) {
     console.error(
       "[Azure Repos Webhook] auto-deploy failures:",

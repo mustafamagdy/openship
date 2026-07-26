@@ -17,9 +17,10 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
+import { OS_DIR } from "./paths";
+
 declare const __CLI_VERSION__: string;
 
-const OS_DIR = join(homedir(), ".openship");
 const COMPOSE_DIR = join(OS_DIR, "compose");
 const INSTALL_METHOD_FILE = join(OS_DIR, "install-method");
 const COMPOSE_FILE = join(COMPOSE_DIR, "docker-compose.yml");
@@ -106,6 +107,8 @@ services:
       - openship_sites:/usr/local/openresty/nginx/conf/sites-enabled
       - openship_certs:/etc/letsencrypt
       - openship_acme:/var/www/acme
+      # Static sites' extracted doc-roots — API writes, edge serves (shared).
+      - openship_static:/opt/openship/static
       # Host-op SSH key (createHostExecutor → host.docker.internal). /dev/null
       # when the host channel isn't provisioned → OPENSHIP_HOST_SSH_HOST stays
       # unset and the API falls back to LocalExecutor.
@@ -149,6 +152,7 @@ services:
       - openship_sites:/usr/local/openresty/nginx/conf/sites-enabled
       - openship_certs:/etc/letsencrypt
       - openship_acme:/var/www/acme
+      - openship_static:/opt/openship/static
 
 volumes:
   postgres_data:
@@ -156,6 +160,7 @@ volumes:
   openship_sites:
   openship_certs:
   openship_acme:
+  openship_static:
 `;
 
 /** Persist a stable secret in the compose .env — regenerated only if absent. */
@@ -305,6 +310,16 @@ export function composeUpdate(version?: string): boolean {
 
 export function composePs(): number {
   return compose(["ps"]);
+}
+
+/**
+ * The stack's INTERNAL_TOKEN, read from the generated compose `.env` — NOT the
+ * bare-mode `~/.openship/internal-token`. The compose api container is booted
+ * with this value (renderEnv → keepSecret), so the CLI must use it to reach
+ * internal-token-gated endpoints (e.g. edge/import-sites after a migrate).
+ */
+export function composeInternalToken(): string | null {
+  return readEnvFile().INTERNAL_TOKEN ?? null;
 }
 
 export const composePaths = { dir: COMPOSE_DIR, file: COMPOSE_FILE, env: ENV_FILE };

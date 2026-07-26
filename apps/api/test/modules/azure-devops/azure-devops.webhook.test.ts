@@ -24,7 +24,7 @@ vi.mock("@repo/db", async (importOriginal) => {
     ...actual,
     repos: {
       project: { findByGitRepo },
-      githubWebhookEvent: { claim, markProcessed },
+      webhookDelivery: { claim, markProcessed },
     },
   };
 });
@@ -88,7 +88,7 @@ describe("azureDevopsWebhookProvider", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     findByGitRepo.mockResolvedValue([project]);
-    claim.mockResolvedValue(true);
+    claim.mockResolvedValue({ claimed: true, id: "wdl-azure-1" });
     markProcessed.mockResolvedValue(undefined);
     resolveOrgOwner.mockResolvedValue({ userId: "owner-1" });
     triggerDeployment.mockResolvedValue(undefined);
@@ -130,8 +130,15 @@ describe("azureDevopsWebhookProvider", () => {
         commitMessage: "Push main",
       },
     );
+    expect(claim).toHaveBeenCalledWith(
+      expect.objectContaining({
+        source: "azure-devops",
+        deliveryId: "azure-devops:subscription-1:delivery-main",
+      }),
+    );
     expect(markProcessed).toHaveBeenCalledWith(
-      "azure-devops:subscription-1:delivery-main",
+      "wdl-azure-1",
+      expect.objectContaining({ outcome: "dispatched" }),
     );
   });
 
@@ -147,7 +154,7 @@ describe("azureDevopsWebhookProvider", () => {
   });
 
   it("ignores a duplicate delivery", async () => {
-    claim.mockResolvedValue(false);
+    claim.mockResolvedValue({ claimed: false, id: "" });
     const result = await azureDevopsWebhookProvider.handle(pushPayload(), {
       authorization: `Basic ${Buffer.from("openship:hook-secret").toString("base64")}`,
     });
