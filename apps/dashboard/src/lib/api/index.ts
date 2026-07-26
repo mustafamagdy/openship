@@ -59,6 +59,11 @@ export type {
   AzureDevopsProject,
   AzureDevopsRepository,
 } from "./azure-devops";
+export { containerRegistriesApi } from "./container-registries";
+export type {
+  ContainerRegistryConnection,
+  ConnectContainerRegistryInput,
+} from "./container-registries";
 export { iconsApi } from "./icons";
 export { imagesApi } from "./images";
 export type { ImageCatalogEntry, ListImagesResponse } from "./images";

@@ -50,6 +50,7 @@ export type {
   MultiServiceGroupHandle,
   MultiServiceDeployConfig,
   MultiServiceDeployResult,
+  RegistryAuthConfig,
   DeploymentRef,
   RollbackInput,
   MakeActiveResult,

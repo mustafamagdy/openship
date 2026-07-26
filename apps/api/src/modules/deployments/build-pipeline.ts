@@ -18,6 +18,7 @@ import {
   BareRuntime,
   BuildLogger,
   CloudRuntime,
+  DockerRuntime,
   DEFAULT_BUILD_RESOURCE_CONFIG,
   ensurePortAvailable,
   allocateHostPort,
@@ -78,6 +79,7 @@ import {
 import { type DeploymentConfigSnapshot } from "./build.service";
 import * as settingsService from "../settings/settings.service";
 import { completePullRequestPreviewStatus } from "./pull-request-preview-status";
+import { publishBuildArtifact } from "../container-registry/container-registry.service";
 
 // Build env = CI/telemetry defaults (BUILD_ENV_VARS) + the customer's own env
 // vars. NODE_ENV is deliberately NOT set or overridden here: it's the customer's
@@ -815,8 +817,30 @@ async function executeBuildAndDeploy(project: Project, dep: Deployment, buildSes
       return;
     }
 
+    if (runtime instanceof DockerRuntime) {
+      const published = await publishBuildArtifact({
+        organizationId: project.organizationId,
+        runtime,
+        localRef: buildResult.imageRef,
+        projectSlug: project.slug ?? project.name,
+        artifactKey: `${dep.commitSha?.slice(0, 12) ?? "manual"}-${dep.id}`,
+        logger,
+      });
+      if (published) {
+        buildResult = {
+          ...buildResult,
+          imageRef: published.imageRef,
+          imageDigest: published.imageDigest,
+        };
+      }
+    }
+
     await setDeploymentStatus(dep.id, "deploying", {
-      extra: { imageRef: buildResult.imageRef, buildDurationMs: buildResult.durationMs },
+      extra: {
+        imageRef: buildResult.imageRef,
+        imageDigest: buildResult.imageDigest,
+        buildDurationMs: buildResult.durationMs,
+      },
     });
 
     const phase: DeployPhaseInputs = {

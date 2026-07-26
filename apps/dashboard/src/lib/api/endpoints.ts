@@ -204,6 +204,11 @@ export const endpoints = {
       `azure-devops/connections/${encodeURIComponent(organization)}/projects/${encodeURIComponent(project)}/repos/${encodeURIComponent(repo)}/branches`,
   },
 
+  containerRegistries: {
+    list: "container-registries",
+    item: (id: string) => `container-registries/${encodeURIComponent(id)}`,
+  },
+
   /* ---------------------------------------------------------------- */
   /*  Icons                                                           */
   /* ---------------------------------------------------------------- */

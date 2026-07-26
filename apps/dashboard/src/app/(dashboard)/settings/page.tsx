@@ -28,6 +28,7 @@ import { CloudConnection } from "./_components/CloudConnection";
 import { GitHubConnection } from "./_components/GitHubConnection";
 import { AzureDevopsConnection } from "./_components/AzureDevopsConnection";
 import { CloneCredentials } from "./_components/CloneCredentials";
+import { ContainerRegistryConnection } from "./_components/ContainerRegistryConnection";
 import { PersonalAccessTokens } from "./_components/PersonalAccessTokens";
 import { McpConnection } from "./_components/McpConnection";
 import { InstanceInfo } from "./_components/InstanceInfo";
@@ -104,6 +105,7 @@ function SettingsPageInner() {
             <>
               <GitHubConnection />
               <AzureDevopsConnection />
+              {showBuildPreferences && <ContainerRegistryConnection />}
               {showDeployDefaults && <DeployDefaults />}
               {showBuildPreferences && <BuildPreferences />}
               {showBuildPreferences && <RoutePreferences />}
