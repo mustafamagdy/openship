@@ -357,6 +357,8 @@ export interface MultiServiceDeployConfig {
    * unchanged-image carry-forward.
    */
   forcePull?: boolean;
+  /** Ephemeral registry credentials used only for this image pull. */
+  registryAuth?: RegistryAuthConfig;
   /** Extended compose fields (healthcheck, …). Docker honors them; runtimes
    *  that can't (cloud) warn-and-drop. See ComposeAdvanced in @repo/core. */
   advanced?: ComposeAdvanced;
@@ -373,6 +375,12 @@ export interface MultiServiceDeployConfig {
   /** Service names this service depends on (compose `depends_on`). Used for
    *  readiness ordering on runtimes with no native healthcheck. */
   dependsOn?: string[];
+}
+
+export interface RegistryAuthConfig {
+  username: string;
+  password: string;
+  serveraddress: string;
 }
 
 export interface MultiServiceDeployResult {

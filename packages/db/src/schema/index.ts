@@ -9,6 +9,7 @@ export { invitationPendingGrant } from "./invitation-pending-grant";
 export { gitInstallation } from "./github";
 export { azureDevopsConnection } from "./azure-devops";
 export { dnsProviderConnection } from "./dns-provider";
+export { containerRegistryConnection } from "./container-registry";
 export { organizationDomain } from "./organization-domain";
 export { githubInstallState } from "./github-install-state";
 export { projectGroup, project, envVar } from "./project";

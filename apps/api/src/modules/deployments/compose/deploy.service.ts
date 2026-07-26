@@ -31,6 +31,7 @@ import {
   type MultiServiceDeployConfig,
   type MultiServiceDeployResult,
   type MultiServiceRuntimeAdapter,
+  type RegistryAuthConfig,
   type ResourceConfig,
   type RouteRegistrationOptions,
   type RoutingProvider,
@@ -254,8 +255,9 @@ function createServiceRuntimeConfig(opts: {
   resources?: ResourceConfig;
   /** Previous deployment's workspace id (cloud) — reuse to keep the disk. */
   previousWorkspaceId?: string;
+  registryAuth?: RegistryAuthConfig;
 }): MultiServiceDeployConfig {
-  const { project, dep, service, image, environment, resources, previousWorkspaceId } = opts;
+  const { project, dep, service, image, environment, resources, previousWorkspaceId, registryAuth } = opts;
   // Monorepo sub-apps store their long-running process in `startCommand`;
   // compose services in `command`. The DB invariant is that compose rows
   // never have `startCommand` set, so a single `??` chain covers both:
@@ -277,6 +279,9 @@ function createServiceRuntimeConfig(opts: {
     // "update" trigger → force a fresh pull so a moved mutable tag (:latest/:1)
     // actually rolls forward. Every other trigger stays pull-if-missing.
     forcePull: dep.trigger === "update",
+    registryAuth: registryAuth && image.startsWith(`${registryAuth.serveraddress}/`)
+      ? registryAuth
+      : undefined,
     advanced: service.advanced ?? undefined,
     resources,
     expose: service.exposed,
@@ -426,6 +431,8 @@ export async function deployComposeServices(
      *  onto the Docker host so they can be bind-mounted read-only into the
      *  service. Null on cloud (no host bind-mount) → file services are skipped. */
     executor?: CommandExecutor | null;
+    /** Ephemeral credentials for private OCI image pulls. */
+    registryAuth?: RegistryAuthConfig;
   },
 ): Promise<ComposeDeployResult> {
   const services = await repos.service.listByProject(project.id);
@@ -894,6 +901,7 @@ export async function deployComposeServices(
         runtime.name === "cloud"
           ? (previousByServiceId.get(svc.id)?.containerId ?? undefined)
           : undefined,
+      registryAuth: opts?.registryAuth,
     });
 
     // Generated config files (app template `advanced.files`): write each onto

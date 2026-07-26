@@ -25,6 +25,7 @@ import { createServerDockerRuntime } from "../../lib/deployment-runtime";
 import { sshManager } from "../../lib/ssh-manager";
 import { readProjectSnapshot } from "../../lib/openship-manifest";
 import { discoverServerStack } from "./docker-inspect.service";
+import { isPortableRegistryImage } from "./migration-preflight";
 import {
   EDGE_PORTS,
   parseComposePort,
@@ -260,11 +261,13 @@ export async function adoptServerStack(opts: {
   // IN PLACE (same server, where the built image already exists). Moving built
   // images across hosts (docker save|load stream) is coming soon.
   if (!sameServer) {
-    const built = chosen.filter((s) => Boolean(s.build)).map((s) => s.name);
+    const built = chosen
+      .filter((s) => Boolean(s.build) && !isPortableRegistryImage(s.image))
+      .map((s) => s.name);
     if (built.length > 0) {
       throw new Error(
         `Cross-server migration can't move locally-built images yet (${built.join(", ")}). ` +
-          `Take these over in place (migrate to the same server), or rebuild them from a registry image. Cross-server for built images is coming soon.`,
+          `Publish these services to a connected OCI registry first, or take them over in place on the same server.`,
       );
     }
   }
