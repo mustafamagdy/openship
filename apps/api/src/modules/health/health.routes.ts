@@ -6,6 +6,7 @@ import { hostname, userInfo } from "node:os";
 import { cloudRuntimeTarget, env } from "../../config/env";
 import { rateLimiterFor } from "../../middleware/rate-limiter";
 import { APP_VERSION } from "../../lib/app-version";
+import { GITHUB_REPO } from "@repo/core";
 
 /** Running server version (apps/api/package.json, via lib/app-version — the same
  *  value sent to the cloud on every call). Lets the dashboard tell a self-hosted
@@ -44,6 +45,15 @@ function resolveMachineName(): string | undefined {
 }
 
 const machineName = resolveMachineName();
+
+export function resolveReleaseRepo(value = process.env.OPENSHIP_RELEASE_REPO): string {
+  const configured = value?.trim();
+  return configured && /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(configured)
+    ? configured
+    : GITHUB_REPO;
+}
+
+const releaseRepo = resolveReleaseRepo();
 
 export const healthRoutes = new Hono();
 
@@ -111,6 +121,7 @@ healthRoutes.get("/env", rateLimiterFor("default-anon"), async (c) => {
     // itself a deployable target and is auto-registered as an isLocal server.
     isServerHost: !env.CLOUD_MODE && env.DEPLOY_MODE !== "desktop",
     version: APP_VERSION,
+    releaseRepo,
     authMode,
     teamMode,
     migrationTargetUrl,
