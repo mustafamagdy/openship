@@ -5,14 +5,15 @@
  * sidecar; callers verify downloads against it.
  */
 import { parseSha256 } from "./cache";
+import { UPSTREAM_RELEASE_REPO } from "./update-source";
 
-export const REPO = "oblien/openship";
+export const REPO = UPSTREAM_RELEASE_REPO;
 export const RELEASES = `https://github.com/${REPO}/releases`;
-const LATEST_API = `https://api.github.com/repos/${REPO}/releases/latest`;
 
 /** Resolve the newest published release tag (e.g. "v0.1.9"). */
-export async function resolveLatestTag(): Promise<string> {
-  const res = await fetch(LATEST_API, {
+export async function resolveLatestTag(repo = REPO): Promise<string> {
+  const resolvedRepo = encodeRepo(repo);
+  const res = await fetch(`https://api.github.com/repos/${resolvedRepo}/releases/latest`, {
     headers: { Accept: "application/vnd.github+json", "User-Agent": "openship-cli" },
     signal: AbortSignal.timeout(10_000),
   });
@@ -23,8 +24,8 @@ export async function resolveLatestTag(): Promise<string> {
 }
 
 /** URL of a release asset for a tag. */
-export function assetUrl(tag: string, name: string): string {
-  return `${RELEASES}/download/${tag}/${name}`;
+export function assetUrl(tag: string, name: string, repo = REPO): string {
+  return `https://github.com/${encodeRepo(repo)}/releases/download/${encodeURIComponent(tag)}/${encodeURIComponent(name)}`;
 }
 
 /** Fetch a `.sha256` sidecar body, or null on 404 (asset published without one). */
@@ -39,7 +40,18 @@ export async function fetchSidecar(url: string): Promise<string | null> {
 }
 
 /** Expected sha256 for an asset from its sidecar, or null if none is published. */
-export async function expectedSha256(tag: string, name: string): Promise<string | null> {
-  const body = await fetchSidecar(`${assetUrl(tag, name)}.sha256`);
+export async function expectedSha256(
+  tag: string,
+  name: string,
+  repo = REPO,
+): Promise<string | null> {
+  const body = await fetchSidecar(`${assetUrl(tag, name, repo)}.sha256`);
   return body ? parseSha256(body) : null;
+}
+
+function encodeRepo(repo: string): string {
+  return repo
+    .split("/")
+    .map((part) => encodeURIComponent(part))
+    .join("/");
 }

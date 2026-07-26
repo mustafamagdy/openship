@@ -99,23 +99,22 @@ reinstalls the CLI — which bundles the API server — at the latest release.
 openship update
 ```
 
-Openship checks GitHub, and if there's a newer version it reinstalls itself with your package manager
-(it uses **bun** if you have it, otherwise **npm**). If you're already current, it just says so and stops.
+Openship checks the configured GitHub release source. Upstream releases reinstall from the package
+registry; fork releases use the checksum-verified CLI bundle attached to that fork's release. It uses
+**bun** if available, otherwise **npm**. If you're already current, it just says so and stops.
 
 </Step>
 
 <Step>
 
-### Restart the service on the new version
+### Confirm the update completed
 
-Updating swaps out the files, but the server that's already running keeps running the old version until you
-restart it. Bring it up again:
-
-```bash
-openship up
-```
-
-This restarts the persistent service on the new release and fetches the matching dashboard automatically.
+For a bare persistent install, the updater restarts the service and waits for its
+health endpoint. That confirms the restarted API is responding; it does not
+compare every component's version or automatically roll back a failed update.
+For a Compose install, the updater stops after `docker compose pull` and
+`docker compose up -d` succeed. An attached `openship up --foreground` process
+cannot restart itself; relaunch that process manually.
 
 </Step>
 
@@ -138,6 +137,25 @@ Force a specific package manager if you need to:
 openship update --via npm    # or: --via bun
 ```
 
+### Follow a fork or pin a release
+
+```bash
+# Follow the latest stable release from a maintained fork
+openship update --set-source fork --repo mustafamagdy/openship
+
+# Stay on one exact release until you change the source
+openship update --set-source pinned --repo mustafamagdy/openship --version 0.4.0
+
+# Return to official upstream releases
+openship update --set-source upstream
+
+# Show the effective source (including environment overrides)
+openship update --show-source
+```
+
+The selection is stored in `~/.openship/update-source.json`. Operators can override it with
+`OPENSHIP_RELEASE_REPO` and `OPENSHIP_UPDATE_VERSION`.
+
 </Tab>
 
 </Tabs>
@@ -147,9 +165,10 @@ openship update --via npm    # or: --via bun
 If you started Openship with `openship up`, it runs as a **persistent service**: it starts again when the
 machine reboots and restarts itself if it ever crashes. That keeps your apps online.
 
-What it does **not** do is change versions on its own. It keeps running whatever version it started with, so
-after `openship update` you re-run `openship up` to restart it on the new release (and `openship stop` to
-take it down). See [Installation](/docs/getting-started/installation) for the full service commands.
+What it does **not** do is change versions on its own. It keeps running whatever version it started with
+until `openship update` installs it. Bare persistent services are restarted and
+health-checked; Compose stacks are recreated without a follow-up health probe. See
+[Installation](/docs/getting-started/installation) for the full service commands.
 
 ## If something goes wrong
 
@@ -161,13 +180,13 @@ keeps failing, reinstall by hand with the same install method you used originall
 </Callout>
 
 <Callout title="The CLI update failed partway" type="error">
-`openship update` reinstalls the global package with bun or npm. If that step errors, it prints the exact
-reinstall command to run by hand — copy it and run it yourself. Then restart with `openship up`.
+`openship update` reinstalls the global package with bun or npm. Fork bundles are refused if the published
+SHA-256 sidecar is missing or mismatched. If installation fails, the existing service is left running.
 </Callout>
 
 <Callout title="I updated but still see the old version" type="warn">
-The running server hasn't been restarted yet. On a self-hosted server, run `openship up` again to restart on
-the new version. On the desktop app, fully quit and reopen it if it didn't relaunch on its own.
+Check `openship status` and the service logs. An attached foreground process must be relaunched manually.
+On the desktop app, fully quit and reopen it if it did not relaunch on its own.
 </Callout>
 
 ## What next?

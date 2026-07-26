@@ -15,6 +15,33 @@ permissions:
   contents: write
 
 jobs:
+  release-preflight:
+    name: Release preflight
+    if: github.event_name == 'push'
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Read bun version
+        id: bun-version
+        run: echo "version=$(cat .bun-version)" >> "$GITHUB_OUTPUT"
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: ${{ steps.bun-version.outputs.version }}
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Validate API and CLI
+        run: |
+          bun run --cwd apps/api lint
+          bun run --cwd apps/cli lint
+          bun run --cwd apps/api test
+          bun run --cwd apps/cli test
+
   build-openship:
     name: Build openship release artifact
     if: github.event_name == 'push'
@@ -189,6 +216,66 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: openship-dashboard-release
+          path: |
+            ${{ steps.package.outputs.artifact }}
+            ${{ steps.package.outputs.artifact }}.sha256
+          if-no-files-found: error
+          retention-days: 7
+
+  build-cli-bundle:
+    name: Build installable CLI bundle
+    if: github.event_name == 'push'
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Read bun version
+        id: bun-version
+        run: echo "version=$(cat .bun-version)" >> "$GITHUB_OUTPUT"
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: ${{ steps.bun-version.outputs.version }}
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Build CLI
+        run: bun run --cwd apps/cli build
+
+      - name: Pack verified CLI release asset
+        id: package
+        run: |
+          set -euo pipefail
+          TAG="${GITHUB_REF_NAME}"
+          STAGING="${RUNNER_TEMP}/openship-cli-package"
+          mkdir -p "${STAGING}"
+          cp apps/cli/package.json "${STAGING}/package.json"
+          cp -a apps/cli/dist "${STAGING}/dist"
+          cp README.md "${STAGING}/README.md"
+          bun -e '
+            const path = process.argv[1];
+            const pkg = await Bun.file(path).json();
+            delete pkg.dependencies?.["@repo/core"];
+            delete pkg.dependencies?.["@repo/onboarding"];
+            delete pkg.scripts?.prepack;
+            await Bun.write(path, JSON.stringify(pkg, null, 2) + "\n");
+          ' "${STAGING}/package.json"
+          (
+            cd "${STAGING}"
+            bun pm pack --filename "${GITHUB_WORKSPACE}/openship-cli-${TAG}.tgz"
+          )
+          sha256sum "openship-cli-${TAG}.tgz" > "openship-cli-${TAG}.tgz.sha256"
+          echo "artifact=openship-cli-${TAG}.tgz" >> "$GITHUB_OUTPUT"
+
+      - name: Upload CLI bundle
+        uses: actions/upload-artifact@v7
+        with:
+          name: openship-cli-release
           path: |
             ${{ steps.package.outputs.artifact }}
             ${{ steps.package.outputs.artifact }}.sha256
@@ -460,6 +547,10 @@ jobs:
 
   publish-npm:
     name: Publish CLI to npm
+    if: >-
+      github.repository == 'oblien/openship' &&
+      github.event_name == 'push' &&
+      startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-24.04
     # OIDC trusted publishing: npm verifies this workflow's identity instead of
     # a long-lived token. id-token:write lets the runner mint the OIDC token.
@@ -523,7 +614,7 @@ jobs:
   publish:
     name: Publish GitHub release
     if: github.event_name == 'push'
-    needs: [build-openship, build-email, build-dashboard, build-desktop, build-desktop-macos]
+    needs: [release-preflight, build-openship, build-email, build-dashboard, build-cli-bundle, build-desktop, build-desktop-macos]
     runs-on: ubuntu-24.04
     steps:
       - name: Checkout
@@ -547,6 +638,12 @@ jobs:
         uses: actions/download-artifact@v8
         with:
           name: openship-dashboard-release
+          path: dist
+
+      - name: Download CLI bundle
+        uses: actions/download-artifact@v8
+        with:
+          name: openship-cli-release
           path: dist
 
       - name: Download desktop installers
@@ -575,7 +672,9 @@ jobs:
             dist/openship-email-${TAG}-linux-amd64.tar.gz \
             dist/openship-email-${TAG}-linux-amd64.tar.gz.sha256 \
             dist/openship-dashboard-${TAG}.tar.gz \
-            dist/openship-dashboard-${TAG}.tar.gz.sha256
+            dist/openship-dashboard-${TAG}.tar.gz.sha256 \
+            dist/openship-cli-${TAG}.tgz \
+            dist/openship-cli-${TAG}.tgz.sha256
 
       - name: Attach desktop installers
         env:

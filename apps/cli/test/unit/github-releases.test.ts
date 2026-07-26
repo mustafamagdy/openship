@@ -15,4 +15,10 @@ describe("assetUrl", () => {
       "https://github.com/oblien/openship/releases/download/v1.2.3/Openship-arm64.dmg",
     );
   });
+
+  it("can target a fork's release assets", () => {
+    expect(assetUrl("v0.4.0", "openship-cli-v0.4.0.tgz", "mustafamagdy/openship")).toBe(
+      "https://github.com/mustafamagdy/openship/releases/download/v0.4.0/openship-cli-v0.4.0.tgz",
+    );
+  });
 });

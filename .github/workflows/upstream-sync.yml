@@ -1,0 +1,88 @@
+name: Upstream synchronization
+
+on:
+  schedule:
+    - cron: "17 3 * * *"
+  workflow_dispatch: {}
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+
+concurrency:
+  group: upstream-sync
+  cancel-in-progress: false
+
+jobs:
+  synchronize:
+    name: Prepare upstream sync
+    if: github.repository != 'oblien/openship'
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout fork main
+        uses: actions/checkout@v7
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Configure remotes
+        run: |
+          git config user.name "openship-upstream-sync[bot]"
+          git config user.email "openship-upstream-sync[bot]@users.noreply.github.com"
+          git remote add upstream https://github.com/oblien/openship.git
+          git fetch upstream main
+
+      - name: Merge upstream into sync branch
+        id: merge
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          BRANCH="automation/upstream-sync"
+          git switch -C "${BRANCH}" origin/main
+          if ! git merge --no-edit upstream/main; then
+            git merge --abort
+            echo "conflict=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if git diff --quiet origin/main...HEAD; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          git push --force-with-lease origin "${BRANCH}"
+          echo "changed=true" >> "$GITHUB_OUTPUT"
+
+      - name: Open or refresh synchronization PR
+        if: steps.merge.outputs.changed == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          EXISTING="$(gh pr list --head automation/upstream-sync --base main --state open --json number --jq '.[0].number // empty')"
+          if [[ -n "${EXISTING}" ]]; then
+            gh pr edit "${EXISTING}" --title "Sync latest oblien/openship main" --body "Automated upstream synchronization. Review CI and conflicts before merging."
+          else
+            gh pr create \
+              --base main \
+              --head automation/upstream-sync \
+              --title "Sync latest oblien/openship main" \
+              --body "Automated upstream synchronization. Review CI and conflicts before merging."
+          fi
+
+      - name: Report merge conflict
+        if: steps.merge.outputs.conflict == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TITLE="Upstream synchronization requires conflict resolution"
+          EXISTING="$(gh issue list --state open --search "\"${TITLE}\" in:title" --json number --jq '.[0].number // empty')"
+          UPSTREAM_SHA="$(git rev-parse upstream/main)"
+          BODY="The merge of \`oblien/openship:main\` at \`${UPSTREAM_SHA}\` into this fork conflicts with fork changes. Resolve it on a dedicated branch; no production branch was modified."
+          if [[ -n "${EXISTING}" ]]; then
+            gh issue edit "${EXISTING}" --body "${BODY}"
+          else
+            gh issue create --title "${TITLE}" --body "${BODY}"
+          fi
