@@ -186,6 +186,7 @@ const TABLES: ReadonlyArray<TableSpec> = [
   { sqlName: "git_installation", table: schema.gitInstallation, scopes: [{ in: "instance", via: "all-rows" }], hasOrganizationId: false },
   { sqlName: "cloud_webhook_binding", table: schema.cloudWebhookBinding, scopes: [{ in: "instance", via: "all-rows" }], hasOrganizationId: true },
   { sqlName: "dns_provider_connection", table: schema.dnsProviderConnection, scopes: [{ in: "instance", via: "all-rows" }], hasOrganizationId: true },
+  { sqlName: "container_registry_connection", table: schema.containerRegistryConnection, scopes: [{ in: "instance", via: "all-rows" }], hasOrganizationId: true },
   {
     sqlName: "organization_domain",
     table: schema.organizationDomain,
@@ -405,6 +406,7 @@ export interface EncryptedColumnSpec {
 export const ENCRYPTED_COLUMNS: ReadonlyArray<EncryptedColumnSpec> = [
   { table: "azure_devops_connection", column: "patEncrypted" },
   { table: "dns_provider_connection", column: "tokenEncrypted" },
+  { table: "container_registry_connection", column: "tokenEncrypted" },
   { table: "user_settings", column: "cloudSessionToken" },
   { table: "user_settings", column: "cloneTokenEncrypted" },
   { table: "project", column: "cloneTokenEncrypted" },

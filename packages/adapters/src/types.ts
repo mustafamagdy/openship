@@ -254,6 +254,8 @@ export interface BuildResult {
   status: ContainerStatus;
   /** Opaque reference to the built image / snapshot */
   imageRef?: string;
+  /** Digest returned when the build artifact was published to an OCI registry. */
+  imageDigest?: string;
   durationMs?: number;
   /** Human-readable error description when status is "failed" */
   errorMessage?: string;

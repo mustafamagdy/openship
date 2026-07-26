@@ -36,6 +36,10 @@ const SCHEME_BY_KEY: Record<string, { table: AnyTable; scheme: SecretScheme }> =
     table: schema.dnsProviderConnection,
     scheme: "scalar",
   },
+  "container_registry_connection.tokenEncrypted": {
+    table: schema.containerRegistryConnection,
+    scheme: "scalar",
+  },
   "user_settings.cloudSessionToken": { table: schema.userSettings, scheme: "scalar" },
   "user_settings.cloneTokenEncrypted": { table: schema.userSettings, scheme: "scalar" },
   "project.cloneTokenEncrypted": { table: schema.project, scheme: "scalar" },

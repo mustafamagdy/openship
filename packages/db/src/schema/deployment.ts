@@ -71,6 +71,8 @@ export const deployment = pgTable("deployment", {
   status: text("status").notNull().default("queued"),
   /** Image/snapshot reference produced by build */
   imageRef: text("image_ref"),
+  /** Immutable OCI digest for a registry-published build artifact. */
+  imageDigest: text("image_digest"),
   /** Build duration in milliseconds */
   buildDurationMs: integer("build_duration_ms"),
   /**
