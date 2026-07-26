@@ -70,7 +70,7 @@ export async function getOrganizationDomainRecords(
   id: string,
 ): Promise<OrganizationDomainRecord[]> {
   const row = await requireDomain(ctx.organizationId, id);
-  const preview = await previewRecords(`openship-preview.${row.domain}`);
+  const preview = await previewRecords(`openship-preview.${row.domain}`, ctx.organizationId);
   const routeRecord = preview.records.find((record) => record.type !== "TXT");
   return [
     {

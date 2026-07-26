@@ -33,7 +33,7 @@ import {
 } from "../../lib/domain-ssl";
 import { getRoutingBaseDomain } from "../../lib/routing-domains";
 import { resolveRecords } from "../../lib/dns-resolver";
-import { resolveProjectServerHost } from "../../lib/server-target";
+import { resolveProjectServerHost, resolveServerHost } from "../../lib/server-target";
 import { reconcileProjectRoutes } from "../../lib/route-apply.service";
 import { generateToken } from "../../lib/domain-token";
 import { sshManager } from "../../lib/ssh-manager";
@@ -270,9 +270,9 @@ export async function removeServiceDomain(opts: {
 
 // ─── Preview records (no auth, no DB write) ──────────────────────────────────
 
-export async function previewRecords(hostname: string) {
+export async function previewRecords(hostname: string, organizationId?: string) {
   const token = generateToken(hostname);
-  return buildRecords(hostname, token);
+  return buildRecords(hostname, token, undefined, false, organizationId);
 }
 
 // ─── Get DNS records (existing domain) ───────────────────────────────────────
@@ -1041,6 +1041,7 @@ async function buildRecords(
   token: string,
   project?: Project,
   externalIngress = false,
+  organizationId?: string,
 ): Promise<{ mode: "cloud" | "selfhosted" | "external"; records: DnsRecord[] }> {
   const { target, runtime } = platform();
 
@@ -1078,7 +1079,9 @@ async function buildRecords(
   }
   // A record is GUIDANCE only ("point it here"). We never resolve it — a CDN in
   // front would answer with its own IP — so it's a hint, not a gate.
-  const serverIp = await resolveProjectServerHost(project);
+  const serverIp = project
+    ? await resolveProjectServerHost(project)
+    : await resolveServerHost(organizationId ?? "", undefined);
   return {
     mode: "selfhosted",
     records: [{ type: "A", host: routeHost, name: routeName, value: serverIp ?? "" }],

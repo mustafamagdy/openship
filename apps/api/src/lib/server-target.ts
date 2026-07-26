@@ -1,8 +1,21 @@
+import net from "node:net";
 import { repos, type Project } from "@repo/db";
 import { env } from "../config/env";
+import { isBlockedHostname, isPrivateIp } from "./ssrf-guard";
 
 interface DeploymentSnapshotLike {
   serverId?: string;
+}
+
+function publicRoutingHost(raw: string | null | undefined): string | null {
+  const host = raw
+    ?.trim()
+    .replace(/^https?:\/\//i, "")
+    .replace(/\/.*$/, "")
+    .replace(/^\[|\]$/g, "");
+  if (!host || isBlockedHostname(host)) return null;
+  if (net.isIP(host) && isPrivateIp(host)) return null;
+  return host;
 }
 
 /**
@@ -12,7 +25,11 @@ interface DeploymentSnapshotLike {
  * a request body to route their managed subdomain at another tenant's
  * host.
  *
- * Falls back to env.SERVER_IP when no serverId is supplied.
+ * Falls back to env.SERVER_IP when no serverId is supplied, then to the
+ * auto-registered local server's persisted public host. The second fallback is
+ * what keeps DNS guidance working after the setup wizard detected the address
+ * at runtime (environment variables cannot be added to an already-running
+ * service).
  */
 async function resolveSnapshotServerHost(
   organizationId: string,
@@ -27,7 +44,12 @@ async function resolveSnapshotServerHost(
     return null;
   }
 
-  return env.SERVER_IP ?? null;
+  const configured = publicRoutingHost(env.SERVER_IP);
+  if (configured) return configured;
+  if (!organizationId) return null;
+
+  const local = await repos.server.findLocal(organizationId);
+  return publicRoutingHost(local?.sshHost);
 }
 
 export async function resolveServerHost(
