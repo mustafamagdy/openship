@@ -257,14 +257,7 @@ jobs:
           cp apps/cli/package.json "${STAGING}/package.json"
           cp -a apps/cli/dist "${STAGING}/dist"
           cp README.md "${STAGING}/README.md"
-          bun -e '
-            const path = process.argv[1];
-            const pkg = await Bun.file(path).json();
-            delete pkg.dependencies?.["@repo/core"];
-            delete pkg.dependencies?.["@repo/onboarding"];
-            delete pkg.scripts?.prepack;
-            await Bun.write(path, JSON.stringify(pkg, null, 2) + "\n");
-          ' "${STAGING}/package.json"
+          bun scripts/sanitize-cli-package.ts "${STAGING}/package.json"
           (
             cd "${STAGING}"
             bun pm pack --filename "${GITHUB_WORKSPACE}/openship-cli-${TAG}.tgz"
@@ -291,20 +284,20 @@ jobs:
         include:
           - os: windows-latest
             label: Windows x64
-            find: "-name *.zip"
             asset: Openship-win32-x64.zip
+            collect_native_packages: false
           - os: ubuntu-latest
             label: Linux x64
-            find: "-name *.AppImage -o -name *.deb -o -name *.rpm"
             asset: Openship.AppImage
+            collect_native_packages: true
           # GitHub-hosted native aarch64 runner → stage.ts derives arm64 from
           # process.arch, so the API bun --compile + the AppImage build are arm64.
           # x64 keeps the legacy `Openship.AppImage` name (auto-update compat);
           # arm64 is a NEW asset selected only by arm64 clients.
           - os: ubuntu-24.04-arm
             label: Linux arm64
-            find: "-name *.AppImage"
             asset: Openship-arm64.AppImage
+            collect_native_packages: false
     runs-on: ${{ matrix.os }}
     steps:
       - name: Checkout
@@ -353,62 +346,54 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p dist
-          # Collect AppImage
-          APPIMAGE="$(find apps/desktop/out/make -type f -name '*.AppImage' | head -n1)"
-          if [[ -n "${APPIMAGE}" ]]; then
-            cp "${APPIMAGE}" "dist/${{ matrix.asset }}"
-            cd dist
-            if command -v shasum >/dev/null 2>&1; then
-              shasum -a 256 "${{ matrix.asset }}" > "${{ matrix.asset }}.sha256"
-            else
-              sha256sum "${{ matrix.asset }}" > "${{ matrix.asset }}.sha256"
-            fi
-            cd ..
+
+          checksum() {
+            local asset="$1"
+            (
+              cd dist
+              if command -v shasum >/dev/null 2>&1; then
+                shasum -a 256 "${asset}" > "${asset}.sha256"
+              else
+                sha256sum "${asset}" > "${asset}.sha256"
+              fi
+            )
+          }
+
+          if [[ "${RUNNER_OS}" == "Windows" ]]; then
+            PRIMARY="$(find apps/desktop/out/make -type f -name '*.zip' -print -quit)"
           else
-            echo "::warning::No AppImage found"
+            PRIMARY="$(find apps/desktop/out/make -type f -name '*.AppImage' -print -quit)"
           fi
-          # Collect .deb
-          DEB="$(find apps/desktop/out/make -type f -name '*.deb' | head -n1)"
-          if [[ -n "${DEB}" ]]; then
-            cp "${DEB}" "dist/Openship.deb"
-            cd dist
-            if command -v shasum >/dev/null 2>&1; then
-              shasum -a 256 "Openship.deb" > "Openship.deb.sha256"
-            else
-              sha256sum "Openship.deb" > "Openship.deb.sha256"
-            fi
-            cd ..
-          else
-            echo "::warning::No .deb found"
-          fi
-          # Collect .rpm
-          RPM="$(find apps/desktop/out/make -type f -name '*.rpm' | head -n1)"
-          if [[ -n "${RPM}" ]]; then
-            cp "${RPM}" "dist/Openship.rpm"
-            cd dist
-            if command -v shasum >/dev/null 2>&1; then
-              shasum -a 256 "Openship.rpm" > "Openship.rpm.sha256"
-            else
-              sha256sum "Openship.rpm" > "Openship.rpm.sha256"
-            fi
-            cd ..
-          else
-            echo "::warning::No .rpm found"
-          fi
-          # Fail if nothing was collected
-          if [[ -z "$(find dist -type f)" ]]; then
-            echo "No installers matched under apps/desktop/out/make"
+
+          if [[ -z "${PRIMARY}" ]]; then
+            echo "No primary installer matched under apps/desktop/out/make"
             find apps/desktop/out/make -type f || true
             exit 1
+          fi
+
+          cp "${PRIMARY}" "dist/${{ matrix.asset }}"
+          checksum "${{ matrix.asset }}"
+
+          # The Linux x64 release also publishes native distro packages.
+          if [[ "${{ matrix.collect_native_packages }}" == "true" ]]; then
+            DEB="$(find apps/desktop/out/make -type f -name '*.deb' -print -quit)"
+            RPM="$(find apps/desktop/out/make -type f -name '*.rpm' -print -quit)"
+            if [[ -z "${DEB}" || -z "${RPM}" ]]; then
+              echo "Missing Linux x64 .deb or .rpm installer"
+              find apps/desktop/out/make -type f || true
+              exit 1
+            fi
+            cp "${DEB}" "dist/Openship.deb"
+            cp "${RPM}" "dist/Openship.rpm"
+            checksum "Openship.deb"
+            checksum "Openship.rpm"
           fi
 
       - name: Upload artifact
         uses: actions/upload-artifact@v7
         with:
           name: desktop-${{ matrix.asset }}
-          path: |
-            dist/${{ matrix.asset }}
-            dist/${{ matrix.asset }}.sha256
+          path: dist/*
           if-no-files-found: error
           retention-days: 7
 
@@ -603,7 +588,7 @@ jobs:
           # tsup bundles the @repo/* deps into dist/, so strip them from the
           # published manifest — otherwise npm emits uninstallable workspace:*
           # specifiers for packages that aren't on the registry.
-          npm pkg delete dependencies.@repo/core dependencies.@repo/onboarding
+          bun ../../scripts/sanitize-cli-package.ts package.json
           # Prereleases (v1.2.3-rc.1) publish to the `next` dist-tag, not `latest`.
           if [[ "${TAG}" == *-* ]]; then
             npm publish --access public --tag next
