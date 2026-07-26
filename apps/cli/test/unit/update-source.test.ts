@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import {
   loadUpdateSource,
+  normalizeReleaseVersion,
   normalizeUpdateSource,
   saveUpdateSource,
   UPSTREAM_RELEASE_REPO,
@@ -47,6 +48,13 @@ describe("update source", () => {
         pinnedVersion: "main",
       }),
     ).toThrow(/semantic version/i);
+  });
+
+  it("rejects malformed or command-shaped release tags", () => {
+    expect(normalizeReleaseVersion("v0.4.0")).toBe("0.4.0");
+    expect(() => normalizeReleaseVersion("v0.4.0;whoami")).toThrow(/release version/i);
+    expect(() => normalizeReleaseVersion("v0.4.0-../../payload")).toThrow(/release version/i);
+    expect(() => normalizeReleaseVersion("release-main")).toThrow(/release version/i);
   });
 
   it("lets service environment override the persisted source", () => {

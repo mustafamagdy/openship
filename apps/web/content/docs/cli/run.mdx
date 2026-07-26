@@ -153,7 +153,8 @@ driven from the box running Openship — not over the network. If the service is
 ## `openship update`
 
 Updates the globally-installed CLI — which bundles the self-hosted server — from the selected GitHub
-release source, then **restarts and health-checks the running service**. Official upstream releases install
+release source. A bare persistent service is restarted and its API health endpoint is probed. A Compose
+installation is pulled and recreated without a follow-up health probe. Official upstream releases install
 from the package registry; fork releases install their checksum-verified GitHub release bundle.
 
 ```bash

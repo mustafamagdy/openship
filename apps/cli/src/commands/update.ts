@@ -23,6 +23,7 @@ import { readInstallMethod, composeUpdate } from "../lib/compose";
 import { err, info, isJsonMode, ok, printJson } from "../lib/output";
 import {
   loadUpdateSource,
+  normalizeReleaseVersion,
   normalizeUpdateSource,
   saveUpdateSource,
   updateSourceLabel,
@@ -80,9 +81,13 @@ export const updateCommand = new Command("update")
       latest =
         source.channel === "pinned"
           ? source.pinnedVersion!
-          : (await resolveLatestTag(source.repo)).replace(/^v/, "");
-    } catch {
-      err("Could not reach GitHub to check for updates. Try again, or reinstall manually.");
+          : normalizeReleaseVersion(await resolveLatestTag(source.repo));
+    } catch (error) {
+      err(
+        error instanceof Error && /release version/i.test(error.message)
+          ? error.message
+          : "Could not reach GitHub to check for updates. Try again, or reinstall manually.",
+      );
       process.exitCode = 1;
       return;
     }

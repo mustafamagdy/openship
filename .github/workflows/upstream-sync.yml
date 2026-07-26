@@ -4,6 +4,9 @@ on:
   schedule:
     - cron: "17 3 * * *"
   workflow_dispatch: {}
+  push:
+    branches:
+      - main
 
 permissions:
   contents: write
@@ -76,9 +79,10 @@ jobs:
         run: |
           TITLE="Upstream synchronization requires conflict resolution"
           EXISTING="$(gh issue list --state open --search "\"${TITLE}\" in:title" --json number --jq '.[0].number // empty')"
-          BODY="The scheduled merge of \`oblien/openship:main\` into this fork conflicts with fork changes. Resolve it on a dedicated branch; no production branch was modified."
+          UPSTREAM_SHA="$(git rev-parse upstream/main)"
+          BODY="The merge of \`oblien/openship:main\` at \`${UPSTREAM_SHA}\` into this fork conflicts with fork changes. Resolve it on a dedicated branch; no production branch was modified."
           if [[ -n "${EXISTING}" ]]; then
-            gh issue comment "${EXISTING}" --body "${BODY}"
+            gh issue edit "${EXISTING}" --body "${BODY}"
           else
             gh issue create --title "${TITLE}" --body "${BODY}"
           fi
