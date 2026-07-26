@@ -547,7 +547,10 @@ jobs:
 
   publish-npm:
     name: Publish CLI to npm
-    if: github.repository == 'oblien/openship'
+    if: >-
+      github.repository == 'oblien/openship' &&
+      github.event_name == 'push' &&
+      startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-24.04
     # OIDC trusted publishing: npm verifies this workflow's identity instead of
     # a long-lived token. id-token:write lets the runner mint the OIDC token.

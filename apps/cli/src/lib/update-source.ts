@@ -1,8 +1,9 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
+import { GITHUB_REPO } from "@repo/core";
 
-export const UPSTREAM_RELEASE_REPO = "oblien/openship";
+export const UPSTREAM_RELEASE_REPO = GITHUB_REPO;
 export const UPDATE_SOURCE_FILE = join(homedir(), ".openship", "update-source.json");
 
 export type UpdateChannel = "upstream" | "fork" | "pinned";
@@ -13,8 +14,12 @@ export interface UpdateSource {
   pinnedVersion?: string;
 }
 
-function normalizeVersion(value: string): string {
-  return value.trim().replace(/^v/, "");
+export function normalizeReleaseVersion(value: string): string {
+  const version = value.trim().replace(/^v/, "");
+  if (!/^\d+\.\d+\.\d+(?:-[0-9A-Za-z]+(?:[.-][0-9A-Za-z]+)*)?$/.test(version)) {
+    throw new Error(`Invalid release version "${value}". Expected a semantic version.`);
+  }
+  return version;
 }
 
 export function validateReleaseRepo(value: string): string {
@@ -37,10 +42,7 @@ export function normalizeUpdateSource(input: Partial<UpdateSource>): UpdateSourc
       : validateReleaseRepo(input.repo ?? "");
 
   if (channel === "pinned") {
-    const pinnedVersion = normalizeVersion(input.pinnedVersion ?? "");
-    if (!/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(pinnedVersion)) {
-      throw new Error("Pinned update sources require a semantic version.");
-    }
+    const pinnedVersion = normalizeReleaseVersion(input.pinnedVersion ?? "");
     return { channel, repo, pinnedVersion };
   }
 

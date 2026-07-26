@@ -107,11 +107,14 @@ registry; fork releases use the checksum-verified CLI bundle attached to that fo
 
 <Step>
 
-### Confirm the restarted service is healthy
+### Confirm the update completed
 
-The updater restarts the persistent service and waits for its health endpoint. A successful result means
-the CLI, API, and matching dashboard are running the selected release. An attached
-`openship up --foreground` process cannot restart itself; relaunch that process manually.
+For a bare persistent install, the updater restarts the service and waits for its
+health endpoint. That confirms the restarted API is responding; it does not
+compare every component's version or automatically roll back a failed update.
+For a Compose install, the updater stops after `docker compose pull` and
+`docker compose up -d` succeed. An attached `openship up --foreground` process
+cannot restart itself; relaunch that process manually.
 
 </Step>
 
@@ -163,7 +166,8 @@ If you started Openship with `openship up`, it runs as a **persistent service**:
 machine reboots and restarts itself if it ever crashes. That keeps your apps online.
 
 What it does **not** do is change versions on its own. It keeps running whatever version it started with
-until `openship update` installs, restarts, and health-checks the selected release. See
+until `openship update` installs it. Bare persistent services are restarted and
+health-checked; Compose stacks are recreated without a follow-up health probe. See
 [Installation](/docs/getting-started/installation) for the full service commands.
 
 ## If something goes wrong
