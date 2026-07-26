@@ -306,8 +306,8 @@ export function openshipStackName(
   containerName: string | undefined,
   serviceLabel: string | undefined,
 ): string | null {
-  if (!containerName || !serviceLabel) return null;
-  const stripped = containerName.replace(/^openship-/, "");
+  if (!containerName?.startsWith("openship-") || !serviceLabel) return null;
+  const stripped = containerName.slice("openship-".length);
   const suffix = `-${serviceLabel}`;
   if (!stripped.endsWith(suffix)) return null;
   return stripped.slice(0, -suffix.length) || null;

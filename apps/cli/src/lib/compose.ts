@@ -61,14 +61,23 @@ export function composeIsViableDefault(): boolean {
   return process.platform === "linux" && hasDockerCompose();
 }
 
-/** `cmd` is on PATH (probes `cmd --version`). */
-function hasCmd(cmd: string): boolean {
-  return spawnSync(cmd, ["--version"], { stdio: "ignore" }).status === 0;
-}
-
 /** Single-quote a string for `sh -c`. */
 function shQuote(s: string): string {
   return `'${s.replace(/'/g, `'\\''`)}'`;
+}
+
+/**
+ * Command prefix for unattended elevation. An installed `sudo` binary is not
+ * enough: without `-n`, a headless setup can block forever at a password
+ * prompt. `null` tells the caller to fall back to the bare install.
+ */
+export function nonInteractiveSudoPrefix(
+  asRoot: boolean,
+  probe: () => number | null = () =>
+    spawnSync("sudo", ["-n", "true"], { stdio: "ignore" }).status,
+): "" | "sudo -n " | null {
+  if (asRoot) return "";
+  return probe() === 0 ? "sudo -n " : null;
 }
 
 /**
@@ -93,7 +102,8 @@ export async function ensureDocker(): Promise<boolean> {
   if (!plan.supported || !plan.installCommand) return false;
 
   const asRoot = typeof process.getuid === "function" && process.getuid() === 0;
-  const sudo = !asRoot && hasCmd("sudo") ? "sudo " : "";
+  const sudo = nonInteractiveSudoPrefix(asRoot);
+  if (sudo === null) return false;
   const sh = (script: string): number =>
     spawnSync("sh", ["-c", sudo ? `${sudo}sh -c ${shQuote(script)}` : script], {
       stdio: "inherit",

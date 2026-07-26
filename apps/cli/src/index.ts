@@ -46,6 +46,8 @@ import { cacheCommand } from "./commands/cache";
 // Interactive setup / control (bare `openship`)
 import { runWizard, runControl, isSetupInProgress } from "./commands/wizard";
 import { serviceStatus } from "./lib/service";
+import { readInstallMethod } from "./lib/compose";
+import { shouldRunControl } from "./lib/setup-state";
 
 // Injected at build time by tsup (define). Always present in the built binary.
 declare const __CLI_VERSION__: string;
@@ -66,7 +68,13 @@ program
     // A service is installed AND setup finished → manage it. If a prior setup
     // was interrupted (service installed but never completed), resume the wizard
     // instead of showing the control panel as if the install were done.
-    if (serviceStatus().installed && !isSetupInProgress()) await runControl();
+    if (
+      shouldRunControl({
+        serviceInstalled: serviceStatus().installed,
+        installMethod: readInstallMethod(),
+        setupInProgress: isSetupInProgress(),
+      })
+    ) await runControl();
     else await runWizard();
   });
 

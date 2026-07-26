@@ -6,6 +6,7 @@ import {
   isBuildHelper,
   discoveredServiceName,
   openshipStackName,
+  reconcileStack,
 } from "./docker-reconcile";
 
 describe("isBuildHelper", () => {
@@ -189,8 +190,39 @@ describe("openshipStackName — group Openship-deployed containers by their stac
 
   it("returns null for a non-Openship / unidentifiable container (→ standalone)", () => {
     expect(openshipStackName("my-random-container", undefined)).toBeNull();
+    expect(openshipStackName("my-random-web", "web")).toBeNull();
     expect(openshipStackName(undefined, "web")).toBeNull();
     // Name that doesn't end in the service label → not our pattern.
     expect(openshipStackName("openship-supabase-kong", "web")).toBeNull();
+  });
+
+  it("reconcileStack groups an Openship container by stack and canonical service name", () => {
+    const result = reconcileStack({
+      serverId: "srv_1",
+      details: [
+        container({
+          name: "openship-supabase-mongo-express",
+          labels: {
+            "openship.project": "proj_1",
+            "openship.service": "mongo-express",
+          },
+        }),
+      ],
+      volumes: [],
+      networks: [],
+      declared: new Map(),
+      alreadyManaged: 0,
+    });
+
+    expect(result.groups).toEqual([
+      expect.objectContaining({
+        project: "supabase",
+        services: [
+          expect.objectContaining({
+            name: "mongo-express",
+          }),
+        ],
+      }),
+    ]);
   });
 });
