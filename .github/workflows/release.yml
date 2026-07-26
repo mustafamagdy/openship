@@ -257,24 +257,7 @@ jobs:
           cp apps/cli/package.json "${STAGING}/package.json"
           cp -a apps/cli/dist "${STAGING}/dist"
           cp README.md "${STAGING}/README.md"
-          bun -e '
-            const path = process.argv[1];
-            const pkg = await Bun.file(path).json();
-            for (const section of [
-              "dependencies",
-              "optionalDependencies",
-              "peerDependencies",
-              "devDependencies",
-            ]) {
-              for (const [name, specifier] of Object.entries(pkg[section] ?? {})) {
-                if (typeof specifier === "string" && specifier.startsWith("workspace:")) {
-                  delete pkg[section][name];
-                }
-              }
-            }
-            delete pkg.scripts?.prepack;
-            await Bun.write(path, JSON.stringify(pkg, null, 2) + "\n");
-          ' "${STAGING}/package.json"
+          bun scripts/sanitize-cli-package.ts "${STAGING}/package.json"
           (
             cd "${STAGING}"
             bun pm pack --filename "${GITHUB_WORKSPACE}/openship-cli-${TAG}.tgz"
@@ -302,9 +285,11 @@ jobs:
           - os: windows-latest
             label: Windows x64
             asset: Openship-win32-x64.zip
+            collect_native_packages: false
           - os: ubuntu-latest
             label: Linux x64
             asset: Openship.AppImage
+            collect_native_packages: true
           # GitHub-hosted native aarch64 runner → stage.ts derives arm64 from
           # process.arch, so the API bun --compile + the AppImage build are arm64.
           # x64 keeps the legacy `Openship.AppImage` name (auto-update compat);
@@ -312,6 +297,7 @@ jobs:
           - os: ubuntu-24.04-arm
             label: Linux arm64
             asset: Openship-arm64.AppImage
+            collect_native_packages: false
     runs-on: ${{ matrix.os }}
     steps:
       - name: Checkout
@@ -389,7 +375,7 @@ jobs:
           checksum "${{ matrix.asset }}"
 
           # The Linux x64 release also publishes native distro packages.
-          if [[ "${{ matrix.asset }}" == "Openship.AppImage" ]]; then
+          if [[ "${{ matrix.collect_native_packages }}" == "true" ]]; then
             DEB="$(find apps/desktop/out/make -type f -name '*.deb' -print -quit)"
             RPM="$(find apps/desktop/out/make -type f -name '*.rpm' -print -quit)"
             if [[ -z "${DEB}" || -z "${RPM}" ]]; then
@@ -602,23 +588,7 @@ jobs:
           # tsup bundles the @repo/* deps into dist/, so strip them from the
           # published manifest — otherwise npm emits uninstallable workspace:*
           # specifiers for packages that aren't on the registry.
-          bun -e '
-            const path = "package.json";
-            const pkg = await Bun.file(path).json();
-            for (const section of [
-              "dependencies",
-              "optionalDependencies",
-              "peerDependencies",
-              "devDependencies",
-            ]) {
-              for (const [name, specifier] of Object.entries(pkg[section] ?? {})) {
-                if (typeof specifier === "string" && specifier.startsWith("workspace:")) {
-                  delete pkg[section][name];
-                }
-              }
-            }
-            await Bun.write(path, JSON.stringify(pkg, null, 2) + "\n");
-          '
+          bun ../../scripts/sanitize-cli-package.ts package.json
           # Prereleases (v1.2.3-rc.1) publish to the `next` dist-tag, not `latest`.
           if [[ "${TAG}" == *-* ]]; then
             npm publish --access public --tag next
