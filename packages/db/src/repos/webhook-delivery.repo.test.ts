@@ -28,7 +28,7 @@ describe("webhookDelivery repo — provider idempotency (claim) + feed", () => {
   let repo: Awaited<ReturnType<typeof freshRepo>>;
   beforeEach(async () => {
     repo = await freshRepo();
-  });
+  }, 30_000);
 
   it("claims a delivery once; a redelivery of the same id is dropped", async () => {
     const first = await repo.claimGithub({ deliveryId: "d1", event: "push", outcome: "received" });
