@@ -30,7 +30,14 @@ export { appsApi } from "./apps";
 export type { AppCatalogEntry, AppCatalogField, InstallAppResult } from "./apps";
 export { deployApi } from "./deploy";
 export { domainsApi } from "./domains";
-export type { RegisteredDomain, RegisteredDomainVerifyResult, DomainDnsRecord } from "./domains";
+export type {
+  RegisteredDomain,
+  RegisteredDomainVerifyResult,
+  DomainDnsRecord,
+  CloudflareConnection,
+  DnsSyncResult,
+  DnsSyncRecord,
+} from "./domains";
 export {
   jobsApi,
   type JobView,

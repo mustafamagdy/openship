@@ -37,6 +37,10 @@ function publicRow(row: OrganizationDomain) {
     verified: row.verified,
     verifiedAt: row.verifiedAt,
     isDefault: row.isDefault,
+    dnsManaged: row.dnsManaged,
+    dnsProvider: row.dnsProvider,
+    dnsStatus: row.dnsStatus,
+    dnsLastSyncedAt: row.dnsLastSyncedAt,
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
   };
@@ -66,7 +70,7 @@ export async function listOrganizationDomains(ctx: RequestContext) {
 }
 
 export async function getOrganizationDomainRecords(
-  ctx: RequestContext,
+  ctx: Pick<RequestContext, "organizationId">,
   id: string,
 ): Promise<OrganizationDomainRecord[]> {
   const row = await requireDomain(ctx.organizationId, id);

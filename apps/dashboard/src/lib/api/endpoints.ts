@@ -124,7 +124,9 @@ export const endpoints = {
   /* ---------------------------------------------------------------- */
   domains: {
     registry: "domains/registry",
+    cloudflare: "domains/providers/cloudflare",
     registryRecords: (id: string) => `domains/registry/${encodeURIComponent(id)}/records`,
+    registryDnsSync: (id: string) => `domains/registry/${encodeURIComponent(id)}/dns-sync`,
     registryVerify: (id: string) => `domains/registry/${encodeURIComponent(id)}/verify`,
     registryDefault: (id: string) => `domains/registry/${encodeURIComponent(id)}/default`,
     registryRemove: (id: string) => `domains/registry/${encodeURIComponent(id)}`,
