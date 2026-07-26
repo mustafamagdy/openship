@@ -42,6 +42,10 @@ export const RegisterOrganizationDomainBody = Type.Object({
   domain: Type.String({ minLength: 3, maxLength: 253 }),
 });
 
+export const ConnectCloudflareBody = Type.Object({
+  apiToken: Type.String({ minLength: 20, maxLength: 4096 }),
+});
+
 // ─── Inferred types ──────────────────────────────────────────────────────────
 
 export type TDomainIdParam = Static<typeof DomainIdParam>;
@@ -49,3 +53,4 @@ export type TListDomainsQuery = Static<typeof ListDomainsQuery>;
 export type TAddDomainBody = Static<typeof AddDomainBody>;
 export type TUploadCertBody = Static<typeof UploadCertBody>;
 export type TRegisterOrganizationDomainBody = Static<typeof RegisterOrganizationDomainBody>;
+export type TConnectCloudflareBody = Static<typeof ConnectCloudflareBody>;

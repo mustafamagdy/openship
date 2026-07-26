@@ -4,8 +4,11 @@ import { useCallback, useEffect, useState } from "react";
 import {
   Check,
   CheckCircle2,
+  Cloud,
   Copy,
+  ExternalLink,
   Globe2,
+  Link2Off,
   Loader2,
   Plus,
   RefreshCw,
@@ -17,6 +20,7 @@ import {
   domainsApi,
   getApiErrorMessage,
   type DomainDnsRecord,
+  type CloudflareConnection,
   type RegisteredDomain,
 } from "@/lib/api";
 import { PageContainer } from "@/components/ui/PageContainer";
@@ -26,7 +30,13 @@ import { useToast } from "@/context/ToastContext";
 export default function DomainsPage() {
   const { showToast } = useToast();
   const [domains, setDomains] = useState<RegisteredDomain[]>([]);
+  const [cloudflare, setCloudflare] = useState<CloudflareConnection>({
+    provider: "cloudflare",
+    connected: false,
+  });
   const [loading, setLoading] = useState(true);
+  const [cloudflareToken, setCloudflareToken] = useState("");
+  const [cloudflareBusy, setCloudflareBusy] = useState(false);
   const [domainInput, setDomainInput] = useState("");
   const [adding, setAdding] = useState(false);
   const [busyId, setBusyId] = useState<string | null>(null);
@@ -39,14 +49,58 @@ export default function DomainsPage() {
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const response = await domainsApi.listRegistered();
-      setDomains(response.data ?? []);
+      const [domainsResponse, cloudflareResponse] = await Promise.all([
+        domainsApi.listRegistered(),
+        domainsApi.cloudflareConnection(),
+      ]);
+      setDomains(domainsResponse.data ?? []);
+      setCloudflare(cloudflareResponse.data);
     } catch (error) {
       showToast(getApiErrorMessage(error, "Could not load registered domains"), "error");
     } finally {
       setLoading(false);
     }
   }, [showToast]);
+
+  const connectCloudflare = async () => {
+    if (!cloudflareToken.trim() || cloudflareBusy) return;
+    setCloudflareBusy(true);
+    try {
+      const response = await domainsApi.connectCloudflare(cloudflareToken);
+      const conflicts = response.data.domains.filter((domain) => domain.status !== "in_sync");
+      setCloudflareToken("");
+      await load();
+      showToast(
+        conflicts.length
+          ? `Cloudflare connected. ${conflicts.length} domain${conflicts.length === 1 ? "" : "s"} need attention.`
+          : `Cloudflare connected and ${response.data.domains.length} domain${response.data.domains.length === 1 ? "" : "s"} synchronized.`,
+        conflicts.length ? "error" : "success",
+        "Cloudflare DNS",
+      );
+    } catch (error) {
+      showToast(getApiErrorMessage(error, "Could not connect Cloudflare"), "error");
+    } finally {
+      setCloudflareBusy(false);
+    }
+  };
+
+  const disconnectCloudflare = async () => {
+    if (cloudflareBusy) return;
+    setCloudflareBusy(true);
+    try {
+      await domainsApi.disconnectCloudflare();
+      await load();
+      showToast(
+        "Cloudflare disconnected. Existing DNS records were left unchanged.",
+        "success",
+        "Cloudflare DNS",
+      );
+    } catch (error) {
+      showToast(getApiErrorMessage(error, "Could not disconnect Cloudflare"), "error");
+    } finally {
+      setCloudflareBusy(false);
+    }
+  };
 
   useEffect(() => {
     void load();
@@ -117,6 +171,34 @@ export default function DomainsPage() {
     }
   };
 
+  const syncDns = async (domain: RegisteredDomain) => {
+    setBusyId(domain.id);
+    try {
+      const result = await domainsApi.syncRegisteredDns(domain.id);
+      if (result.status === "conflict") {
+        const detail = result.records.find((record) => record.action === "conflict")?.detail;
+        showToast(
+          detail ?? "Existing Cloudflare records conflict with OpenShip routing.",
+          "error",
+          "DNS needs attention",
+        );
+      } else {
+        showToast(
+          result.changed
+            ? `Created ${result.changed} DNS record${result.changed === 1 ? "" : "s"} in Cloudflare.`
+            : `${domain.domain} DNS is already synchronized.`,
+          "success",
+          "Cloudflare DNS",
+        );
+      }
+      await load();
+    } catch (error) {
+      showToast(getApiErrorMessage(error, "Could not synchronize DNS"), "error");
+    } finally {
+      setBusyId(null);
+    }
+  };
+
   const remove = async () => {
     if (!deleting) return;
     setBusyId(deleting.id);
@@ -146,6 +228,85 @@ export default function DomainsPage() {
           Register a domain once, choose the default, and reuse its subdomains across projects.
         </p>
       </div>
+
+      <section className="mb-7 rounded-2xl border border-border/50 bg-card p-5">
+        <div className="flex flex-col gap-4 lg:flex-row lg:items-center">
+          <div className="flex min-w-0 flex-1 items-start gap-3">
+            <div className="flex size-10 shrink-0 items-center justify-center rounded-xl bg-[#F6821F]/10">
+              <Cloud className="size-5 text-[#F6821F]" />
+            </div>
+            <div>
+              <div className="flex flex-wrap items-center gap-2">
+                <h2 className="text-sm font-semibold text-foreground">Cloudflare DNS</h2>
+                <span
+                  className={`rounded-full px-2 py-0.5 text-[11px] font-medium ${
+                    cloudflare.connected
+                      ? "bg-success/10 text-success"
+                      : "bg-muted text-muted-foreground"
+                  }`}
+                >
+                  {cloudflare.connected ? "Connected" : "Not connected"}
+                </span>
+              </div>
+              <p className="mt-1 max-w-2xl text-sm text-muted-foreground">
+                Let OpenShip create verification and wildcard routing records for every registered
+                domain. Existing conflicting records are never deleted.
+              </p>
+            </div>
+          </div>
+
+          {cloudflare.connected ? (
+            <button
+              type="button"
+              onClick={() => void disconnectCloudflare()}
+              disabled={cloudflareBusy}
+              className="inline-flex h-10 shrink-0 items-center justify-center gap-2 rounded-xl border border-border/50 px-4 text-sm font-medium text-foreground hover:bg-muted/50 disabled:opacity-50"
+            >
+              {cloudflareBusy ? (
+                <Loader2 className="size-4 animate-spin" />
+              ) : (
+                <Link2Off className="size-4" />
+              )}
+              Disconnect
+            </button>
+          ) : (
+            <div className="flex w-full flex-col gap-2 lg:w-auto lg:min-w-[430px]">
+              <div className="flex gap-2">
+                <input
+                  type="password"
+                  value={cloudflareToken}
+                  onChange={(event) => setCloudflareToken(event.target.value)}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter") void connectCloudflare();
+                  }}
+                  placeholder="Cloudflare API token"
+                  aria-label="Cloudflare API token"
+                  autoComplete="off"
+                  className="h-10 min-w-0 flex-1 rounded-xl border border-border/50 bg-background/60 px-3 text-sm text-foreground outline-none placeholder:text-muted-foreground/50 focus:ring-2 focus:ring-primary/20"
+                />
+                <button
+                  type="button"
+                  onClick={() => void connectCloudflare()}
+                  disabled={cloudflareToken.trim().length < 20 || cloudflareBusy}
+                  className="inline-flex h-10 items-center justify-center gap-2 rounded-xl bg-primary px-4 text-sm font-medium text-primary-foreground disabled:opacity-50"
+                >
+                  {cloudflareBusy && <Loader2 className="size-4 animate-spin" />}
+                  Connect
+                </button>
+              </div>
+              <a
+                href="https://dash.cloudflare.com/profile/api-tokens"
+                target="_blank"
+                rel="noreferrer"
+                className="inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground"
+              >
+                Create a token with Zone:Read and DNS:Edit
+                <ExternalLink className="size-3" />
+              </a>
+            </div>
+          )}
+        </div>
+      </section>
 
       <section className="mb-7 rounded-2xl border border-border/50 bg-card p-5">
         <div className="mb-4 flex items-start gap-3">
@@ -227,6 +388,17 @@ export default function DomainsPage() {
                             Default
                           </span>
                         )}
+                        {domain.dnsStatus === "in_sync" && (
+                          <span className="inline-flex items-center gap-1 rounded-full bg-success/10 px-2 py-0.5 text-[11px] font-medium text-success">
+                            <Cloud className="size-3" />
+                            DNS managed
+                          </span>
+                        )}
+                        {domain.dnsStatus === "conflict" && (
+                          <span className="inline-flex items-center gap-1 rounded-full bg-warning/10 px-2 py-0.5 text-[11px] font-medium text-warning">
+                            DNS conflict
+                          </span>
+                        )}
                       </div>
                       <p className="mt-1 text-xs text-muted-foreground">
                         {domain.verified
@@ -245,6 +417,21 @@ export default function DomainsPage() {
                       <Globe2 className="size-3.5" />
                       DNS setup
                     </button>
+                    {cloudflare.connected && (
+                      <button
+                        type="button"
+                        onClick={() => void syncDns(domain)}
+                        disabled={busy}
+                        className="inline-flex h-9 items-center gap-2 rounded-xl border border-border/50 px-3 text-xs font-medium text-foreground transition-colors hover:bg-muted/50 disabled:opacity-50"
+                      >
+                        {busy ? (
+                          <Loader2 className="size-3.5 animate-spin" />
+                        ) : (
+                          <Cloud className="size-3.5" />
+                        )}
+                        Sync DNS
+                      </button>
+                    )}
                     {!domain.verified ? (
                       <button
                         type="button"

@@ -13,6 +13,7 @@ import * as domainService from "./domain.service";
 import { maybeProxyCloudProject } from "../../lib/cloud/project-router";
 import type { TAddDomainBody, TUploadCertBody } from "./domain.schema";
 import * as organizationDomainService from "./organization-domain.service";
+import * as cloudflareDnsService from "./cloudflare-dns.service";
 
 // ─── Handlers ────────────────────────────────────────────────────────────────
 
@@ -42,13 +43,68 @@ export async function register(c: Context) {
   const ctx = getRequestContext(c);
   const body = await c.req.json<{ domain: string }>();
   const data = await organizationDomainService.registerOrganizationDomain(ctx, body.domain);
+  let dnsSync: Awaited<ReturnType<typeof cloudflareDnsService.syncDomainIfConnected>>;
+  let dnsSyncError: string | undefined;
+  try {
+    dnsSync = await cloudflareDnsService.syncDomainIfConnected(ctx, data.domain.id);
+  } catch (error) {
+    dnsSyncError = safeErrorMessage(error);
+  }
   audit.recordAsync(auditContextFrom(c, ctx.organizationId, ctx.userId), {
     eventType: "domain.registered",
     resourceType: "organization",
     resourceId: ctx.organizationId,
     after: { domain: data.domain.domain },
   });
-  return c.json({ data: data.domain, records: data.records }, 201);
+  return c.json({ data: data.domain, records: data.records, dnsSync, dnsSyncError }, 201);
+}
+
+export async function getCloudflareConnection(c: Context) {
+  const data = await cloudflareDnsService.getConnection(getRequestContext(c));
+  return c.json({ data });
+}
+
+export async function connectCloudflare(c: Context) {
+  const ctx = getRequestContext(c);
+  const body = await c.req.json<{ apiToken: string }>();
+  const data = await cloudflareDnsService.connect(ctx, body.apiToken);
+  audit.recordAsync(auditContextFrom(c, ctx.organizationId, ctx.userId), {
+    eventType: "dns_provider.connected",
+    resourceType: "organization",
+    resourceId: ctx.organizationId,
+    after: { provider: "cloudflare", domainsReconciled: data.domains.length },
+  });
+  return c.json({ data });
+}
+
+export async function disconnectCloudflare(c: Context) {
+  const ctx = getRequestContext(c);
+  await cloudflareDnsService.disconnect(ctx);
+  audit.recordAsync(auditContextFrom(c, ctx.organizationId, ctx.userId), {
+    eventType: "dns_provider.disconnected",
+    resourceType: "organization",
+    resourceId: ctx.organizationId,
+    after: { provider: "cloudflare" },
+  });
+  return c.json({ success: true });
+}
+
+export async function syncRegisteredDns(c: Context) {
+  const ctx = getRequestContext(c);
+  const id = param(c, "id");
+  const data = await cloudflareDnsService.syncDomain(ctx, id);
+  audit.recordAsync(auditContextFrom(c, ctx.organizationId, ctx.userId), {
+    eventType: data.status === "in_sync" ? "domain.dns_synced" : "domain.dns_conflict",
+    resourceType: "organization",
+    resourceId: ctx.organizationId,
+    after: {
+      provider: "cloudflare",
+      domainId: id,
+      status: data.status,
+      changed: data.changed,
+    },
+  });
+  return c.json({ data }, data.status === "conflict" ? 409 : 200);
 }
 
 export async function registeredRecords(c: Context) {

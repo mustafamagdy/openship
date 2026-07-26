@@ -32,6 +32,10 @@ const SCHEME_BY_KEY: Record<string, { table: AnyTable; scheme: SecretScheme }> =
     table: schema.azureDevopsConnection,
     scheme: "scalar",
   },
+  "dns_provider_connection.tokenEncrypted": {
+    table: schema.dnsProviderConnection,
+    scheme: "scalar",
+  },
   "user_settings.cloudSessionToken": { table: schema.userSettings, scheme: "scalar" },
   "user_settings.cloneTokenEncrypted": { table: schema.userSettings, scheme: "scalar" },
   "project.cloneTokenEncrypted": { table: schema.project, scheme: "scalar" },

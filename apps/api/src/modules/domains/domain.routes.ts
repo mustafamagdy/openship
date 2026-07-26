@@ -9,7 +9,12 @@ import { tbValidator } from "@hono/typebox-validator";
 import { secureRouter } from "../../lib/secure-router";
 import { cloudDomainProxy } from "../../lib/cloud/project-router";
 import * as ctrl from "./domain.controller";
-import { AddDomainBody, RegisterOrganizationDomainBody, UploadCertBody } from "./domain.schema";
+import {
+  AddDomainBody,
+  ConnectCloudflareBody,
+  RegisterOrganizationDomainBody,
+  UploadCertBody,
+} from "./domain.schema";
 
 const r = secureRouter(new Hono(), {
   module: "domains",
@@ -17,6 +22,14 @@ const r = secureRouter(new Hono(), {
 });
 
 /* ─── Domains ──────────────────────────────────────────────────────────── */
+r.get("/providers/cloudflare", { tag: "settings:read" }, ctrl.getCloudflareConnection);
+r.put(
+  "/providers/cloudflare",
+  { tag: "settings:admin" },
+  tbValidator("json", ConnectCloudflareBody),
+  ctrl.connectCloudflare,
+);
+r.delete("/providers/cloudflare", { tag: "settings:admin" }, ctrl.disconnectCloudflare);
 r.get("/registry", { tag: "settings:read" }, ctrl.listRegistered);
 r.post(
   "/registry",
@@ -25,6 +38,7 @@ r.post(
   ctrl.register,
 );
 r.get("/registry/:id/records", { tag: "settings:read" }, ctrl.registeredRecords);
+r.post("/registry/:id/dns-sync", { tag: "settings:write" }, ctrl.syncRegisteredDns);
 r.post("/registry/:id/verify", { tag: "settings:write" }, ctrl.verifyRegistered);
 r.post("/registry/:id/default", { tag: "settings:write" }, ctrl.setRegisteredDefault);
 r.delete("/registry/:id", { tag: "settings:admin" }, ctrl.removeRegistered);

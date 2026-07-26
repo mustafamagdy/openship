@@ -12,6 +12,11 @@ export {
   type NewAzureDevopsConnection,
 } from "./azure-devops-connection.repo";
 export {
+  createDnsProviderConnectionRepo,
+  type DnsProviderConnection,
+  type NewDnsProviderConnection,
+} from "./dns-provider-connection.repo";
+export {
   createOrganizationDomainRepo,
   type OrganizationDomain,
   type NewOrganizationDomain,
@@ -226,6 +231,7 @@ import { createSessionRepo } from "./session.repo";
 import { createAccountRepo } from "./account.repo";
 import { createGitInstallationRepo } from "./git-installation.repo";
 import { createAzureDevopsConnectionRepo } from "./azure-devops-connection.repo";
+import { createDnsProviderConnectionRepo } from "./dns-provider-connection.repo";
 import { createOrganizationDomainRepo } from "./organization-domain.repo";
 import { createGithubInstallStateRepo } from "./github-install-state.repo";
 import { createProjectGroupRepo } from "./project-group.repo";
@@ -298,6 +304,7 @@ export const repos = {
   account: createAccountRepo(db),
   gitInstallation: createGitInstallationRepo(db),
   azureDevopsConnection: createAzureDevopsConnectionRepo(db),
+  dnsProviderConnection: createDnsProviderConnectionRepo(db),
   organizationDomain: createOrganizationDomainRepo(db),
   githubInstallState: createGithubInstallStateRepo(db),
   projectGroup: createProjectGroupRepo(db),

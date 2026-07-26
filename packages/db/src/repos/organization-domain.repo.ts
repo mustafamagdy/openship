@@ -118,6 +118,48 @@ export function createOrganizationDomainRepo(db: Database) {
       });
     },
 
+    async setDnsState(
+      organizationId: string,
+      id: string,
+      state: {
+        dnsManaged: boolean;
+        dnsProvider: string | null;
+        dnsProviderZoneId: string | null;
+        dnsStatus: string;
+        dnsLastSyncedAt: Date | null;
+      },
+    ): Promise<OrganizationDomain | undefined> {
+      const [row] = await db
+        .update(organizationDomain)
+        .set({ ...state, updatedAt: new Date() })
+        .where(
+          and(
+            eq(organizationDomain.organizationId, organizationId),
+            eq(organizationDomain.id, id),
+          ),
+        )
+        .returning();
+      return row;
+    },
+
+    async clearDnsProvider(organizationId: string, provider: string): Promise<void> {
+      await db
+        .update(organizationDomain)
+        .set({
+          dnsManaged: false,
+          dnsProvider: null,
+          dnsProviderZoneId: null,
+          dnsStatus: "manual",
+          updatedAt: new Date(),
+        })
+        .where(
+          and(
+            eq(organizationDomain.organizationId, organizationId),
+            eq(organizationDomain.dnsProvider, provider),
+          ),
+        );
+    },
+
     async remove(organizationId: string, id: string): Promise<void> {
       await db
         .delete(organizationDomain)
