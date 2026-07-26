@@ -13,6 +13,7 @@ import { installAndStart, preview } from "../lib/service";
 import { composeUp, composeIsViableDefault, hasDockerCompose } from "../lib/compose";
 import { resolvePorts } from "../lib/ports";
 import { prepareFromSource, type FromSourceRun } from "../lib/from-source";
+import { loadUpdateSource } from "../lib/update-source";
 
 interface UpOpts {
   port?: string;
@@ -359,6 +360,14 @@ async function runForeground(opts: UpOpts, source?: FromSourceRun): Promise<void
       PGLITE_DATA_DIR: dataDir,
       BETTER_AUTH_SECRET: ensureAuthSecret(),
     };
+    const updateSource = loadUpdateSource();
+    env.OPENSHIP_RELEASE_REPO = updateSource.repo;
+    env.OPENSHIP_UPDATE_CHANNEL = updateSource.channel;
+    if (updateSource.pinnedVersion) {
+      env.OPENSHIP_UPDATE_VERSION = updateSource.pinnedVersion;
+    } else {
+      delete env.OPENSHIP_UPDATE_VERSION;
+    }
     // Bundled server relocates its migrations + pglite assets next to the entry;
     // from-source resolves them from the dist's workspace layout, so leave unset.
     if (!source) {

@@ -1405,7 +1405,10 @@ async function getReleaseDriftStatus(p: Project) {
  */
 async function getSelfReleaseDrift(p: Project) {
   const current = readApiVersion();
-  const latest = await resolveLatestReleaseTag(GITHUB_REPO).catch(() => null);
+  const releaseRepo = process.env.OPENSHIP_RELEASE_REPO?.trim() || GITHUB_REPO;
+  const pinnedVersion = process.env.OPENSHIP_UPDATE_VERSION?.trim().replace(/^v/, "");
+  const latest =
+    pinnedVersion || (await resolveLatestReleaseTag(releaseRepo).catch(() => null));
   const behind = Boolean(latest && current && compareSemver(latest, current) > 0);
   const latestInProgress =
     behind && latest
@@ -1420,7 +1423,7 @@ async function getSelfReleaseDrift(p: Project) {
     latestInProgress,
     latestVersion: latest,
     currentVersion: current,
-    pinned: false,
+    pinned: Boolean(pinnedVersion),
   };
 }
 
