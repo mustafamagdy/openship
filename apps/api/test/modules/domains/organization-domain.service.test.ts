@@ -21,6 +21,7 @@ const projectDomainRepo = vi.hoisted(() => ({
 }));
 
 const resolveRecords = vi.hoisted(() => vi.fn());
+const previewRecords = vi.hoisted(() => vi.fn());
 
 vi.mock("@repo/db", () => ({
   repos: {
@@ -35,9 +36,7 @@ vi.mock("../../../src/lib/dns-resolver", () => ({
 }));
 
 vi.mock("../../../src/modules/domains/domain.service", () => ({
-  previewRecords: vi.fn().mockResolvedValue({
-    records: [{ type: "A", host: "openship-preview", value: "203.0.113.10" }],
-  }),
+  previewRecords,
 }));
 
 import {
@@ -72,6 +71,9 @@ describe("organization domain registry", () => {
     organizationDomainRepo.listByOrganization.mockResolvedValue([pendingDomain]);
     projectRepo.listByOrganization.mockResolvedValue({ rows: [] });
     projectDomainRepo.listByProject.mockResolvedValue([]);
+    previewRecords.mockResolvedValue({
+      records: [{ type: "A", host: "openship-preview", value: "203.0.113.10" }],
+    });
   });
 
   it("registers a normalized base domain and returns ownership and wildcard DNS records", async () => {
@@ -90,6 +92,10 @@ describe("organization domain registry", () => {
         domain: "example.com",
         verified: false,
       }),
+    );
+    expect(previewRecords).toHaveBeenCalledWith(
+      "openship-preview.example.com",
+      context.organizationId,
     );
     expect(result.records).toEqual([
       expect.objectContaining({
