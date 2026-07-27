@@ -2,7 +2,7 @@ import { describe, expect, test } from "vitest";
 import { NginxProvider, renderProxyOptions } from "./nginx";
 import { PROXY_GZIP_TYPES } from "@repo/core";
 import { OPENRESTY_DEFAULT_PATHS, luaSourceAvailable, RULES_GUARD_PATH, ACME_HTTP01_PORT } from "./openresty-lua";
-import type { CommandExecutor, RouteConfig } from "../types";
+import type { CommandExecutor, ProvisionLock, RouteConfig } from "../types";
 
 // L1 — config GENERATION. Proves NginxProvider emits the right nginx directives
 // for each branch, that the injection guard holds, and that a failed
@@ -198,6 +198,29 @@ describe("NginxProvider config generation", () => {
     await expect(nginx.registerRoute(PROXY)).rejects.toThrow();
 
     expect(files.get(`${SITES}/_default-https.conf`)).toBe("# PRIOR HTTPS DEFAULT");
+  });
+
+  test("serializes the route and shared HTTPS fallback transaction with the provision lock", async () => {
+    const files = new Map<string, string>();
+    const calls: string[] = [];
+    let lockCalls = 0;
+    const provisionLock: ProvisionLock = {
+      run: async <T>(critical: () => Promise<T>): Promise<T> => {
+        lockCalls += 1;
+        return critical();
+      },
+    };
+    const nginx = new NginxProvider({
+      paths: PATHS,
+      executor: makeExecutor(files, { certDomains: ["app.example.com"] }, calls),
+      provisionLock,
+    });
+
+    await nginx.registerRoute(PROXY);
+
+    expect(lockCalls).toBe(1);
+    expect(files.get(`${SITES}/app-example-com.conf`)).toContain("listen 443 ssl;");
+    expect(files.get(`${SITES}/_default-https.conf`)).toContain("return 404;");
   });
 });
 

@@ -11,28 +11,6 @@
         "label": "Update now",
         "kind": "update"
       }
-    },
-    {
-      "id": "update-0.4.2",
-      "severity": "recommended",
-      "affects": "<0.4.2",
-      "title": "Update to Openship 0.4.2",
-      "message": "Openship 0.4.2 is available. See the release notes for what's new — updating is recommended.",
-      "action": {
-        "label": "Update now",
-        "kind": "update"
-      }
-    },
-    {
-      "id": "update-0.3.0",
-      "severity": "recommended",
-      "affects": "<0.3.0",
-      "title": "Update to Openship 0.3.0",
-      "message": "Openship 0.3.0 is available. See the release notes for what's new — updating is recommended.",
-      "action": {
-        "label": "Update now",
-        "kind": "update"
-      }
     }
   ]
 }

@@ -237,6 +237,7 @@ async function createInfraProvider(
       paths: OPENRESTY_DEFAULT_PATHS,
       ...config.nginx,
       executor: edgeExec,
+      provisionLock: config.provisionLock,
     });
     return { routing: nginx, ssl: nginx };
   }
@@ -259,7 +260,12 @@ async function createInfraProvider(
   await (config.provisionLock ? config.provisionLock.run(ensureConfig) : ensureConfig());
 
   const { NginxProvider } = await import("./infra/nginx");
-  const nginx = new NginxProvider({ paths, ...config.nginx, executor });
+  const nginx = new NginxProvider({
+    paths,
+    ...config.nginx,
+    executor,
+    provisionLock: config.provisionLock,
+  });
   return { routing: nginx, ssl: nginx };
 }
 

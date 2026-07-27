@@ -28,7 +28,13 @@ import { randomBytes, X509Certificate, createPrivateKey } from "node:crypto";
 import { promisify } from "node:util";
 import { dirname, join } from "node:path";
 
-import type { CommandExecutor, ManualCert, RouteConfig, SslResult } from "../types";
+import type {
+  CommandExecutor,
+  ManualCert,
+  ProvisionLock,
+  RouteConfig,
+  SslResult,
+} from "../types";
 import type { RoutingProvider, SslProvider } from "./types";
 import { LUA_LOGGER_PATH, RULES_GUARD_PATH, luaSourceAvailable, buildReloadCommand, detectOpenRestyPaths, ACME_HTTP01_PORT, ACME_CHALLENGE_LOCATION, type OpenRestyPaths } from "./openresty-lua";
 import { safeErrorMessage, sanitizeProxySettings, PROXY_GZIP_TYPES, type ProxySettings } from "@repo/core";
@@ -179,6 +185,11 @@ export interface NginxProviderOptions {
    * When omitted, uses node:fs directly (local).
    */
   executor?: CommandExecutor;
+  /**
+   * Serializes shared OpenResty mutations across workers/replicas managing the
+   * same host. The API injects its server-scoped in-process + advisory lock.
+   */
+  provisionLock?: ProvisionLock;
 }
 
 const DEFAULT_CERT_DIR = "/etc/letsencrypt/live";
@@ -279,6 +290,7 @@ export class NginxProvider implements RoutingProvider, SslProvider {
   private readonly certDir: string;
   private readonly certbotStateDir: string | undefined;
   private readonly executor: CommandExecutor | null;
+  private readonly provisionLock: ProvisionLock | undefined;
   private reloadCommand: string;
 
   constructor(opts: NginxProviderOptions) {
@@ -289,6 +301,7 @@ export class NginxProvider implements RoutingProvider, SslProvider {
       opts.certDir ??
       (this.certbotStateDir ? join(this.certbotStateDir, "config", "live") : DEFAULT_CERT_DIR);
     this.executor = opts.executor ?? null;
+    this.provisionLock = opts.provisionLock;
     this.reloadCommand = buildReloadCommand(opts.paths);
   }
 
@@ -450,6 +463,17 @@ export class NginxProvider implements RoutingProvider, SslProvider {
    * via provisionCert).
    */
   async registerRoute(route: RouteConfig): Promise<void> {
+    const register = () => this.registerRouteUnlocked(route);
+    return this.provisionLock ? this.provisionLock.run(register) : register();
+  }
+
+  /**
+   * The whole route + shared HTTPS fallback transaction runs inside the
+   * server-scoped provision lock when one is available. Keeping snapshot,
+   * writes, validation/reload, and rollback in one critical section prevents a
+   * concurrent registration from restoring stale `_default-https.conf` state.
+   */
+  private async registerRouteUnlocked(route: RouteConfig): Promise<void> {
     assertValidDomain(route.domain);
     await this._mkdir(this.sitesDir);
 
