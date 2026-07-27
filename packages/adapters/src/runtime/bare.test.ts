@@ -1,5 +1,30 @@
 import { describe, expect, test } from "vitest";
-import { BareRuntime } from "./bare";
+import { BareRuntime, resolveStaticReleaseBase, STATIC_RELEASE_BASE } from "./bare";
+
+describe("resolveStaticReleaseBase", () => {
+  test("uses the established /opt default when no override is configured", () => {
+    expect(resolveStaticReleaseBase({ OPENSHIP_STATIC_RELEASE_BASE: undefined })).toBe(
+      STATIC_RELEASE_BASE,
+    );
+  });
+
+  test("accepts an operator-owned absolute directory and trims trailing slashes", () => {
+    expect(
+      resolveStaticReleaseBase({
+        OPENSHIP_STATIC_RELEASE_BASE: "/home/deploy/.openship/static///",
+      }),
+    ).toBe("/home/deploy/.openship/static");
+  });
+
+  test.each(["relative/static", "/", "/tmp/static\ninjected"])(
+    "rejects unsafe override %j",
+    (value) => {
+      expect(() =>
+        resolveStaticReleaseBase({ OPENSHIP_STATIC_RELEASE_BASE: value }),
+      ).toThrow(/safe absolute directory/);
+    },
+  );
+});
 
 // C3 — resolveStaticRoot becomes OpenResty's `root <dir>;`. It MUST stay inside
 // the deployment workDir; an absolute or ../-traversing outputDirectory would

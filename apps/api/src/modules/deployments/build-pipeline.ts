@@ -22,7 +22,7 @@ import {
   BuildLogger,
   CloudRuntime,
   DockerRuntime,
-  STATIC_RELEASE_BASE,
+  resolveStaticReleaseBase,
   DEFAULT_BUILD_RESOURCE_CONFIG,
   ensurePortAvailable,
   allocateHostPort,
@@ -834,7 +834,7 @@ async function executeBuildAndDeploy(project: Project, dep: Deployment, buildSes
         // buildMode is derived from runtime.name === "docker", so the cast is sound.
         buildResult = await (runtime as DockerRuntime).buildStaticToHost(
           buildConfig,
-          `${STATIC_RELEASE_BASE}/.builds/${buildSessionId}`,
+          `${resolveStaticReleaseBase()}/.builds/${buildSessionId}`,
           logger,
         );
       } else {
@@ -1158,7 +1158,7 @@ async function executeServerDeploy(phase: DeployPhaseInputs): Promise<void> {
   const isStaticFileServe = phase.deployRouting.deployMode === "static-file-serve";
   const staticServeRuntime = isStaticFileServe
     ? new BareRuntime({
-        workDir: STATIC_RELEASE_BASE,
+        workDir: resolveStaticReleaseBase(),
         executor: phase.targetExecutor ?? undefined,
       })
     : null;

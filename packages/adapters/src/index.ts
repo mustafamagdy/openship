@@ -68,7 +68,12 @@ export {
   type ImageTransferOptions,
   type ImageTransferResult,
 } from "./runtime/image-transfer";
-export { BareRuntime, STATIC_RELEASE_BASE, type BareRuntimeOptions } from "./runtime/bare";
+export {
+  BareRuntime,
+  STATIC_RELEASE_BASE,
+  resolveStaticReleaseBase,
+  type BareRuntimeOptions,
+} from "./runtime/bare";
 export {
   CloudRuntime,
   type CloudAdminProxy,
