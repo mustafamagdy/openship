@@ -91,8 +91,8 @@ describe("NginxProvider config generation", () => {
     expect(JSON.parse(sidecar!)).toMatchObject({ domain: "app.example.com", targetUrl: "http://127.0.0.1:3009" });
   });
 
-  test("proxy route WITH cert → 80→443 redirect + ssl server", async () => {
-    const { nginx, conf } = setup({ certDomains: ["app.example.com"] });
+  test("proxy route WITH cert → 80→443 redirect + ssl server + HTTPS 404 catch-all", async () => {
+    const { nginx, conf, files } = setup({ certDomains: ["app.example.com"] });
     await nginx.registerRoute(PROXY);
     const c = conf("app-example-com")!;
     expect(c).toContain("return 301 https://$server_name$request_uri;");
@@ -100,6 +100,14 @@ describe("NginxProvider config generation", () => {
     expect(c).toContain("ssl_certificate /etc/letsencrypt/live/app.example.com/fullchain.pem;");
     expect(c).toContain("ssl_certificate_key /etc/letsencrypt/live/app.example.com/privkey.pem;");
     expect(c).toContain("proxy_pass http://127.0.0.1:3009;");
+
+    const fallback = files.get(`${SITES}/_default-https.conf`);
+    expect(fallback).toContain("listen 443 ssl default_server;");
+    expect(fallback).toContain("server_name _;");
+    expect(fallback).toContain("return 404;");
+    expect(fallback).toContain(
+      "ssl_certificate /etc/letsencrypt/live/app.example.com/fullchain.pem;",
+    );
   });
 
   test("static route → root + try_files, app is not proxied", async () => {
@@ -178,6 +186,18 @@ describe("NginxProvider config generation", () => {
     await expect(nginx.registerRoute(PROXY)).rejects.toThrow();
     // Rolled back — the bad block did not persist.
     expect(conf("app-example-com")).toBe("# PRIOR GOOD CONFIG");
+  });
+
+  test("a failed reload rolls the HTTPS catch-all back with the route", async () => {
+    const { nginx, files } = setup({
+      failReload: true,
+      certDomains: ["app.example.com"],
+    });
+    files.set(`${SITES}/_default-https.conf`, "# PRIOR HTTPS DEFAULT");
+
+    await expect(nginx.registerRoute(PROXY)).rejects.toThrow();
+
+    expect(files.get(`${SITES}/_default-https.conf`)).toBe("# PRIOR HTTPS DEFAULT");
   });
 });
 
