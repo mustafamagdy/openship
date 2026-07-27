@@ -2,11 +2,11 @@
   "$comment": "THIS FILE IS THE UPGRADE-PROMPT GATE. A newer release does NOT raise the in-app banner by itself — most releases ship silently as 'latest' (still discoverable in Settings → Updates and the home Updates block, with an Update action). To actively PROMPT users to upgrade for a specific release, add an advisory entry here: severity 'recommended' or 'critical' raises the top banner; 'info' is a quiet mention only. Keep it minimal — add an entry ONLY for releases worth interrupting people for (security, data-loss, migration, major features). Version-targeted, shown in the desktop app + dashboard, PULLED by clients from this file PINNED TO THE LATEST RELEASE TAG in their configured release repository — commits to main are invisible until a version ships. Each entry: { id, severity: critical|recommended|info, affects: semver range e.g. \"<=0.1.8\", title, message, action?: { label, kind: update|open-url, url? } }. Critical advisories always surface once even if notifications are muted.",
   "advisories": [
     {
-      "id": "update-0.4.4",
+      "id": "update-0.4.5",
       "severity": "recommended",
-      "affects": "<0.4.4",
-      "title": "Update to Openship 0.4.4",
-      "message": "Openship 0.4.4 lets unprivileged server agents use an operator-owned static release directory, and includes the registered-subdomain TLS and unknown-host 404 fixes from 0.4.3.",
+      "affects": "<0.4.5",
+      "title": "Update to Openship 0.4.5",
+      "message": "Openship 0.4.5 exposes build commands and output directories for static projects, supports operator-owned static release directories, provisions registered-subdomain TLS, and returns 404 for unknown hosts.",
       "action": {
         "label": "Update now",
         "kind": "update"
