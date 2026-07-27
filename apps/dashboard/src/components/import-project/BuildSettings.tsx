@@ -57,7 +57,12 @@ const BuildSettings: React.FC<BuildSettingsProps> = ({
   const [advancedOpen, setAdvancedOpen] = useState(false);
 
   const buildData = mode === 'advanced' ? externalBuildData : config?.options;
-  const needsBuild = config?.framework !== "node" && config?.framework !== "static";
+  // Static can mean either "copy the repository as-is" or "build static
+  // artifacts first" (for example `bun run build` → `dist`). When Build is
+  // enabled, static projects must be able to set both the command and output
+  // directory. Hiding these fields made a valid static pipeline impossible to
+  // configure and silently served the source directory instead.
+  const needsBuild = config?.framework !== "node";
 
   const hasBuild = buildData?.hasBuild !== false;
   const hasServer = !!buildData?.hasServer;
