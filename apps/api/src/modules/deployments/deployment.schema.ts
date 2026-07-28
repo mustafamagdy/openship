@@ -112,6 +112,21 @@ export const BuildAccessBody = Type.Object({
     }),
   ),
   serverId: Type.Optional(Type.String({ description: "Target server id when deployTarget='server'." })),
+  deploymentEngine: Type.Optional(
+    Type.Union([Type.Literal("native"), Type.Literal("kubernetes")], {
+      description:
+        "Runtime activation engine. Kubernetes builds an OCI image on the selected build target, then deploys it to kubernetesServerId.",
+    }),
+  ),
+  kubernetesServerId: Type.Optional(
+    Type.String({
+      description:
+        "Managed server whose SSH context has kubectl access to the destination cluster.",
+    }),
+  ),
+  kubernetesReplicas: Type.Optional(
+    Type.Integer({ minimum: 1, maximum: 50, description: "Desired Kubernetes replica count." }),
+  ),
   runtimeMode: Type.Optional(Type.Union([Type.Literal("bare"), Type.Literal("docker")])),
   serviceDeploymentMode: Type.Optional(Type.Union([Type.Literal("services"), Type.Literal("single")])),
   services: Type.Optional(

@@ -786,6 +786,14 @@ export function useDeploymentBuild(
         // Only a server target uses serverId — never let a stale id ride along
         // with a cloud/local deploy (backend gates it too, but be explicit).
         serverId: config.deployTarget === "server" ? config.serverId : undefined,
+        deploymentEngine:
+          config.deploymentEngine === "kubernetes" ? "kubernetes" : undefined,
+        kubernetesServerId:
+          config.deploymentEngine === "kubernetes" ? config.serverId : undefined,
+        kubernetesReplicas:
+          config.deploymentEngine === "kubernetes"
+            ? Math.max(1, config.kubernetesReplicas ?? 1)
+            : undefined,
         // Per-deploy git credential forwarding — only sent for a server target
         // (the only build that clones on-host). The API re-checks desktop +
         // server-build before honoring it.

@@ -254,6 +254,10 @@ export interface DeploymentConfig {
   deployTarget: DeployTarget;
   /** Which server to deploy to when deployTarget === "server" */
   serverId?: string;
+  /** Activate the built image natively on the target or through Kubernetes. */
+  deploymentEngine?: "native" | "kubernetes";
+  /** Desired Kubernetes pod replica count. */
+  kubernetesReplicas?: number;
   /**
    * "None" routing: deploy with NO public URL (internal / port-only). When true
    * the deploy sends `publicEndpoints: []` regardless of what's staged, and the
@@ -344,6 +348,8 @@ export const DEFAULT_CONFIG: DeploymentConfig = {
   uploadSessionId: undefined,
   buildStrategy: "server",
   deployTarget: "cloud",
+  deploymentEngine: "native",
+  kubernetesReplicas: 1,
   runtimeMode: "bare",
   projectType: "app",
   framework: "nextjs",
