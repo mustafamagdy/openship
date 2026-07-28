@@ -192,6 +192,12 @@ export interface DeploymentConfigSnapshot {
   deployTarget?: DeployTarget;
   /** Target server ID when deployTarget is "server" */
   serverId?: string;
+  /** Activate the built OCI image through the native runtime or Kubernetes. */
+  deploymentEngine?: "native" | "kubernetes";
+  /** Managed server whose SSH context has kubectl access to the cluster. */
+  kubernetesServerId?: string;
+  /** Desired pod replicas for Kubernetes deployments. */
+  kubernetesReplicas?: number;
   /** Runtime mode: "bare" (direct process) or "docker" (container-based) */
   runtimeMode?: "bare" | "docker";
   /**
@@ -847,6 +853,9 @@ export async function requestBuildAccess(ctx: RequestContext, input: BuildAccess
     buildStrategy,
     deployTarget,
     serverId,
+    deploymentEngine,
+    kubernetesServerId,
+    kubernetesReplicas,
     runtimeMode,
     serviceDeploymentMode,
     services,
@@ -964,6 +973,42 @@ export async function requestBuildAccess(ctx: RequestContext, input: BuildAccess
   snapshot.serverId = resolvedTarget.serverId;
   snapshot.runtimeMode = resolvedTarget.runtimeMode;
 
+  if (deploymentEngine === "kubernetes") {
+    if (!kubernetesServerId) {
+      throw new AppError(
+        "Select the managed server that has kubectl access to the Kubernetes cluster.",
+        400,
+      );
+    }
+    const clusterServer = await repos.server.getInOrganization(
+      kubernetesServerId,
+      ctx.organizationId,
+    );
+    if (!clusterServer) {
+      throw new AppError("Kubernetes cluster server not found in this organization.", 404);
+    }
+    if (requestedServiceMode === "services") {
+      throw new AppError(
+        "The Kubernetes MVP currently supports single-app deployments only.",
+        400,
+      );
+    }
+    if (!snapshot.hasServer) {
+      throw new AppError(
+        "The Kubernetes MVP currently supports long-running web applications only; deploy static sites with the native edge target.",
+        400,
+      );
+    }
+    snapshot.deploymentEngine = "kubernetes";
+    snapshot.kubernetesServerId = kubernetesServerId;
+    snapshot.kubernetesReplicas = Math.min(Math.max(kubernetesReplicas ?? 1, 1), 50);
+    // Kubernetes consumes an OCI image. Build it with the orchestrator's Docker
+    // runtime; do not resolve the cluster host as the Docker build/deploy target.
+    snapshot.deployTarget = "local";
+    snapshot.serverId = undefined;
+    snapshot.runtimeMode = "docker";
+  }
+
   // Folder-upload: point this deploy at the source the browser uploaded.
   //   - cloud (oblien-direct): adopt the pre-provisioned workspace, skip clone.
   //   - self-hosted (api-relay): build from the staging dir like a local folder.
@@ -1007,7 +1052,9 @@ export async function requestBuildAccess(ctx: RequestContext, input: BuildAccess
   // resource burn). See settingsService.resolveStrategy priority chain.
   snapshot.buildStrategy = await settingsService.resolveStrategy(
     snapshot.framework,
-    buildStrategy ?? snapshot.buildStrategy,
+    snapshot.deploymentEngine === "kubernetes"
+      ? "local"
+      : buildStrategy ?? snapshot.buildStrategy,
     { deployTarget: snapshot.deployTarget },
   );
   // Per-deploy git credential forwarding choice (desktop-only; default off).

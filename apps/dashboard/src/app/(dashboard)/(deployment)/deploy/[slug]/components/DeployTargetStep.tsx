@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useEffect, useState, useCallback, useRef } from "react";
-import { Server, Cloud, Cpu, ArrowRight, Pencil, ChevronDown, ChevronUp, CheckCircle2, Loader2, Plus, Settings2, Zap, Globe, GitBranch, Search, ShieldAlert, ShieldCheck } from "lucide-react";
+import { Server, Cloud, Cpu, ArrowRight, Pencil, ChevronDown, ChevronUp, CheckCircle2, Loader2, Plus, Settings2, Zap, Globe, GitBranch, Search, ShieldAlert, ShieldCheck, Boxes } from "lucide-react";
 import { BlurIp } from "@/components/BlurIp";
 import { useDeployment } from "@/context/DeploymentContext";
 import { usesServiceDeployment } from "@/context/deployment/types";
@@ -1089,6 +1089,7 @@ const DeployTargetStep: React.FC<DeployTargetStepProps> = ({ targets, onContinue
     if (target === "cloud") {
       updates.serverId = undefined;
       updates.buildStrategy = "server";
+      updates.deploymentEngine = "native";
     }
     if (target === "server") {
       // Restore the previously-chosen server (or auto-pick the only one) so the
@@ -1555,6 +1556,57 @@ const DeployTargetStep: React.FC<DeployTargetStepProps> = ({ targets, onContinue
                 )}
               </OptionCard>
             ))}
+            {config.deployTarget === "server" &&
+              !!config.serverId &&
+              config.options.hasServer &&
+              config.projectType !== "services" &&
+              config.serviceDeploymentMode !== "services" && (
+                <div className="rounded-xl border border-border/60 bg-card px-4 py-4 space-y-3">
+                  <label className="flex items-start gap-3 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={config.deploymentEngine === "kubernetes"}
+                      onChange={(event) =>
+                        updateConfig({
+                          deploymentEngine: event.target.checked ? "kubernetes" : "native",
+                          kubernetesReplicas: config.kubernetesReplicas ?? 1,
+                        })
+                      }
+                      className="mt-1 size-4 rounded border-border text-primary focus:ring-primary/30"
+                    />
+                    <span className="min-w-0">
+                      <span className="flex items-center gap-2 text-sm font-medium text-foreground">
+                        <Boxes className="size-4 text-primary" />
+                        Deploy through Kubernetes
+                      </span>
+                      <span className="mt-1 block text-xs leading-relaxed text-muted-foreground">
+                        This server must have kubectl access to the cluster. OpenShip builds and
+                        publishes an immutable image, then performs a rolling deployment.
+                      </span>
+                    </span>
+                  </label>
+                  {config.deploymentEngine === "kubernetes" && (
+                    <label className="flex items-center justify-between gap-4 border-t border-border/50 pt-3">
+                      <span className="text-sm text-muted-foreground">Replicas</span>
+                      <input
+                        type="number"
+                        min={1}
+                        max={50}
+                        value={config.kubernetesReplicas ?? 1}
+                        onChange={(event) =>
+                          updateConfig({
+                            kubernetesReplicas: Math.min(
+                              50,
+                              Math.max(1, Number(event.target.value) || 1),
+                            ),
+                          })
+                        }
+                        className="w-20 rounded-lg border border-border bg-background px-3 py-1.5 text-sm"
+                      />
+                    </label>
+                  )}
+                </div>
+              )}
           </div>
           {/* External add-server button only when the picker (which now owns it)
               isn't shown — i.e. cloud selected, or the single-server case. */}

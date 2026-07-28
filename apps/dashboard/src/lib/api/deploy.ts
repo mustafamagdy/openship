@@ -236,6 +236,9 @@ export const deployApi = {
     buildStrategy?: "server" | "local";
     deployTarget?: "local" | "server" | "cloud";
     serverId?: string;
+    deploymentEngine?: "native" | "kubernetes";
+    kubernetesServerId?: string;
+    kubernetesReplicas?: number;
     /** Folder-upload deploy: adopt the uploaded source (workspace / staging dir). */
     uploadSessionId?: string;
     runtimeMode?: "bare" | "docker";
