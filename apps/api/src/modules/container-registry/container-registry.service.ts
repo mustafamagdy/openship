@@ -3,6 +3,7 @@ import { ValidationError } from "@repo/core";
 import { DockerRuntime, type RegistryAuthConfig, type BuildLogger } from "@repo/adapters";
 import type { RequestContext } from "../../lib/request-context";
 import { decrypt, encrypt } from "../../lib/encryption";
+import { validateRegistryCredentials } from "./registry-auth";
 
 export interface RegistryConnectionInput {
   name?: string;
@@ -55,29 +56,6 @@ function normalizeName(input: string | undefined): string {
   return value;
 }
 
-async function validateRegistryCredentials(
-  host: string,
-  username: string,
-  token: string,
-): Promise<void> {
-  let response: Response;
-  try {
-    response = await fetch(`https://${host}/v2/`, {
-      headers: {
-        Authorization: `Basic ${Buffer.from(`${username}:${token}`, "utf8").toString("base64")}`,
-        "User-Agent": "openship",
-      },
-      signal: AbortSignal.timeout(15_000),
-    });
-  } catch {
-    throw new ValidationError(`Could not reach the OCI registry at ${host}.`);
-  }
-  if (!response.ok) {
-    throw new ValidationError(
-      `Registry authentication failed at ${host} (${response.status}). Check the username and token scopes.`,
-    );
-  }
-}
 
 export async function listConnections(ctx: Pick<RequestContext, "organizationId">) {
   return (
