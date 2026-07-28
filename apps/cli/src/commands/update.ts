@@ -19,7 +19,15 @@
 import { Command } from "commander";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  copyFileSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  renameSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { resolveCliUpdatePlan, cliInstallCommand, type CliPackageManager } from "@repo/core";
@@ -73,7 +81,9 @@ async function runSourceUpdate(source: SourceInstall, opts: UpdateOpts): Promise
     } else if (remote == null) {
       info(`On source ${source.ref} @ ${current} — couldn't reach ${source.repo} to compare.`);
     } else if (behind) {
-      info(`Source update available on ${source.ref}: ${current} → ${remote}. Run \`openship update\`.`);
+      info(
+        `Source update available on ${source.ref}: ${current} → ${remote}. Run \`openship update\`.`,
+      );
     } else {
       ok(`Up to date on source ${source.ref} (${current}).`);
     }
@@ -213,16 +223,18 @@ export const updateCommand = new Command("update")
       }
     }
 
-    const argv = pm === "bun" ? ["add", "-g", installRef] : ["install", "-g", installRef];
     const installDescription =
       source.repo === UPSTREAM_RELEASE_REPO
         ? cliInstallCommand(pm, latest)
         : `${pm} install verified ${source.repo} release bundle`;
     info(`Updating v${current} → v${latest} (${installDescription})...`);
-    const res = spawnSync(pm, argv, {
-      stdio: "inherit",
-      shell: process.platform === "win32",
-    });
+    const res =
+      pm === "bun" && source.repo !== UPSTREAM_RELEASE_REPO
+        ? installForkBundleWithBun(installRef, latest)
+        : spawnSync(pm, pm === "bun" ? ["add", "-g", installRef] : ["install", "-g", installRef], {
+            stdio: "inherit",
+            shell: process.platform === "win32",
+          });
     cleanup?.();
     if (res.status !== 0) {
       err(
@@ -252,9 +264,13 @@ export const updateCommand = new Command("update")
           source,
         });
       } else if (pulled) {
-        ok(`Updated to v${latest} and pulled the new images — the compose stack is on the new version.`);
+        ok(
+          `Updated to v${latest} and pulled the new images — the compose stack is on the new version.`,
+        );
       } else {
-        err(`Updated the CLI to v${latest}, but \`docker compose pull\` failed. Run \`openship up\` to retry.`);
+        err(
+          `Updated the CLI to v${latest}, but \`docker compose pull\` failed. Run \`openship up\` to retry.`,
+        );
         process.exitCode = 1;
       }
       return;
@@ -292,9 +308,9 @@ export const updateCommand = new Command("update")
 async function waitForApiHealth(): Promise<boolean> {
   let port = 4000;
   try {
-    const ports = JSON.parse(
-      readFileSync(join(homedir(), ".openship", "ports.json"), "utf8"),
-    ) as { api?: unknown };
+    const ports = JSON.parse(readFileSync(join(homedir(), ".openship", "ports.json"), "utf8")) as {
+      api?: unknown;
+    };
     if (typeof ports.api === "number") port = ports.api;
   } catch {
     // Fresh/legacy installs may not have a remembered port; use the default.
@@ -338,4 +354,71 @@ async function downloadForkCli(
   const path = join(dir, name);
   writeFileSync(path, bytes, { mode: 0o600 });
   return { path, cleanup: () => rmSync(dir, { recursive: true, force: true }) };
+}
+
+export function resolveBunGlobalDir(
+  env: NodeJS.ProcessEnv = process.env,
+  home = homedir(),
+): string {
+  if (env.BUN_INSTALL_GLOBAL_DIR) return env.BUN_INSTALL_GLOBAL_DIR;
+  if (env.BUN_INSTALL) return join(env.BUN_INSTALL, "install", "global");
+  if (env.XDG_CACHE_HOME) return join(env.XDG_CACHE_HOME, ".bun", "install", "global");
+  return join(home, ".bun", "install", "global");
+}
+
+export function updateBunGlobalManifest(globalDir: string, installRef: string): string | null {
+  mkdirSync(globalDir, { recursive: true });
+  const manifestPath = join(globalDir, "package.json");
+  let previous: string | null = null;
+  let manifest: Record<string, unknown> = { private: true };
+  try {
+    previous = readFileSync(manifestPath, "utf8");
+    manifest = JSON.parse(previous) as Record<string, unknown>;
+  } catch (error) {
+    if (error instanceof SyntaxError) {
+      throw new Error(`Bun global manifest is invalid JSON: ${manifestPath}`);
+    }
+  }
+
+  const dependencies =
+    manifest.dependencies &&
+    typeof manifest.dependencies === "object" &&
+    !Array.isArray(manifest.dependencies)
+      ? { ...(manifest.dependencies as Record<string, unknown>) }
+      : {};
+  dependencies.openship = installRef;
+  manifest.dependencies = dependencies;
+
+  const temporaryPath = `${manifestPath}.openship-update`;
+  writeFileSync(temporaryPath, `${JSON.stringify(manifest, null, 2)}\n`, { mode: 0o600 });
+  renameSync(temporaryPath, manifestPath);
+  return previous;
+}
+
+function restoreBunGlobalManifest(globalDir: string, previous: string | null): void {
+  const manifestPath = join(globalDir, "package.json");
+  if (previous == null) {
+    rmSync(manifestPath, { force: true });
+    return;
+  }
+  const temporaryPath = `${manifestPath}.openship-restore`;
+  writeFileSync(temporaryPath, previous, { mode: 0o600 });
+  renameSync(temporaryPath, manifestPath);
+}
+
+function installForkBundleWithBun(bundlePath: string, version: string) {
+  const releaseDir = join(homedir(), ".openship", "cache", "cli-releases");
+  mkdirSync(releaseDir, { recursive: true });
+  const durableBundlePath = join(releaseDir, `openship-cli-v${version.replace(/^v/, "")}.tgz`);
+  copyFileSync(bundlePath, durableBundlePath);
+
+  const globalDir = resolveBunGlobalDir();
+  const previousManifest = updateBunGlobalManifest(globalDir, durableBundlePath);
+  const result = spawnSync("bun", ["install"], {
+    cwd: globalDir,
+    stdio: "inherit",
+    shell: process.platform === "win32",
+  });
+  if (result.status !== 0) restoreBunGlobalManifest(globalDir, previousManifest);
+  return result;
 }
