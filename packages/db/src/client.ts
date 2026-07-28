@@ -40,24 +40,8 @@ export function getPgPool(): Pool {
   return _pgPool;
 }
 
-/** Live PGlite client, kept so closeDb() can close it and create online backups. */
-let _pgliteClient:
-  | {
-      close(): Promise<void>;
-      dumpDataDir(compression?: "auto" | "gzip" | "none"): Promise<File | Blob>;
-    }
-  | undefined;
-
-/**
- * Produce a consistent, live backup of the embedded PGlite data directory.
- * The returned gzip is intended for PGlite's `loadDataDir` restore option.
- */
-export async function dumpPgliteDataDir(): Promise<File | Blob> {
-  if (_driver !== "pglite" || !_pgliteClient) {
-    throw new Error("Online instance backup is available only for embedded PGlite");
-  }
-  return _pgliteClient.dumpDataDir("gzip");
-}
+/** Live PGlite client, kept so closeDb() can close it and free the lock. */
+let _pgliteClient: { close(): Promise<void> } | undefined;
 
 /**
  * Release all database resources. For PGlite this closes the WASM instance and
@@ -92,7 +76,8 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 // baked into a `bun build --compile` binary (the desktop app), where the .sql
 // files aren't present. OPENSHIP_MIGRATIONS_DIR points that build at the
 // migrations shipped alongside the binary as a data asset.
-const MIGRATIONS_DIR = process.env.OPENSHIP_MIGRATIONS_DIR ?? resolve(__dirname, "../drizzle");
+const MIGRATIONS_DIR =
+  process.env.OPENSHIP_MIGRATIONS_DIR ?? resolve(__dirname, "../drizzle");
 
 // ─── Data directory ──────────────────────────────────────────────────────────
 
@@ -111,10 +96,9 @@ function resolvePgliteDataDir(): string {
     // Expand a leading ~ ourselves: env files (loaded via `node --env-file`) do
     // NOT shell-expand, so `PGLITE_DATA_DIR=~/.openship/data-saas` would
     // otherwise resolve literally. `resolve` handles relative paths from cwd.
-    const expanded =
-      explicit === "~" || explicit.startsWith("~/")
-        ? resolve(home, explicit.slice(1).replace(/^\/+/, ""))
-        : explicit;
+    const expanded = explicit === "~" || explicit.startsWith("~/")
+      ? resolve(home, explicit.slice(1).replace(/^\/+/, ""))
+      : explicit;
     return resolve(expanded);
   }
 
@@ -256,7 +240,6 @@ async function createPgliteClient(): Promise<Database> {
   // instance is fully isolated per process and needs no lock/dir.
   if (process.env.VITEST || process.env.NODE_ENV === "test") {
     const memClient = new PGlite("memory://");
-    _pgliteClient = memClient;
     const memDb = drizzle(memClient, { schema });
     await migrate(memDb, { migrationsFolder: MIGRATIONS_DIR });
     return memDb;

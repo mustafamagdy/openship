@@ -27,7 +27,6 @@ import * as serverModules from "./server-modules.controller";
 import * as migration from "./migration/migration.controller";
 import * as dataTransfer from "./data-transfer/data-transfer.controller";
 import * as systemHealth from "./system-health.controller";
-import * as instanceBackup from "./instance-backup.controller";
 
 const r = secureRouter(new Hono(), {
   module: "system",
@@ -37,149 +36,28 @@ const r = secureRouter(new Hono(), {
 r.use("*", localOnly);
 
 /* ── Onboarding (first-run only, no auth) ───────────────────────── */
-r.public(
-  "get",
-  "/onboarding",
-  { reason: "First-run onboarding status check - no user exists yet" },
-  setup.onboardingStatus,
-);
-r.public(
-  "post",
-  "/onboarding",
-  { reason: "First-run onboarding setup - creates initial admin user" },
-  setup.onboardingSetup,
-);
-r.public(
-  "post",
-  "/onboarding/test-connection",
-  { reason: "First-run SSH reachability test - no user exists yet; gated to no-servers instance" },
-  serverCheck.onboardingTestConnection,
-);
+r.public("get", "/onboarding", { reason: "First-run onboarding status check - no user exists yet" }, setup.onboardingStatus);
+r.public("post", "/onboarding", { reason: "First-run onboarding setup - creates initial admin user" }, setup.onboardingSetup);
+r.public("post", "/onboarding/test-connection", { reason: "First-run SSH reachability test - no user exists yet; gated to no-servers instance" }, serverCheck.onboardingTestConnection);
 
 /* ── Internal routes (Electron → API with shared token) ─────────── */
-r.public(
-  "post",
-  "/setup",
-  { reason: "Electron desktop client setup - protected by internalAuth shared token" },
-  internalAuth,
-  setup.setup,
-);
-r.public(
-  "get",
-  "/setup",
-  { reason: "Electron desktop client setup read - protected by internalAuth shared token" },
-  internalAuth,
-  setup.getSetup,
-);
-r.public(
-  "get",
-  "/health",
-  {
-    reason:
-      "CLI `openship doctor` — internal-token gated deep health rollup (DB liveness/migrations + project/service counts); the public /api/health is only a liveness stub",
-  },
-  internalAuth,
-  systemHealth.systemHealth,
-);
-r.public(
-  "get",
-  "/instance-backup",
-  {
-    reason:
-      "Loopback-only live PGlite backup — internal-token gated because the archive contains all instance data and encrypted secrets",
-  },
-  internalAuth,
-  instanceBackup.downloadInstanceBackup,
-);
-r.public(
-  "post",
-  "/bootstrap-admin",
-  {
-    reason:
-      "CLI first-admin creation — internal-token gated, one-shot before any admin exists (openship setup)",
-  },
-  internalAuth,
-  setup.bootstrapAdmin,
-);
-r.public(
-  "post",
-  "/reset-admin-password",
-  {
-    reason:
-      "CLI password recovery — internal-token gated; resets the local admin login for a locked-out operator (openship reset-admin-password)",
-  },
-  internalAuth,
-  setup.resetAdminPassword,
-);
-r.public(
-  "post",
-  "/invite-signup",
-  {
-    reason:
-      "Self-host invited signup — authorized by the unguessable invitation id (token) in the emailed link, NOT a session; creates the account for the invitation's own email. Public + rate-limited because the invitee isn't logged in yet.",
-  },
-  rateLimiterFor("auth-tight"),
-  setup.inviteSignup,
-);
+r.public("post", "/setup", { reason: "Electron desktop client setup - protected by internalAuth shared token" }, internalAuth, setup.setup);
+r.public("get", "/setup", { reason: "Electron desktop client setup read - protected by internalAuth shared token" }, internalAuth, setup.getSetup);
+r.public("get", "/health", { reason: "CLI `openship doctor` — internal-token gated deep health rollup (DB liveness/migrations + project/service counts); the public /api/health is only a liveness stub" }, internalAuth, systemHealth.systemHealth);
+r.public("post", "/bootstrap-admin", { reason: "CLI first-admin creation — internal-token gated, one-shot before any admin exists (openship setup)" }, internalAuth, setup.bootstrapAdmin);
+r.public("post", "/reset-admin-password", { reason: "CLI password recovery — internal-token gated; resets the local admin login for a locked-out operator (openship reset-admin-password)" }, internalAuth, setup.resetAdminPassword);
+r.public("post", "/invite-signup", { reason: "Self-host invited signup — authorized by the unguessable invitation id (token) in the emailed link, NOT a session; creates the account for the invitation's own email. Public + rate-limited because the invitee isn't logged in yet." }, rateLimiterFor("auth-tight"), setup.inviteSignup);
 
 /* ── Control-plane self-registration (CLI setup wizard) ─────────────
  * After bootstrap-admin, the wizard registers Openship itself as an app
  * (shows under Apps) + attaches its domain — free (Oblien edge) or custom
  * (OpenResty + Let's Encrypt, streamed). All internal-token gated. */
-r.public(
-  "get",
-  "/cloud-status",
-  { reason: "CLI setup — read Openship Cloud connection state; internal-token gated" },
-  internalAuth,
-  selfApp.cloudStatus,
-);
-r.public(
-  "post",
-  "/cloud-connect",
-  {
-    reason:
-      "CLI setup — finalize Openship Cloud PKCE handshake for a free domain; internal-token gated",
-  },
-  internalAuth,
-  selfApp.cloudConnect,
-);
-r.public(
-  "post",
-  "/self-register",
-  {
-    reason:
-      "CLI setup — register the control plane as an app + attach its domain; internal-token gated",
-  },
-  internalAuth,
-  selfApp.selfRegister,
-);
-r.public(
-  "get",
-  "/self-register/stream",
-  { reason: "CLI setup — SSE progress for custom-domain edge provisioning; internal-token gated" },
-  internalAuth,
-  selfApp.selfRegisterStream,
-);
-r.public(
-  "post",
-  "/self-edge/preflight",
-  {
-    reason:
-      "CLI setup — detect what owns ports 80/443 before installing OpenResty; internal-token gated",
-  },
-  internalAuth,
-  selfApp.selfEdgePreflight,
-);
-r.public(
-  "post",
-  "/edge/import-sites",
-  {
-    reason:
-      "CLI `openship up` (compose) — register sites migrated from a foreign proxy into the container edge (host stops the proxy pre-up; api re-serves via DockerEdgeExecutor); internal-token gated",
-  },
-  internalAuth,
-  selfApp.edgeImportSites,
-);
+r.public("get", "/cloud-status", { reason: "CLI setup — read Openship Cloud connection state; internal-token gated" }, internalAuth, selfApp.cloudStatus);
+r.public("post", "/cloud-connect", { reason: "CLI setup — finalize Openship Cloud PKCE handshake for a free domain; internal-token gated" }, internalAuth, selfApp.cloudConnect);
+r.public("post", "/self-register", { reason: "CLI setup — register the control plane as an app + attach its domain; internal-token gated" }, internalAuth, selfApp.selfRegister);
+r.public("get", "/self-register/stream", { reason: "CLI setup — SSE progress for custom-domain edge provisioning; internal-token gated" }, internalAuth, selfApp.selfRegisterStream);
+r.public("post", "/self-edge/preflight", { reason: "CLI setup — detect what owns ports 80/443 before installing OpenResty; internal-token gated" }, internalAuth, selfApp.selfEdgePreflight);
+r.public("post", "/edge/import-sites", { reason: "CLI `openship up` (compose) — register sites migrated from a foreign proxy into the container edge (host stops the proxy pre-up; api re-serves via DockerEdgeExecutor); internal-token gated" }, internalAuth, selfApp.edgeImportSites);
 
 /* ── Authenticated routes (dashboard settings page) ─────────────── */
 r.get("/settings", { tag: "settings:read" }, setup.getSetup);
@@ -200,18 +78,8 @@ r.delete("/settings", { tag: "settings:admin" }, requireRole("owner"), setup.del
 // GET returns only a MASKED config (no password) so it stays settings:read —
 // that keeps the "no email transport → set up SMTP" hint readable everywhere.
 r.get("/settings/email", { tag: "settings:read" }, setup.getEmailSettings);
-r.put(
-  "/settings/email",
-  { tag: "settings:write" },
-  requireRole("owner"),
-  setup.updateEmailSettings,
-);
-r.post(
-  "/settings/email/test",
-  { tag: "settings:write" },
-  requireRole("owner"),
-  setup.sendTestEmail,
-);
+r.put("/settings/email", { tag: "settings:write" }, requireRole("owner"), setup.updateEmailSettings);
+r.post("/settings/email/test", { tag: "settings:write" }, requireRole("owner"), setup.sendTestEmail);
 
 /* ── Zero-auth → local-auth upgrade (no session yet) ────────────── */
 r.public(
@@ -238,21 +106,13 @@ r.delete("/servers/:id", { tag: "server:admin" }, serversCtrl.deleteServer);
 /* ── Per-server rate limiting (OpenResty level) ─────────────────── */
 r.get("/servers/:id/rate-limit", { tag: "server:read" }, rateLimit.getRateLimit);
 r.patch("/servers/:id/rate-limit", { tag: "server:write" }, rateLimit.updateRateLimit);
-r.post(
-  "/servers/:id/ports/scan",
-  { tag: "server:read", readOnly: true },
-  serverCheck.scanExposedPorts,
-);
+r.post("/servers/:id/ports/scan", { tag: "server:read", readOnly: true }, serverCheck.scanExposedPorts);
 
 // ── Native-module versioning + migration (OpenResty, …). The `:id` server is
 //    the permission resource; handlers hard-guard cloud + org-scope. ──
 r.get("/servers/:id/modules", { tag: "server:read" }, serverModules.listServerModules);
 r.post("/servers/:id/modules/scan", { tag: "server:write" }, serverModules.scanServerModules);
-r.post(
-  "/servers/:id/modules/:module/apply",
-  { tag: "server:write" },
-  serverModules.applyServerModuleUpdate,
-);
+r.post("/servers/:id/modules/:module/apply", { tag: "server:write" }, serverModules.applyServerModuleUpdate);
 
 // ── Per-server GitHub auth (self-hosted): device-login token / PAT / SSH
 //    server-key / per-repo deploy-key. The `:id` server is the permission
@@ -262,11 +122,7 @@ r.post("/servers/:id/github/connect", { tag: "server:write" }, serverGithub.star
 r.get("/servers/:id/github/connect/poll", { tag: "server:read" }, serverGithub.pollConnect);
 r.put("/servers/:id/github/token", { tag: "server:write" }, serverGithub.putToken);
 r.post("/servers/:id/github/ssh-key", { tag: "server:write" }, serverGithub.generateSshKey);
-r.put(
-  "/servers/:id/github/deploy-key-mode",
-  { tag: "server:write" },
-  serverGithub.useDeployKeyMode,
-);
+r.put("/servers/:id/github/deploy-key-mode", { tag: "server:write" }, serverGithub.useDeployKeyMode);
 r.delete("/servers/:id/github", { tag: "server:write" }, serverGithub.disconnect);
 
 /* ── Port-forward tunnels (DESKTOP-only; handlers add assertDesktop) ─
@@ -321,25 +177,15 @@ r.post("/migration/switch-back", { tag: "settings:admin" }, migration.switchBack
  * admits admins/members (see lib/permission.ts), and this moves the
  * entire database including every org's data.
  */
-r.post(
-  "/data-transfer/export",
-  { tag: "settings:admin" },
-  requireRole("owner"),
-  dataTransfer.exportInstanceHandler,
-);
+r.post("/data-transfer/export", { tag: "settings:admin" }, requireRole("owner"), dataTransfer.exportInstanceHandler);
 r.use(
   "/data-transfer/import",
   bodyLimit({
     maxSize: 500_000_000,
-    onError: (c) =>
-      c.json({ error: "Import file exceeds the 500MB limit.", code: "PAYLOAD_TOO_LARGE" }, 413),
+    onError: (c) => c.json({ error: "Import file exceeds the 500MB limit.", code: "PAYLOAD_TOO_LARGE" }, 413),
   }),
 );
-r.post(
-  "/data-transfer/import",
-  { tag: "settings:admin" },
-  requireRole("owner"),
-  dataTransfer.importInstanceHandler,
-);
+r.post("/data-transfer/import", { tag: "settings:admin" }, requireRole("owner"), dataTransfer.importInstanceHandler);
 
 export const systemRoutes = r.hono;
+
