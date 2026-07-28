@@ -124,8 +124,12 @@ function detectPackageManager(override?: string): CliPackageManager {
   return hasBun ? "bun" : "npm";
 }
 
-export function packageManagerExecutable(pm: CliPackageManager): string {
-  return pm === "bun" && process.versions.bun ? process.execPath : pm;
+export function packageManagerExecutable(
+  pm: CliPackageManager,
+  bunVersion: string | undefined | null = process.versions.bun,
+  execPath = process.execPath,
+): string {
+  return pm === "bun" && bunVersion ? execPath : pm;
 }
 
 export const updateCommand = new Command("update")

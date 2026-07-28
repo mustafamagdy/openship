@@ -18,7 +18,10 @@ afterEach(() => {
 
 describe("Bun global fork updates", () => {
   it("uses the active Bun runtime even when bun is absent from PATH", () => {
-    expect(packageManagerExecutable("bun")).toBe(process.execPath);
+    expect(packageManagerExecutable("bun", "1.3.10", "/opt/bun/bin/bun")).toBe(
+      "/opt/bun/bin/bun",
+    );
+    expect(packageManagerExecutable("bun", null, "/usr/local/bin/node")).toBe("bun");
     expect(packageManagerExecutable("npm")).toBe("npm");
   });
 
