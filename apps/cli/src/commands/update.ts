@@ -118,8 +118,14 @@ async function runSourceUpdate(source: SourceInstall, opts: UpdateOpts): Promise
 /** Prefer bun (the curl installer uses `bun add -g`); fall back to npm. */
 function detectPackageManager(override?: string): CliPackageManager {
   if (override === "bun" || override === "npm") return override;
-  const hasBun = spawnSync("bun", ["--version"], { stdio: "ignore" }).status === 0;
+  const hasBun =
+    Boolean(process.versions.bun) ||
+    spawnSync("bun", ["--version"], { stdio: "ignore" }).status === 0;
   return hasBun ? "bun" : "npm";
+}
+
+export function packageManagerExecutable(pm: CliPackageManager): string {
+  return pm === "bun" && process.versions.bun ? process.execPath : pm;
 }
 
 export const updateCommand = new Command("update")
@@ -231,10 +237,14 @@ export const updateCommand = new Command("update")
     const res =
       pm === "bun" && source.repo !== UPSTREAM_RELEASE_REPO
         ? installForkBundleWithBun(installRef, latest)
-        : spawnSync(pm, pm === "bun" ? ["add", "-g", installRef] : ["install", "-g", installRef], {
-            stdio: "inherit",
-            shell: process.platform === "win32",
-          });
+        : spawnSync(
+            packageManagerExecutable(pm),
+            pm === "bun" ? ["add", "-g", installRef] : ["install", "-g", installRef],
+            {
+              stdio: "inherit",
+              shell: process.platform === "win32",
+            },
+          );
     cleanup?.();
     if (res.status !== 0) {
       err(
@@ -414,7 +424,7 @@ function installForkBundleWithBun(bundlePath: string, version: string) {
 
   const globalDir = resolveBunGlobalDir();
   const previousManifest = updateBunGlobalManifest(globalDir, durableBundlePath);
-  const result = spawnSync("bun", ["install"], {
+  const result = spawnSync(packageManagerExecutable("bun"), ["install"], {
     cwd: globalDir,
     stdio: "inherit",
     shell: process.platform === "win32",

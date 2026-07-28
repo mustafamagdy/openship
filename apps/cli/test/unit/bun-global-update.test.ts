@@ -2,7 +2,11 @@ import { afterEach, describe, expect, it } from "vitest";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { resolveBunGlobalDir, updateBunGlobalManifest } from "../../src/commands/update";
+import {
+  packageManagerExecutable,
+  resolveBunGlobalDir,
+  updateBunGlobalManifest,
+} from "../../src/commands/update";
 
 const temporaryDirectories: string[] = [];
 
@@ -13,6 +17,11 @@ afterEach(() => {
 });
 
 describe("Bun global fork updates", () => {
+  it("uses the active Bun runtime even when bun is absent from PATH", () => {
+    expect(packageManagerExecutable("bun")).toBe(process.execPath);
+    expect(packageManagerExecutable("npm")).toBe("npm");
+  });
+
   it("resolves Bun's documented global directory precedence", () => {
     expect(
       resolveBunGlobalDir(
