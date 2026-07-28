@@ -27,6 +27,7 @@ import * as serverModules from "./server-modules.controller";
 import * as migration from "./migration/migration.controller";
 import * as dataTransfer from "./data-transfer/data-transfer.controller";
 import * as systemHealth from "./system-health.controller";
+import * as instanceBackup from "./instance-backup.controller";
 
 const r = secureRouter(new Hono(), {
   module: "system",
@@ -44,6 +45,7 @@ r.public("post", "/onboarding/test-connection", { reason: "First-run SSH reachab
 r.public("post", "/setup", { reason: "Electron desktop client setup - protected by internalAuth shared token" }, internalAuth, setup.setup);
 r.public("get", "/setup", { reason: "Electron desktop client setup read - protected by internalAuth shared token" }, internalAuth, setup.getSetup);
 r.public("get", "/health", { reason: "CLI `openship doctor` — internal-token gated deep health rollup (DB liveness/migrations + project/service counts); the public /api/health is only a liveness stub" }, internalAuth, systemHealth.systemHealth);
+r.public("get", "/instance-backup", { reason: "Loopback-only live PGlite backup — internal-token gated because the archive contains all instance data and encrypted secrets" }, internalAuth, instanceBackup.downloadInstanceBackup);
 r.public("post", "/bootstrap-admin", { reason: "CLI first-admin creation — internal-token gated, one-shot before any admin exists (openship setup)" }, internalAuth, setup.bootstrapAdmin);
 r.public("post", "/reset-admin-password", { reason: "CLI password recovery — internal-token gated; resets the local admin login for a locked-out operator (openship reset-admin-password)" }, internalAuth, setup.resetAdminPassword);
 r.public("post", "/invite-signup", { reason: "Self-host invited signup — authorized by the unguessable invitation id (token) in the emailed link, NOT a session; creates the account for the invitation's own email. Public + rate-limited because the invitee isn't logged in yet." }, rateLimiterFor("auth-tight"), setup.inviteSignup);
@@ -188,4 +190,3 @@ r.use(
 r.post("/data-transfer/import", { tag: "settings:admin" }, requireRole("owner"), dataTransfer.importInstanceHandler);
 
 export const systemRoutes = r.hono;
-

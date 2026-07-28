@@ -40,8 +40,24 @@ export function getPgPool(): Pool {
   return _pgPool;
 }
 
-/** Live PGlite client, kept so closeDb() can close it and free the lock. */
-let _pgliteClient: { close(): Promise<void> } | undefined;
+/** Live PGlite client, kept so closeDb() can close it and create online backups. */
+let _pgliteClient:
+  | {
+      close(): Promise<void>;
+      dumpDataDir(compression?: "auto" | "gzip" | "none"): Promise<File | Blob>;
+    }
+  | undefined;
+
+/**
+ * Produce a consistent, live backup of the embedded PGlite data directory.
+ * The returned gzip is intended for PGlite's `loadDataDir` restore option.
+ */
+export async function dumpPgliteDataDir(): Promise<File | Blob> {
+  if (_driver !== "pglite" || !_pgliteClient) {
+    throw new Error("Online instance backup is available only for embedded PGlite");
+  }
+  return _pgliteClient.dumpDataDir("gzip");
+}
 
 /**
  * Release all database resources. For PGlite this closes the WASM instance and
@@ -240,6 +256,7 @@ async function createPgliteClient(): Promise<Database> {
   // instance is fully isolated per process and needs no lock/dir.
   if (process.env.VITEST || process.env.NODE_ENV === "test") {
     const memClient = new PGlite("memory://");
+    _pgliteClient = memClient;
     const memDb = drizzle(memClient, { schema });
     await migrate(memDb, { migrationsFolder: MIGRATIONS_DIR });
     return memDb;
