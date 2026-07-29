@@ -47,7 +47,7 @@ import {
 import { RateLimitSettings } from "./_components/rate-limit-settings";
 import { ExposedPortsCard } from "./_components/exposed-ports-card";
 import { PortForwardingCard } from "./_components/port-forwarding-card";
-import { ServerGitHubConnect } from "@/components/github/ServerGitHubConnect";
+import { ServerGitSources } from "./_components/server-git-sources";
 import { MigrationsTab } from "@/components/migration/MigrationsTab";
 import { ServerConnectionCard } from "./_components/connection-card";
 import { usePlatform } from "@/context/PlatformContext";
@@ -756,7 +756,7 @@ export default function ServerDetailPage({
             )}
 
             {activeTab === "github" && serverId && (
-              <ServerGitHubConnect serverId={serverId} variant="card" />
+              <ServerGitSources serverId={serverId} />
             )}
 
             {activeTab === "security" && (
