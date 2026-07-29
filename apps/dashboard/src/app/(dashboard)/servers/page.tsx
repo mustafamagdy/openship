@@ -183,16 +183,18 @@ export default function ServersPage() {
         )}
       </div>
 
-      <Tabs tabs={tabs} value={activeTab} onChange={setActiveTab} className="mb-6" />
-
-      {activeTab === "cluster" && (
-        <ComingSoonPanel
-          art="cluster"
-          badge={t.servers.comingSoon.badge}
-          title={t.servers.comingSoon.clusterTitle}
-          body={t.servers.comingSoon.clusterBody}
-        />
-      )}
+      <Tabs
+        tabs={tabs}
+        value={activeTab}
+        onChange={(tab) => {
+          if (tab === "cluster") {
+            router.push("/kubernetes");
+            return;
+          }
+          setActiveTab(tab);
+        }}
+        className="mb-6"
+      />
 
       {activeTab === "networking" && (
         <ComingSoonPanel

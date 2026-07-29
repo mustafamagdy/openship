@@ -266,6 +266,52 @@ export interface TunnelInfo {
   url: string | null;
 }
 
+export interface KubernetesClusterOverview {
+  serverId: string;
+  name: string;
+  host: string;
+  isLocal: boolean;
+  configured: boolean;
+  healthy: boolean;
+  version: string | null;
+  error: string | null;
+  nodes: Array<{
+    name: string;
+    ready: boolean;
+    role: "control-plane" | "worker";
+    kubeletVersion: string | null;
+    operatingSystem: string | null;
+    architecture: string | null;
+    containerRuntime: string | null;
+  }>;
+  workloads: Array<{
+    name: string;
+    namespace: string;
+    projectId: string | null;
+    projectName: string | null;
+    deploymentId: string | null;
+    desiredReplicas: number;
+    readyReplicas: number;
+  }>;
+}
+
+export interface KubernetesClustersResponse {
+  clusters: KubernetesClusterOverview[];
+  candidates: Array<
+    Pick<
+      KubernetesClusterOverview,
+      "serverId" | "name" | "host" | "isLocal" | "configured" | "healthy" | "version" | "error"
+    >
+  >;
+  summary: {
+    clusters: number;
+    healthyClusters: number;
+    nodes: number;
+    readyNodes: number;
+    workloads: number;
+  };
+}
+
 export const systemApi = {
   /** List child directories at a given path (backend browse) */
   browse: (path?: string) =>
@@ -283,20 +329,17 @@ export const systemApi = {
   hasNativePicker: isElectron,
 
   /** Get instance settings (self-hosted / desktop only) */
-  getSettings: () =>
-    api.get<InstanceSettings>(endpoints.system.settings),
+  getSettings: () => api.get<InstanceSettings>(endpoints.system.settings),
 
   /** Partial update instance settings */
   updateSettings: (data: Record<string, unknown>) =>
     api.patch<{ ok: boolean }>(endpoints.system.settings, data),
 
   /** Delete server configuration */
-  deleteServer: () =>
-    api.delete<{ ok: boolean }>(endpoints.system.settings),
+  deleteServer: () => api.delete<{ ok: boolean }>(endpoints.system.settings),
 
   /** Get instance SMTP config (masked — never returns the password). */
-  getEmailSettings: () =>
-    api.get<InstanceEmailSettings>(endpoints.system.emailSettings),
+  getEmailSettings: () => api.get<InstanceEmailSettings>(endpoints.system.emailSettings),
 
   /** Set (or clear) the instance SMTP config. Blank password keeps the stored
    *  one; empty host clears/disables it. */
@@ -306,8 +349,7 @@ export const systemApi = {
     user?: string;
     password?: string;
     from?: string;
-  }) =>
-    api.put<{ ok: boolean; configured: boolean }>(endpoints.system.emailSettings, data),
+  }) => api.put<{ ok: boolean; configured: boolean }>(endpoints.system.emailSettings, data),
 
   /** Send a test email through the saved instance SMTP. */
   sendTestEmail: (to: string) =>
@@ -322,15 +364,18 @@ export const systemApi = {
     sshPassword?: string;
     sshKeyPath?: string;
     sshKeyPassphrase?: string;
-  }) =>
-    api.post<{ ok: boolean; message: string }>(endpoints.system.testConnection, data),
+  }) => api.post<{ ok: boolean; message: string }>(endpoints.system.testConnection, data),
 
   /** Run system health checks on a specific server */
   checkServer: (serverId: string, components?: string[]) =>
-    api.post<ServerCheckResult>(endpoints.system.check, {
-      serverId,
-      ...(components?.length ? { components } : {}),
-    }, { timeout: 30_000 }), // headroom for a cold SSH connect + parallel probes
+    api.post<ServerCheckResult>(
+      endpoints.system.check,
+      {
+        serverId,
+        ...(components?.length ? { components } : {}),
+      },
+      { timeout: 30_000 },
+    ), // headroom for a cold SSH connect + parallel probes
 
   /** Answer a mid-install prompt (e.g. the OpenResty edge-takeover hold) */
   respondInstall: (action: string, sessionId?: string) =>
@@ -349,11 +394,15 @@ export const systemApi = {
 
   /** Remove a supported component from a specific server */
   removeComponent: (serverId: string, component: string, config?: Record<string, unknown>) =>
-    api.post<InstallResultResponse>(endpoints.system.remove, {
-      serverId,
-      component,
-      ...(config ? { config } : {}),
-    }, { timeout: 120_000 }),
+    api.post<InstallResultResponse>(
+      endpoints.system.remove,
+      {
+        serverId,
+        component,
+        ...(config ? { config } : {}),
+      },
+      { timeout: 120_000 },
+    ),
 
   /** Get the current install session status (or check if one is running) */
   getInstallSession: (sessionId?: string) =>
@@ -364,12 +413,16 @@ export const systemApi = {
   // ── Servers CRUD ─────────────────────────────────────────────────────────
 
   /** List all configured servers */
-  listServers: () =>
-    api.get<ServerInfo[]>(endpoints.system.servers),
+  listServers: () => api.get<ServerInfo[]>(endpoints.system.servers),
+
+  /** Discover registered servers with kubectl and return live cluster health. */
+  listKubernetesClusters: () =>
+    api.get<KubernetesClustersResponse>(endpoints.system.kubernetesClusters, {
+      timeout: 45_000,
+    }),
 
   /** Get a single server by ID */
-  getServerById: (id: string) =>
-    api.get<ServerInfo>(endpoints.system.server(id)),
+  getServerById: (id: string) => api.get<ServerInfo>(endpoints.system.server(id)),
 
   /** Lightweight liveness probe for the list view (TCP reachability). */
   probeReachability: (id: string) =>
@@ -384,8 +437,7 @@ export const systemApi = {
     api.patch<ServerInfo>(endpoints.system.server(id), data),
 
   /** Delete a server */
-  deleteServerEntry: (id: string) =>
-    api.delete<{ ok: boolean }>(endpoints.system.server(id)),
+  deleteServerEntry: (id: string) => api.delete<{ ok: boolean }>(endpoints.system.server(id)),
 
   // ── Native-module updates (per-server) ─────────────────────────────────────
 
@@ -400,24 +452,28 @@ export const systemApi = {
   /** Apply a module's pending migrations (includes consent-tier — surface the
    *  warning to the user first). */
   applyServerModule: (serverId: string, moduleName: string) =>
-    api.post<ModuleApplyResult>(endpoints.system.serverModuleApply(serverId, moduleName), {}, {
-      timeout: 120_000,
-    }),
+    api.post<ModuleApplyResult>(
+      endpoints.system.serverModuleApply(serverId, moduleName),
+      {},
+      {
+        timeout: 120_000,
+      },
+    ),
 
   // ── Rate Limiting (per-server) ─────────────────────────────────────────────
 
   /** Get rate limit config for a server */
   getRateLimit: (serverId: string) =>
-    api.get<{ config: ServerRateLimitConfig }>(
-      endpoints.system.serverRateLimit(serverId),
-    ),
+    api.get<{ config: ServerRateLimitConfig }>(endpoints.system.serverRateLimit(serverId)),
 
   /** Update rate limit config for a server */
-  updateRateLimit: (serverId: string, data: { rps?: number; burst?: number; whitelist?: string[] }) =>
-    api.patch<{ success: true; config: ServerRateLimitConfig } | { success: false; error?: string }>(
-      endpoints.system.serverRateLimit(serverId),
-      data,
-    ),
+  updateRateLimit: (
+    serverId: string,
+    data: { rps?: number; burst?: number; whitelist?: string[] },
+  ) =>
+    api.patch<
+      { success: true; config: ServerRateLimitConfig } | { success: false; error?: string }
+    >(endpoints.system.serverRateLimit(serverId), data),
 
   // ── Port exposure scan (per-server) ────────────────────────────────────────
 
@@ -430,13 +486,17 @@ export const systemApi = {
   // ── Port-forward tunnels (desktop-only) ────────────────────────────────────
 
   /** List a server's saved forwards + their live status */
-  listTunnels: (serverId: string) =>
-    api.get<TunnelInfo[]>(endpoints.system.tunnels(serverId)),
+  listTunnels: (serverId: string) => api.get<TunnelInfo[]>(endpoints.system.tunnels(serverId)),
 
   /** Create/update a forward config */
   saveTunnel: (
     serverId: string,
-    data: { remotePort: number; remoteHost?: string; localPort?: number | null; autoStart?: boolean },
+    data: {
+      remotePort: number;
+      remoteHost?: string;
+      localPort?: number | null;
+      autoStart?: boolean;
+    },
   ) => api.post<TunnelInfo>(endpoints.system.tunnels(serverId), data),
 
   /** Open a saved forward */
