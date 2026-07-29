@@ -432,6 +432,7 @@ async function main(): Promise<void> {
       NODE_ENV: "production",
       CLOUD_MODE: "false",
       OPENSHIP_TARGET: "local",
+      NEXT_PUBLIC_API_PROXY: "true",
     });
   });
 

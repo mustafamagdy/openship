@@ -689,7 +689,7 @@ export function useDeploymentBuild(
         localPath: config.localPath || undefined,
         // Folder-upload projects: mark the source so it renders correctly and
         // can later be switched to a GitHub repo (Source tab / linkRepo).
-        gitProvider: isUpload ? "upload" : undefined,
+        gitProvider: isUpload ? "upload" : config.gitProvider,
         framework: config.framework,
         packageManager: config.packageManager,
         buildImage: config.buildImage,
@@ -786,8 +786,16 @@ export function useDeploymentBuild(
         // Only a server target uses serverId — never let a stale id ride along
         // with a cloud/local deploy (backend gates it too, but be explicit).
         serverId: config.deployTarget === "server" ? config.serverId : undefined,
+        deploymentEngine:
+          config.deploymentEngine === "kubernetes" ? "kubernetes" : undefined,
+        kubernetesServerId:
+          config.deploymentEngine === "kubernetes" ? config.serverId : undefined,
+        kubernetesReplicas:
+          config.deploymentEngine === "kubernetes"
+             ? Math.max(1, config.kubernetesReplicas ?? 1)
+             : undefined,
         // Git-credential forwarding is no longer a per-deploy choice — it's a
-        // generic per-operator setting (Settings → GitHub) the API reads directly.
+        // generic per-operator setting the API reads directly.
         // Clone location — only meaningful for a server target. Clone-on-server
         // is now the DEFAULT (secure, atomic: credential forwarded over the SSH
         // relay for the clone, never stored). Only an explicit "api-host" pick

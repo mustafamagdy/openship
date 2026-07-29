@@ -7,7 +7,12 @@ import {
   cliInstallCommand,
   type GithubReleasePayload,
 } from "../src/updates/resolve";
-import { parseManifest } from "../src/updates/advisories";
+import { parseManifest, resolveUpdateState } from "../src/updates/advisories";
+import {
+  advisoryManifestUrl,
+  changelogUrl,
+  releasesLatestApi,
+} from "../src/updates/types";
 
 // A realistic `releases/latest` payload — asset names match .github/workflows/release.yml.
 const RELEASE_0_2_0: GithubReleasePayload = {
@@ -157,5 +162,35 @@ describe("resolveCliUpdatePlan + cliInstallCommand", () => {
     expect(cliInstallCommand("bun", "0.2.0")).toBe("bun add -g openship@0.2.0");
     expect(cliInstallCommand("npm", "0.2.0")).toBe("npm install -g openship@0.2.0");
     expect(cliInstallCommand("bun", "")).toBe("bun add -g openship@latest");
+  });
+});
+
+describe("fork release URLs", () => {
+  const repo = "mustafamagdy/openship";
+
+  it("builds API, advisory, and changelog URLs for the configured repository", () => {
+    expect(releasesLatestApi(repo)).toBe(
+      "https://api.github.com/repos/mustafamagdy/openship/releases/latest",
+    );
+    expect(advisoryManifestUrl("v0.4.2", repo)).toBe(
+      "https://raw.githubusercontent.com/mustafamagdy/openship/v0.4.2/release-advisories.json",
+    );
+    expect(changelogUrl("v0.4.2", repo)).toBe(
+      "https://github.com/mustafamagdy/openship/releases/tag/v0.4.2",
+    );
+  });
+
+  it("uses the configured repository for update-center changelog links", () => {
+    const state = resolveUpdateState({
+      currentVersion: "0.4.1",
+      latestRelease: { version: "0.4.2", tag: "v0.4.2", notes: "" },
+      manifest: null,
+      repo,
+    });
+
+    expect(state.changelogUrl).toBe("https://github.com/mustafamagdy/openship/releases");
+    expect(state.latestChangelogUrl).toBe(
+      "https://github.com/mustafamagdy/openship/releases/tag/v0.4.2",
+    );
   });
 });

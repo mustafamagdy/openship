@@ -175,6 +175,7 @@ export async function getBuildSessionStatus(deploymentId: string) {
     config: {
       repo: project.gitRepo,
       owner: project.gitOwner,
+      gitProvider: project.gitProvider,
       projectName: project.name,
       framework: snapshot?.framework || project.framework,
       branch: dep.branch ?? project.gitBranch,

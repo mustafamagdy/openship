@@ -241,6 +241,8 @@ export interface DeploymentConfig {
   projectName: string;
   repo: string;
   owner: string;
+  /** Source provider for git-backed projects. */
+  gitProvider?: "github" | "azure-devops";
   /** Absolute path for local projects (mutually exclusive with owner/repo git source) */
   localPath?: string;
   /** Folder-upload deploy: the upload session whose workspace/staging dir holds
@@ -252,6 +254,10 @@ export interface DeploymentConfig {
   deployTarget: DeployTarget;
   /** Which server to deploy to when deployTarget === "server" */
   serverId?: string;
+  /** Activate the built image natively on the target or through Kubernetes. */
+  deploymentEngine?: "native" | "kubernetes";
+  /** Desired Kubernetes pod replica count. */
+  kubernetesReplicas?: number;
   /**
    * "None" routing: deploy with NO public URL (internal / port-only). When true
    * the deploy sends `publicEndpoints: []` regardless of what's staged, and the
@@ -327,10 +333,13 @@ export const DEFAULT_CONFIG: DeploymentConfig = {
   projectName: "",
   repo: "",
   owner: "",
+  gitProvider: "github",
   localPath: undefined,
   uploadSessionId: undefined,
   buildStrategy: "server",
   deployTarget: "cloud",
+  deploymentEngine: "native",
+  kubernetesReplicas: 1,
   runtimeMode: "docker",
   projectType: "app",
   framework: "nextjs",
@@ -718,7 +727,11 @@ export interface DeploymentContextType {
     owner: string,
     repo: string,
     force?: string,
-    context?: { branch?: string; projectId?: string },
+    context?: {
+      branch?: string;
+      projectId?: string;
+      provider?: "github" | "azure-devops";
+    },
   ) => Promise<{ success: boolean; error?: string; errorType?: string; buildInProgress?: boolean }>;
   initializeFromLocal: (
     path: string,

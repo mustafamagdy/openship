@@ -62,6 +62,7 @@ export type {
   MultiServiceGroupHandle,
   MultiServiceDeployConfig,
   MultiServiceDeployResult,
+  RegistryAuthConfig,
   DeploymentRef,
   RollbackInput,
   MakeActiveResult,
@@ -84,6 +85,7 @@ export { BareRuntime, STATIC_RELEASE_BASE, type BareRuntimeOptions } from "./run
 // location with the SAME confinement rules the deploy used (no reimplementation:
 // this function is what rejects absolute paths and `../` traversal out of the root).
 export { resolveStaticOutputPath } from "./runtime/stack-output";
+export { resolveStaticReleaseBase } from "./runtime/bare";
 export {
   CloudRuntime,
   type CloudAdminProxy,

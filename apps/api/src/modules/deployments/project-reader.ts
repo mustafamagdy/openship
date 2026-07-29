@@ -1,4 +1,5 @@
 import * as githubService from "../github/github.service";
+import * as azureDevopsService from "../azure-devops/azure-devops.service";
 import type { RequestContext } from "../../lib/request-context";
 import type { RepoFile } from "../../lib/stack-detector";
 import type { RepoTreeEntry } from "../../lib/project-root-detector";
@@ -63,6 +64,57 @@ export function createGitHubReader(
         treePromise = githubService.listRepositoryTree(ctx, owner, repo, { branch });
       }
       return treePromise;
+    },
+  };
+}
+
+export function createAzureDevopsReader(
+  ctx: RequestContext,
+  coords: azureDevopsService.AzureRepoCoordinates,
+  branch: string,
+): ProjectReader {
+  const itemsPromise = azureDevopsService.listItems(ctx, coords, branch);
+
+  const readText = (path: string) =>
+    azureDevopsService.getFileContent(ctx, coords, path, branch);
+
+  return {
+    listDirectory: async (path: string) => {
+      const items = await itemsPromise.catch(() => []);
+      const normalized = path.replace(/^\/+|\/+$/g, "");
+      const prefix = normalized ? `/${normalized}/` : "/";
+      return items
+        .filter((item) => {
+          if (!item.path.startsWith(prefix) || item.path === prefix) return false;
+          const relative = item.path.slice(prefix.length);
+          return relative.length > 0 && !relative.includes("/");
+        })
+        .map((item) => ({
+          name: item.path.slice(prefix.length),
+          type: item.isFolder || item.gitObjectType === "tree" ? ("dir" as const) : ("file" as const),
+        }));
+    },
+    readText,
+    readJson: async (path: string) => {
+      const content = await readText(path);
+      if (!content) return undefined;
+      try {
+        return JSON.parse(content);
+      } catch {
+        return undefined;
+      }
+    },
+    listTree: async () => {
+      const items = await itemsPromise;
+      return items
+        .map((item) => ({
+          path: item.path.replace(/^\/+/, ""),
+          type:
+            item.isFolder || item.gitObjectType === "tree"
+              ? ("dir" as const)
+              : ("file" as const),
+        }))
+        .filter((item) => item.path.length > 0);
     },
   };
 }

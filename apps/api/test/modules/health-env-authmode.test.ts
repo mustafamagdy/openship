@@ -69,6 +69,14 @@ afterEach(async () => {
 });
 
 describe("GET /health/env authMode", () => {
+  it("exposes a validated fork release repository to the dashboard", async () => {
+    const { resolveReleaseRepo } = await import(
+      "../../src/modules/health/health.routes"
+    );
+    expect(resolveReleaseRepo("mustafamagdy/openship")).toBe("mustafamagdy/openship");
+    expect(resolveReleaseRepo("../../malicious")).toBe("oblien/openship");
+  });
+
   it("reports the persisted zero-auth mode instead of hardcoding local", async () => {
     settings.authMode = "none";
 
@@ -104,5 +112,6 @@ describe("GET /health/env authMode", () => {
     expect(body.teamMode).toBe("multi_user");
     expect(body.migrationInProgress).toBe(false);
     expect(body.migrationTargetUrl).toBeNull();
+    expect(body.releaseRepo).toBe("oblien/openship");
   });
 });

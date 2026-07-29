@@ -122,7 +122,7 @@ function CloudAuthorizeInner() {
   // Device/poll flow (headless CLI over SSH): the CLI can't receive a browser
   // redirect back to its box, so it polls the SaaS for the code instead. We
   // just confirm in-place — there's nothing to navigate to.
-  const isDevice = searchParams.get("mode") === "device";
+  const isDevice = validated.ok && validated.isDevice;
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [deviceDone, setDeviceDone] = useState(false);

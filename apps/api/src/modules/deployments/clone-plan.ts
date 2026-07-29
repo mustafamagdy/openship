@@ -87,6 +87,45 @@ export function relayConfigEligible(input: {
   return input.isDesktop && input.forwardGitCredentials !== false;
 }
 
+interface GitSourceService {
+  enabled?: boolean;
+  kind?: string | null;
+  build?: unknown;
+  dockerfile?: string | null;
+}
+
+export interface GitSourceRequirementInput {
+  repoUrl?: string | null;
+  localPath?: string | null;
+  sourceStaged?: boolean;
+  composeServices?: GitSourceService[];
+}
+
+/**
+ * Whether this deployment will clone the project repository and therefore
+ * needs a Git credential.
+ *
+ * A single-app deployment always consumes its repository, including a static
+ * site with `hasBuild=false`: "no build" means serve the checked-out files
+ * directly, not "no source". Multi-service image-only deployments are the one
+ * exception because every enabled service can run without the project repo.
+ */
+export function needsGitClone(input: GitSourceRequirementInput): boolean {
+  if (!input.repoUrl?.trim() || input.localPath?.trim() || input.sourceStaged) {
+    return false;
+  }
+
+  const enabledServices = (input.composeServices ?? []).filter(
+    (service) => service.enabled !== false,
+  );
+  if (enabledServices.length === 0) return true;
+
+  return enabledServices.some(
+    (service) =>
+      service.kind === "monorepo" || !!service.build || !!service.dockerfile,
+  );
+}
+
 export function resolveClonePlan(input: ClonePlanInput): ClonePlan {
   const onServer = input.effectiveTarget === "server";
 

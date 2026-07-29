@@ -185,6 +185,17 @@ const TABLES: ReadonlyArray<TableSpec> = [
   // GitHub — instance-only.
   { sqlName: "git_installation", table: schema.gitInstallation, scopes: [{ in: "instance", via: "all-rows" }], hasOrganizationId: false },
   { sqlName: "cloud_webhook_binding", table: schema.cloudWebhookBinding, scopes: [{ in: "instance", via: "all-rows" }], hasOrganizationId: true },
+  { sqlName: "dns_provider_connection", table: schema.dnsProviderConnection, scopes: [{ in: "instance", via: "all-rows" }], hasOrganizationId: true },
+  { sqlName: "container_registry_connection", table: schema.containerRegistryConnection, scopes: [{ in: "instance", via: "all-rows" }], hasOrganizationId: true },
+  {
+    sqlName: "organization_domain",
+    table: schema.organizationDomain,
+    scopes: [
+      { in: "instance", via: "all-rows" },
+      { in: "organization", via: "organizationId" },
+    ],
+    hasOrganizationId: true,
+  },
 
   // ── Project subgraph (also part of organization scope) ─────────────────────
   //
@@ -406,6 +417,9 @@ export interface EncryptedColumnSpec {
  * per-install), so it MUST be redacted on any cross-host move.
  */
 export const ENCRYPTED_COLUMNS: ReadonlyArray<EncryptedColumnSpec> = [
+  { table: "azure_devops_connection", column: "patEncrypted" },
+  { table: "dns_provider_connection", column: "tokenEncrypted" },
+  { table: "container_registry_connection", column: "tokenEncrypted" },
   { table: "user_settings", column: "cloudSessionToken" },
   { table: "user_settings", column: "cloneTokenEncrypted" },
   { table: "project", column: "cloneTokenEncrypted" },

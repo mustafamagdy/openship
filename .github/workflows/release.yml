@@ -15,6 +15,33 @@ permissions:
   contents: write
 
 jobs:
+  release-preflight:
+    name: Release preflight
+    if: github.event_name == 'push'
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Read bun version
+        id: bun-version
+        run: echo "version=$(cat .bun-version)" >> "$GITHUB_OUTPUT"
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: ${{ steps.bun-version.outputs.version }}
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Validate API and CLI
+        run: |
+          bun run --cwd apps/api lint
+          bun run --cwd apps/cli lint
+          bun run --cwd apps/api test
+          bun run --cwd apps/cli test
+
   build-openship:
     name: Build openship release artifact
     if: github.event_name == 'push'
@@ -195,6 +222,59 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
+  build-cli-bundle:
+    name: Build installable CLI bundle
+    if: github.event_name == 'push'
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Read bun version
+        id: bun-version
+        run: echo "version=$(cat .bun-version)" >> "$GITHUB_OUTPUT"
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: ${{ steps.bun-version.outputs.version }}
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Build CLI
+        run: bun run --cwd apps/cli build
+
+      - name: Pack verified CLI release asset
+        id: package
+        run: |
+          set -euo pipefail
+          TAG="${GITHUB_REF_NAME}"
+          STAGING="${RUNNER_TEMP}/openship-cli-package"
+          mkdir -p "${STAGING}"
+          cp apps/cli/package.json "${STAGING}/package.json"
+          cp -a apps/cli/dist "${STAGING}/dist"
+          cp README.md "${STAGING}/README.md"
+          bun scripts/sanitize-cli-package.ts "${STAGING}/package.json"
+          (
+            cd "${STAGING}"
+            bun pm pack --filename "${GITHUB_WORKSPACE}/openship-cli-${TAG}.tgz"
+          )
+          sha256sum "openship-cli-${TAG}.tgz" > "openship-cli-${TAG}.tgz.sha256"
+          echo "artifact=openship-cli-${TAG}.tgz" >> "$GITHUB_OUTPUT"
+
+      - name: Upload CLI bundle
+        uses: actions/upload-artifact@v7
+        with:
+          name: openship-cli-release
+          path: |
+            ${{ steps.package.outputs.artifact }}
+            ${{ steps.package.outputs.artifact }}.sha256
+          if-no-files-found: error
+          retention-days: 7
+
   build-desktop:
     name: Build desktop installer (${{ matrix.label }})
     if: github.event_name == 'push'
@@ -204,20 +284,20 @@ jobs:
         include:
           - os: windows-latest
             label: Windows x64
-            find: "-name *.zip"
             asset: Openship-win32-x64.zip
+            collect_native_packages: false
           - os: ubuntu-latest
             label: Linux x64
-            find: "-name *.AppImage -o -name *.deb -o -name *.rpm"
             asset: Openship.AppImage
+            collect_native_packages: true
           # GitHub-hosted native aarch64 runner → stage.ts derives arm64 from
           # process.arch, so the API bun --compile + the AppImage build are arm64.
           # x64 keeps the legacy `Openship.AppImage` name (auto-update compat);
           # arm64 is a NEW asset selected only by arm64 clients.
           - os: ubuntu-24.04-arm
             label: Linux arm64
-            find: "-name *.AppImage"
             asset: Openship-arm64.AppImage
+            collect_native_packages: false
     runs-on: ${{ matrix.os }}
     steps:
       - name: Checkout
@@ -266,19 +346,23 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p dist
-          # Collect AppImage
-          APPIMAGE="$(find apps/desktop/out/make -type f -name '*.AppImage' | head -n1)"
-          if [[ -n "${APPIMAGE}" ]]; then
-            cp "${APPIMAGE}" "dist/${{ matrix.asset }}"
-            cd dist
-            if command -v shasum >/dev/null 2>&1; then
-              shasum -a 256 "${{ matrix.asset }}" > "${{ matrix.asset }}.sha256"
-            else
-              sha256sum "${{ matrix.asset }}" > "${{ matrix.asset }}.sha256"
-            fi
-            cd ..
+
+          checksum() {
+            local asset="$1"
+            (
+              cd dist
+              if command -v shasum >/dev/null 2>&1; then
+                shasum -a 256 "${asset}" > "${asset}.sha256"
+              else
+                sha256sum "${asset}" > "${asset}.sha256"
+              fi
+            )
+          }
+
+          if [[ "${RUNNER_OS}" == "Windows" ]]; then
+            PRIMARY="$(find apps/desktop/out/make -type f -name '*.zip' -print -quit)"
           else
-            echo "::warning::No AppImage found"
+            PRIMARY="$(find apps/desktop/out/make -type f -name '*.AppImage' -print -quit)"
           fi
           # Collect .deb
           DEB="$(find apps/desktop/out/make -type f -name '*.deb' | head -n1)"
@@ -327,20 +411,35 @@ jobs:
               echo "::warning::No .zip found"
             fi
           fi
-          # Fail if nothing was collected
-          if [[ -z "$(find dist -type f)" ]]; then
-            echo "No installers matched under apps/desktop/out/make"
+          if [[ -z "${PRIMARY}" ]]; then
+            echo "No primary installer matched under apps/desktop/out/make"
             find apps/desktop/out/make -type f || true
             exit 1
+          fi
+
+          cp "${PRIMARY}" "dist/${{ matrix.asset }}"
+          checksum "${{ matrix.asset }}"
+
+          # The Linux x64 release also publishes native distro packages.
+          if [[ "${{ matrix.collect_native_packages }}" == "true" ]]; then
+            DEB="$(find apps/desktop/out/make -type f -name '*.deb' -print -quit)"
+            RPM="$(find apps/desktop/out/make -type f -name '*.rpm' -print -quit)"
+            if [[ -z "${DEB}" || -z "${RPM}" ]]; then
+              echo "Missing Linux x64 .deb or .rpm installer"
+              find apps/desktop/out/make -type f || true
+              exit 1
+            fi
+            cp "${DEB}" "dist/Openship.deb"
+            cp "${RPM}" "dist/Openship.rpm"
+            checksum "Openship.deb"
+            checksum "Openship.rpm"
           fi
 
       - name: Upload artifact
         uses: actions/upload-artifact@v7
         with:
           name: desktop-${{ matrix.asset }}
-          path: |
-            dist/${{ matrix.asset }}
-            dist/${{ matrix.asset }}.sha256
+          path: dist/*
           if-no-files-found: error
           retention-days: 7
 
@@ -479,6 +578,10 @@ jobs:
 
   publish-npm:
     name: Publish CLI to npm
+    if: >-
+      github.repository == 'oblien/openship' &&
+      github.event_name == 'push' &&
+      startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-24.04
     # npm is the ONE immutable artifact — a published version can never be
     # replaced. So it must publish LAST, only after every other job in the
@@ -560,27 +663,10 @@ jobs:
             echo "::notice::${NAME}@${VERSION} already on npm — skipping publish (re-run of an existing release)."
             exit 0
           fi
-          # tsup bundles the @repo/* workspace packages into dist/, so they must
-          # NOT appear in the published manifest — a `workspace:*` specifier is
-          # uninstallable off the monorepo (bun/npm: "@repo/… failed to resolve").
-          # Strip EVERY workspace dependency generically: hard-coding the list
-          # once shipped a broken 0.4.1 that kept @repo/adapters. This can never
-          # silently miss a newly-added @repo/* again.
-          node -e '
-            const fs = require("fs");
-            const p = JSON.parse(fs.readFileSync("package.json", "utf8"));
-            const stripped = [];
-            for (const k of Object.keys(p.dependencies || {})) {
-              if (String(p.dependencies[k]).startsWith("workspace:")) {
-                delete p.dependencies[k];
-                stripped.push(k);
-              }
-            }
-            fs.writeFileSync("package.json", JSON.stringify(p, null, 2) + "\n");
-            console.log("stripped workspace deps:", stripped.join(", ") || "(none)");
-          '
-          # Fail loudly if any workspace: specifier somehow survives — never ship
-          # an uninstallable package.
+          # tsup bundles the @repo/* deps into dist/, so strip them from the
+          # published manifest — otherwise npm emits uninstallable workspace:*
+          # specifiers for packages that aren't on the registry.
+          bun ../../scripts/sanitize-cli-package.ts package.json
           if grep -q '"workspace:' package.json; then
             echo "::error::a workspace:* dependency survived the strip — refusing to publish an uninstallable package."
             exit 1
@@ -595,7 +681,7 @@ jobs:
   publish:
     name: Publish GitHub release
     if: github.event_name == 'push'
-    needs: [build-openship, build-email, build-dashboard, build-desktop, build-desktop-macos]
+    needs: [release-preflight, build-openship, build-email, build-dashboard, build-cli-bundle, build-desktop, build-desktop-macos]
     runs-on: ubuntu-24.04
     steps:
       - name: Checkout
@@ -619,6 +705,12 @@ jobs:
         uses: actions/download-artifact@v8
         with:
           name: openship-dashboard-release
+          path: dist
+
+      - name: Download CLI bundle
+        uses: actions/download-artifact@v8
+        with:
+          name: openship-cli-release
           path: dist
 
       - name: Download desktop installers
@@ -645,6 +737,8 @@ jobs:
             "dist/openship-email-${TAG}-linux-amd64.tar.gz.sha256"
             "dist/openship-dashboard-${TAG}.tar.gz"
             "dist/openship-dashboard-${TAG}.tar.gz.sha256"
+            "dist/openship-cli-${TAG}.tgz"
+            "dist/openship-cli-${TAG}.tgz.sha256"
           )
           # Idempotent: on a re-run the release already exists and `gh release
           # create` would fail — re-upload the core assets with --clobber instead

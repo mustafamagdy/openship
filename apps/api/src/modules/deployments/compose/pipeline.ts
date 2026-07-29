@@ -23,7 +23,7 @@ import type {
   SslProvider,
   SystemManager,
 } from "@repo/adapters";
-import { BuildLogger } from "@repo/adapters";
+import { BuildLogger, DockerRuntime } from "@repo/adapters";
 
 import type { BuildConfigSnapshotLike } from "../build-config";
 import {
@@ -40,6 +40,10 @@ import { webhookProxyTarget } from "../../../config";
 import { buildComposeImages } from "./build.service";
 import { deployComposeServices } from "./deploy.service";
 import { safeErrorMessage } from "@repo/core";
+import {
+  getDefaultRegistryAuth,
+  publishBuildArtifact,
+} from "../../container-registry/container-registry.service";
 
 export interface ComposePipelineOpts {
   project: Project;
@@ -63,6 +67,7 @@ export interface ComposePipelineOpts {
   buildResources: ResourceConfig;
   runtimeResources: ResourceConfig;
   gitToken?: string;
+  gitUsername?: string;
   /** Path to the git-credential relay helper on the build host (desktop relay).
    *  When set, service clones authenticate through it instead of a token. */
   gitCredentialHelperPath?: string;
@@ -99,6 +104,7 @@ export async function executeComposePipeline(opts: ComposePipelineOpts): Promise
     buildResources,
     runtimeResources,
     gitToken,
+    gitUsername,
     gitCredentialHelperPath,
     gitSsh,
     gitAmbient,
@@ -127,6 +133,7 @@ export async function executeComposePipeline(opts: ComposePipelineOpts): Promise
     buildEnvVars,
     buildResources,
     gitToken,
+    gitUsername,
     gitCredentialHelperPath,
     gitSsh,
     gitAmbient,
@@ -134,6 +141,26 @@ export async function executeComposePipeline(opts: ComposePipelineOpts): Promise
     targetServiceIds,
     refreshServiceIds,
   });
+
+  let registryAuth: Awaited<ReturnType<typeof getDefaultRegistryAuth>> | undefined;
+  if (runtime instanceof DockerRuntime) {
+    registryAuth = await getDefaultRegistryAuth(project.organizationId);
+    if (registryAuth && composeBuild.builtImageRefs.size > 0) {
+      const services = await repos.service.listByProject(project.id);
+      const names = new Map(services.map((service) => [service.id, service.name]));
+      for (const [serviceId, localRef] of composeBuild.builtImageRefs) {
+        const published = await publishBuildArtifact({
+          organizationId: project.organizationId,
+          runtime,
+          localRef,
+          projectSlug: `${project.slug ?? project.name}-${names.get(serviceId) ?? serviceId}`,
+          artifactKey: `${dep.commitSha?.slice(0, 12) ?? "manual"}-${dep.id}`,
+          logger,
+        });
+        if (published) composeBuild.imageRefs.set(serviceId, published.imageRef);
+      }
+    }
+  }
 
   if (composeBuild.buildFailures.size > 0) {
     logger.log(
@@ -149,6 +176,7 @@ export async function executeComposePipeline(opts: ComposePipelineOpts): Promise
 
   const composeResult = await deployComposeServices(project, dep, runtime, logger, {
     builtImages: composeBuild.imageRefs,
+    registryAuth: registryAuth?.auth,
     buildFailures: composeBuild.buildFailures,
     resources: runtimeResources,
     buildSessionId,
@@ -236,5 +264,3 @@ export async function executeComposePipeline(opts: ComposePipelineOpts): Promise
     },
   });
 }
-
-

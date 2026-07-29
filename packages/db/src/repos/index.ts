@@ -7,6 +7,26 @@ export {
   type NewGitInstallation,
 } from "./git-installation.repo";
 export {
+  createAzureDevopsConnectionRepo,
+  type AzureDevopsConnection,
+  type NewAzureDevopsConnection,
+} from "./azure-devops-connection.repo";
+export {
+  createDnsProviderConnectionRepo,
+  type DnsProviderConnection,
+  type NewDnsProviderConnection,
+} from "./dns-provider-connection.repo";
+export {
+  createContainerRegistryConnectionRepo,
+  type ContainerRegistryConnection,
+  type NewContainerRegistryConnection,
+} from "./container-registry-connection.repo";
+export {
+  createOrganizationDomainRepo,
+  type OrganizationDomain,
+  type NewOrganizationDomain,
+} from "./organization-domain.repo";
+export {
   createGithubInstallStateRepo,
   type GithubInstallState,
   type NewGithubInstallState,
@@ -20,7 +40,11 @@ export {
   type CreatePatInput,
 } from "./personal-access-token.repo";
 export { createOAuthRepo } from "./oauth.repo";
-export { createProjectGroupRepo, type ProjectGroup, type NewProjectGroup } from "./project-group.repo";
+export {
+  createProjectGroupRepo,
+  type ProjectGroup,
+  type NewProjectGroup,
+} from "./project-group.repo";
 export {
   createProjectRepo,
   type Project,
@@ -35,12 +59,33 @@ export {
   type BuildSession,
   type NewBuildSession,
 } from "./deployment.repo";
+export {
+  createDeploymentCheckRunRepo,
+  type DeploymentCheckRun as DeploymentCheckRunRecord,
+  type NewDeploymentCheckRun,
+} from "./deployment-check-run.repo";
 export { createDomainRepo, type Domain, type NewDomain } from "./domain.repo";
 export { createRouteRuleRepo, type RouteRule, type NewRouteRule } from "./route-rule.repo";
-export { createWebhookSourceRepo, type WebhookSource, type NewWebhookSource } from "./webhook-source.repo";
-export { createIncomingWebhookRepo, type IncomingWebhook, type NewIncomingWebhook } from "./incoming-webhook.repo";
-export { createSystemNoticeRepo, type SystemNotice, type NewSystemNotice } from "./system-notice.repo";
-export { createUpdateStatusRepo, type UpdateStatus, type NewUpdateStatus } from "./update-status.repo";
+export {
+  createWebhookSourceRepo,
+  type WebhookSource,
+  type NewWebhookSource,
+} from "./webhook-source.repo";
+export {
+  createIncomingWebhookRepo,
+  type IncomingWebhook,
+  type NewIncomingWebhook,
+} from "./incoming-webhook.repo";
+export {
+  createSystemNoticeRepo,
+  type SystemNotice,
+  type NewSystemNotice,
+} from "./system-notice.repo";
+export {
+  createUpdateStatusRepo,
+  type UpdateStatus,
+  type NewUpdateStatus,
+} from "./update-status.repo";
 export {
   createServerModuleStatusRepo,
   type ServerModuleStatus,
@@ -95,11 +140,7 @@ export {
   type ServerTunnel,
   type NewServerTunnel,
 } from "./server-tunnel.repo";
-export {
-  createMailServerRepo,
-  type MailServer,
-  type NewMailServer,
-} from "./mail-server.repo";
+export { createMailServerRepo, type MailServer, type NewMailServer } from "./mail-server.repo";
 export {
   createAnalyticsRepo,
   type ServerAnalyticsRow,
@@ -201,10 +242,15 @@ import { createUserRepo } from "./user.repo";
 import { createSessionRepo } from "./session.repo";
 import { createAccountRepo } from "./account.repo";
 import { createGitInstallationRepo } from "./git-installation.repo";
+import { createAzureDevopsConnectionRepo } from "./azure-devops-connection.repo";
+import { createDnsProviderConnectionRepo } from "./dns-provider-connection.repo";
+import { createContainerRegistryConnectionRepo } from "./container-registry-connection.repo";
+import { createOrganizationDomainRepo } from "./organization-domain.repo";
 import { createGithubInstallStateRepo } from "./github-install-state.repo";
 import { createProjectGroupRepo } from "./project-group.repo";
 import { createProjectRepo } from "./project.repo";
 import { createDeploymentRepo } from "./deployment.repo";
+import { createDeploymentCheckRunRepo } from "./deployment-check-run.repo";
 import { createDomainRepo } from "./domain.repo";
 import { createRouteRuleRepo } from "./route-rule.repo";
 import { createWebhookSourceRepo } from "./webhook-source.repo";
@@ -272,10 +318,15 @@ export const repos = {
   session: createSessionRepo(db),
   account: createAccountRepo(db),
   gitInstallation: createGitInstallationRepo(db),
+  azureDevopsConnection: createAzureDevopsConnectionRepo(db),
+  dnsProviderConnection: createDnsProviderConnectionRepo(db),
+  containerRegistryConnection: createContainerRegistryConnectionRepo(db),
+  organizationDomain: createOrganizationDomainRepo(db),
   githubInstallState: createGithubInstallStateRepo(db),
   projectGroup: createProjectGroupRepo(db),
   project: createProjectRepo(db),
   deployment: createDeploymentRepo(db),
+  deploymentCheckRun: createDeploymentCheckRunRepo(db),
   domain: createDomainRepo(db),
   routeRule: createRouteRuleRepo(db),
   webhookSource: createWebhookSourceRepo(db),

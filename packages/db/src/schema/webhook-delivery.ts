@@ -5,10 +5,10 @@ import { project } from "./project";
 
 // ─── webhook_delivery ─────────────────────────────────────────────────────────
 //
-// ONE table for inbound webhook history AND GitHub idempotency (replaces the
+// ONE table for inbound webhook history AND provider idempotency (replaces the
 // dedup-only github_webhook_event). Every inbound delivery — a GitHub push, a
 // custom incoming-webhook call, a backup trigger — records one row here for a
-// paginated feed. For GitHub the row DOUBLES as the delivery-id dedup claim:
+// paginated feed. For signed providers the row DOUBLES as the delivery-id dedup claim:
 // the partial-unique index below makes `INSERT … ON CONFLICT DO NOTHING
 // RETURNING` return a row only for the FIRST delivery, so a redelivery is
 // dropped (no double-deploy). incoming/backup rows carry a null delivery_id (the
@@ -25,11 +25,11 @@ export const webhookDelivery = pgTable(
     organizationId: text("organization_id").references(() => organization.id, { onDelete: "cascade" }),
     /** Target project (null for forwarded/unmanaged/anchor rows). */
     projectId: text("project_id").references(() => project.id, { onDelete: "cascade" }),
-    /** 'github' | 'incoming' | 'backup'. */
+    /** 'github' | 'azure-devops' | 'incoming' | 'backup'. */
     source: text("source").notNull(),
     /** incoming_webhook.id for source='incoming'; null otherwise. */
     hookId: text("hook_id"),
-    /** X-GitHub-Delivery (source='github' only) — the idempotency key. */
+    /** Provider delivery id/key (signed providers only) — the idempotency key. */
     deliveryId: text("delivery_id"),
     /** GitHub event ('push', 'installation', …) or the incoming action type. */
     event: text("event").notNull(),
@@ -50,11 +50,11 @@ export const webhookDelivery = pgTable(
     processedAt: timestamp("processed_at"),
   },
   (t) => [
-    // GitHub delivery-id dedup (the claim). Partial: only github rows with a
+    // Provider delivery-id dedup (the claim). Partial: only rows with a
     // delivery id participate, so incoming/backup rows never conflict.
-    uniqueIndex("uq_webhook_delivery_github_delivery")
+    uniqueIndex("uq_webhook_delivery_source_delivery")
       .on(t.source, t.deliveryId)
-      .where(sql`${t.source} = 'github' AND ${t.deliveryId} IS NOT NULL`),
+      .where(sql`${t.deliveryId} IS NOT NULL`),
     // Feed lookups (keyset paginated on receivedAt desc, id desc).
     index("idx_webhook_delivery_project").on(t.projectId, t.receivedAt),
     index("idx_webhook_delivery_org").on(t.organizationId, t.receivedAt),

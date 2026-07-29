@@ -25,6 +25,17 @@ describe("injectGitToken", () => {
       "https://x-access-token:tok123@github.com/owner/repo.git",
     );
   });
+  it("uses the provider-specific Basic auth username", () => {
+    expect(
+      injectGitToken(
+        "https://dev.azure.com/geeksclub/relay/_git/relay",
+        "azdo-pat",
+        "openship",
+      ),
+    ).toBe(
+      "https://openship:azdo-pat@dev.azure.com/geeksclub/relay/_git/relay",
+    );
+  });
   it("returns the URL unchanged when no token", () => {
     expect(injectGitToken("https://github.com/owner/repo.git")).toBe(
       "https://github.com/owner/repo.git",
@@ -75,6 +86,16 @@ describe("assembleGitClone — token / public mode", () => {
   it("public repo (no token) clones the plain URL", () => {
     const pub = assembleGitClone({ repoUrl: "https://github.com/owner/repo.git" });
     expect(pub.cloneUrl).toBe("https://github.com/owner/repo.git");
+  });
+  it("threads an Azure Repos Basic auth username into the clone URL", () => {
+    const azure = assembleGitClone({
+      repoUrl: "https://dev.azure.com/geeksclub/relay/_git/relay",
+      gitToken: "azdo-pat",
+      gitUsername: "openship",
+    });
+    expect(azure.cloneUrl).toBe(
+      "https://openship:azdo-pat@dev.azure.com/geeksclub/relay/_git/relay",
+    );
   });
 });
 

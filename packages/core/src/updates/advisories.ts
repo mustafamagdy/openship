@@ -138,6 +138,8 @@ export interface ResolveUpdateInput {
   currentVersion: string;
   latestRelease: LatestRelease | null;
   manifest: AdvisoryManifest | null;
+  /** GitHub release repository used for changelog links. */
+  repo?: string;
   /** Advisory ids the user already dismissed (ignored for critical). */
   dismissed?: readonly string[];
   /** User disabled follow-up notifications. Critical advisories still surface once. */
@@ -152,7 +154,15 @@ export interface ResolveUpdateInput {
  * `recommended`/`info` respect the mute toggle and per-id dismissal.
  */
 export function resolveUpdateState(input: ResolveUpdateInput): UpdateState {
-  const { currentVersion, latestRelease, manifest, dismissed = [], muted = false, mode } = input;
+  const {
+    currentVersion,
+    latestRelease,
+    manifest,
+    repo,
+    dismissed = [],
+    muted = false,
+    mode,
+  } = input;
 
   const latestVersion = latestRelease?.version ?? null;
   const updateAvailable = !!latestVersion && compareSemver(latestVersion, currentVersion) > 0;
@@ -168,7 +178,7 @@ export function resolveUpdateState(input: ResolveUpdateInput): UpdateState {
     latestVersion,
     updateAvailable,
     advisories,
-    changelogUrl: changelogUrl(),
-    latestChangelogUrl: changelogUrl(latestRelease?.tag),
+    changelogUrl: changelogUrl(undefined, repo),
+    latestChangelogUrl: changelogUrl(latestRelease?.tag, repo),
   };
 }

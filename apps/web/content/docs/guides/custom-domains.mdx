@@ -186,6 +186,26 @@ point at it and does **not** issue a certificate — your edge is doing that job
 
 </Tabs>
 
+## Manage registered domains with Cloudflare
+
+If Cloudflare hosts the DNS zone, OpenShip can manage the records instead of
+asking you to copy them by hand:
+
+1. Open **Domains** in the dashboard.
+2. Create a scoped Cloudflare API token with **Zone:Read** and **DNS:Edit** for
+   only the zones OpenShip should manage.
+3. Paste the token into the **Cloudflare DNS** card and connect it.
+
+OpenShip validates the token before encrypting it at rest, discovers the exact
+zone for each registered base domain, and reconciles the ownership TXT and
+wildcard routing records. New registered domains are synchronized
+automatically. Use **Sync DNS** on a domain to check it again at any time.
+
+OpenShip does not delete an existing conflicting A, AAAA, or CNAME record. The
+domain is marked **DNS conflict** and the conflicting record must be reviewed at
+Cloudflare. Disconnecting Cloudflare removes the saved credential and leaves
+all existing DNS records unchanged.
+
 ## Bring your own certificate
 
 For setups where your upstream needs the **origin** to present a real certificate too — most commonly

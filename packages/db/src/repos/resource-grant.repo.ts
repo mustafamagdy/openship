@@ -26,6 +26,7 @@ export type ResourceType =
   | "audit"
   | "analytics"
   | "github"
+  | "azure_devops"
   // GitHub access-control layer (default-deny, owner-granted). "github"
   // (resourceId "*") = all GitHub; "github_installation" (resourceId =
   // installation id) = every repo under one installation/org;

@@ -40,6 +40,7 @@ import { platform } from "../../lib/controller-helpers";
 import { encrypt } from "../../lib/encryption";
 import { getLatestCommit, getRepository } from "../github/github.service";
 import { assertGitHubRepoAccess } from "../github/github-access";
+import * as azureDevopsService from "../azure-devops/azure-devops.service";
 import { firePreDeployBackups } from "../backups/triggers/pre-deploy";
 import { resolveSmartRoute } from "./smart-route";
 import { resolveProjectInfo } from "./prepare.service";
@@ -191,6 +192,12 @@ export interface DeploymentConfigSnapshot {
   deployTarget?: DeployTarget;
   /** Target server ID when deployTarget is "server" */
   serverId?: string;
+  /** Activate the built OCI image through the native runtime or Kubernetes. */
+  deploymentEngine?: "native" | "kubernetes";
+  /** Managed server whose SSH context has kubectl access to the cluster. */
+  kubernetesServerId?: string;
+  /** Desired pod replicas for Kubernetes deployments. */
+  kubernetesReplicas?: number;
   /** Runtime mode: "bare" (direct process) or "docker" (container-based) */
   runtimeMode?: "bare" | "docker";
   /**
@@ -409,6 +416,15 @@ async function resolveLatestCommitInfo(ctx: RequestContext, project: Project, br
     return {};
   }
 
+  if (project.gitProvider === "azure-devops") {
+    const head = await azureDevopsService.getLatestCommit(
+      ctx,
+      azureDevopsService.parseAzureRepoOwner(project.gitOwner, project.gitRepo),
+      branch,
+    );
+    return head ? { commitSha: head.sha, commitMessage: head.message } : {};
+  }
+
   const head = await getLatestCommit(ctx, project.gitOwner, project.gitRepo, branch);
   return head ? { commitSha: head.sha, commitMessage: head.message } : {};
 }
@@ -418,6 +434,13 @@ async function resolveProjectBranch(ctx: RequestContext, project: Project, branc
   if (configuredBranch) return configuredBranch;
 
   if (project.gitOwner && project.gitRepo) {
+    if (project.gitProvider === "azure-devops") {
+      const repository = await azureDevopsService.getRepository(
+        ctx,
+        azureDevopsService.parseAzureRepoOwner(project.gitOwner, project.gitRepo),
+      );
+      return repository.default_branch;
+    }
     const repository = await getRepository(ctx, project.gitOwner, project.gitRepo);
     return repository.default_branch;
   }
@@ -452,13 +475,23 @@ async function reconcileComposeDrift(
     }
     const composeRows = await listProjectComposeServices(project.id);
     if (!composeRows.some((s) => s.kind === "compose")) return; // not a compose project
-    const info = await resolveProjectInfo({
-      source: "github",
-      owner: project.gitOwner,
-      repo: project.gitRepo,
-      branch,
-      ctx,
-    });
+    const info = await resolveProjectInfo(
+      project.gitProvider === "azure-devops"
+        ? {
+            source: "azure-devops",
+            owner: project.gitOwner,
+            repo: project.gitRepo,
+            branch,
+            ctx,
+          }
+        : {
+            source: "github",
+            owner: project.gitOwner,
+            repo: project.gitRepo,
+            branch,
+            ctx,
+          },
+    );
     const services = info.services ?? [];
     if (services.length === 0) return;
     const { driftedNames } = await repos.service.reconcileFromCompose(project.id, services);
@@ -825,6 +858,9 @@ export async function requestBuildAccess(ctx: RequestContext, input: BuildAccess
     buildStrategy,
     deployTarget,
     serverId,
+    deploymentEngine,
+    kubernetesServerId,
+    kubernetesReplicas,
     runtimeMode,
     serviceDeploymentMode,
     services,
@@ -846,10 +882,12 @@ export async function requestBuildAccess(ctx: RequestContext, input: BuildAccess
   // a member can deploy a GitHub-backed project only when granted this
   // repo. Hard-stop here so they can't fall through to their personal
   // token on a local build (owner-control bypass) or fail mid-build.
-  await assertGitHubRepoAccess(ctx, {
-    owner: project.gitOwner,
-    repo: project.gitRepo,
-  });
+  if ((project.gitProvider ?? "github") === "github") {
+    await assertGitHubRepoAccess(ctx, {
+      owner: project.gitOwner,
+      repo: project.gitRepo,
+    });
+  }
 
   await checkNoActiveBuild(project.id);
 
@@ -958,6 +996,42 @@ export async function requestBuildAccess(ctx: RequestContext, input: BuildAccess
   snapshot.serverId = resolvedTarget.serverId;
   snapshot.runtimeMode = resolvedTarget.runtimeMode;
 
+  if (deploymentEngine === "kubernetes") {
+    if (!kubernetesServerId) {
+      throw new AppError(
+        "Select the managed server that has kubectl access to the Kubernetes cluster.",
+        400,
+      );
+    }
+    const clusterServer = await repos.server.getInOrganization(
+      kubernetesServerId,
+      ctx.organizationId,
+    );
+    if (!clusterServer) {
+      throw new AppError("Kubernetes cluster server not found in this organization.", 404);
+    }
+    if (requestedServiceMode === "services") {
+      throw new AppError(
+        "The Kubernetes MVP currently supports single-app deployments only.",
+        400,
+      );
+    }
+    if (!snapshot.hasServer) {
+      throw new AppError(
+        "The Kubernetes MVP currently supports long-running web applications only; deploy static sites with the native edge target.",
+        400,
+      );
+    }
+    snapshot.deploymentEngine = "kubernetes";
+    snapshot.kubernetesServerId = kubernetesServerId;
+    snapshot.kubernetesReplicas = Math.min(Math.max(kubernetesReplicas ?? 1, 1), 50);
+    // Kubernetes consumes an OCI image. Build it with the orchestrator's Docker
+    // runtime; do not resolve the cluster host as the Docker build/deploy target.
+    snapshot.deployTarget = "local";
+    snapshot.serverId = undefined;
+    snapshot.runtimeMode = "docker";
+  }
+
   // Folder-upload: point this deploy at the source the browser uploaded.
   //   - cloud (oblien-direct): adopt the pre-provisioned workspace, skip clone.
   //   - self-hosted (api-relay): build from the staging dir like a local folder.
@@ -1001,7 +1075,9 @@ export async function requestBuildAccess(ctx: RequestContext, input: BuildAccess
   // resource burn). See settingsService.resolveStrategy priority chain.
   snapshot.buildStrategy = await settingsService.resolveStrategy(
     snapshot.framework,
-    buildStrategy ?? snapshot.buildStrategy,
+    snapshot.deploymentEngine === "kubernetes"
+      ? "local"
+      : buildStrategy ?? snapshot.buildStrategy,
     { deployTarget: snapshot.deployTarget },
   );
   // Git-credential forwarding is now a GENERIC per-operator preference (Settings →
@@ -1210,10 +1286,12 @@ export async function redeployBuildSession(
   }
   // GitHub access gate (default-deny): a member can redeploy a
   // GitHub-backed project only when granted this repo.
-  await assertGitHubRepoAccess(ctx, {
-    owner: project.gitOwner,
-    repo: project.gitRepo,
-  });
+  if ((project.gitProvider ?? "github") === "github") {
+    await assertGitHubRepoAccess(ctx, {
+      owner: project.gitOwner,
+      repo: project.gitRepo,
+    });
+  }
   const resolvedBranch = await resolveProjectBranch(ctx, project, oldDep.branch ?? undefined);
 
   // Prefer the old deployment's snapshot; fall back to a fresh one from the project
@@ -1472,10 +1550,12 @@ export async function triggerDeployment(
   }
   // GitHub access gate (default-deny; webhook ctx is the org owner and
   // passes). Covers manual trigger / redeploy paths routed through here.
-  await assertGitHubRepoAccess(ctx, {
-    owner: project.gitOwner,
-    repo: project.gitRepo,
-  });
+  if ((project.gitProvider ?? "github") === "github") {
+    await assertGitHubRepoAccess(ctx, {
+      owner: project.gitOwner,
+      repo: project.gitRepo,
+    });
+  }
 
   const branch = await resolveProjectBranch(ctx, project, data.branch);
   const environment = data.environment ?? "production";

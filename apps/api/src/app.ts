@@ -31,6 +31,8 @@ import { billingPlansRoutes } from "./modules/billing/billing.routes";
 import { webhookRoutes } from "./modules/webhooks/webhook.routes";
 import { healthRoutes } from "./modules/health/health.routes";
 import { githubRoutes } from "./modules/github";
+import { azureDevopsRoutes } from "./modules/azure-devops";
+import { containerRegistryRoutes } from "./modules/container-registry";
 import * as githubAuth from "./modules/github/github.auth";
 import { settingsRoutes } from "./modules/settings/settings.routes";
 import { tokenRoutes } from "./modules/tokens/token.routes";
@@ -46,7 +48,10 @@ import { reconcileAllSchedules } from "./modules/backups/triggers/cron";
 import { reconcileJobs } from "./modules/jobs/job.service";
 import { scheduleBillingAnniversary } from "./modules/billing/billing-anniversary.cron";
 import { ensureOblienWebhook } from "./lib/openship-cloud";
-import { backfillWebhookSecrets } from "./modules/github/github.service";
+import {
+  backfillWebhookSecrets,
+  reconcileGitHubDeployWebhookEvents,
+} from "./modules/github/github.service";
 import { backupOrchestrator } from "./modules/backups/backup.orchestrator";
 import { getJobRunner } from "./lib/job-runner";
 import { repos } from "@repo/db";
@@ -126,6 +131,8 @@ app.route("/api/deployments", deploymentRoutes);
 app.route("/api/domains", domainRoutes);
 app.route("/api/webhooks", webhookRoutes);
 app.route("/api/github", githubRoutes);
+app.route("/api/azure-devops", azureDevopsRoutes);
+app.route("/api/container-registries", containerRegistryRoutes);
 app.route("/api/analytics", analyticsRoutes);
 app.route("/api/settings", settingsRoutes);
 app.route("/api/tokens", tokenRoutes);
@@ -320,9 +327,11 @@ if (env.CLOUD_MODE) {
   // auto-deploy projects registered before per-project secrets were wired
   // (self-gates on !CLOUD_MODE). Fixes silently-broken auto-deploy on installs
   // that followed the "GITHUB_WEBHOOK_SECRET is ignored" guidance.
-  void backfillWebhookSecrets().catch((err) =>
-    console.warn("[boot] backfillWebhookSecrets failed:", err),
-  );
+  void backfillWebhookSecrets()
+    .then(() => reconcileGitHubDeployWebhookEvents())
+    .catch((err) =>
+      console.warn("[boot] GitHub webhook reconciliation failed:", err),
+    );
 
   // Re-register every enabled cron policy with the runner.
   void reconcileAllSchedules().then((stats) =>

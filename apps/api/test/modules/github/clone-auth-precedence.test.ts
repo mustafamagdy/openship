@@ -9,14 +9,17 @@ const {
   resolveServerGitCredential,
   getLocalGhToken,
   probeServerGitAccess,
-} = vi.hoisted(() => ({
-  tokenFor: vi.fn(),
-  requireTokenFor: vi.fn(),
-  isPublicRepo: vi.fn(),
-  resolveServerGitCredential: vi.fn(),
-  getLocalGhToken: vi.fn(),
-  probeServerGitAccess: vi.fn(),
-}));
+  resolveAzureCloneCredential,
+} =
+  vi.hoisted(() => ({
+    tokenFor: vi.fn(),
+    requireTokenFor: vi.fn(),
+    isPublicRepo: vi.fn(),
+     resolveServerGitCredential: vi.fn(),
+     getLocalGhToken: vi.fn(),
+     probeServerGitAccess: vi.fn(),
+     resolveAzureCloneCredential: vi.fn(),
+   }));
 
 vi.mock("../../../src/modules/github/github.token", () => ({ tokenFor, requireTokenFor }));
 vi.mock("../../../src/modules/github/github.http", () => ({ isPublicRepo }));
@@ -28,6 +31,9 @@ vi.mock("../../../src/modules/github/github.local-auth", () => ({
   hasLocalGitIdentity: async () => !!(await getLocalGhToken()),
 }));
 vi.mock("../../../src/modules/github/server-git-ambient", () => ({ probeServerGitAccess }));
+vi.mock("../../../src/modules/azure-devops/azure-devops.service", () => ({
+  resolveCloneCredential: resolveAzureCloneCredential,
+}));
 
 import { resolveBuildGitToken } from "../../../src/modules/github/clone-auth";
 
@@ -41,7 +47,26 @@ beforeEach(() => {
   isPublicRepo.mockResolvedValue(false);
   resolveServerGitCredential.mockResolvedValue(null);
   probeServerGitAccess.mockResolvedValue(null);
+  resolveAzureCloneCredential.mockResolvedValue({
+    token: "azdo-pat",
+    username: "openship",
+  });
   requireTokenFor.mockRejectedValue(new Error("GITHUB_REMOTE_TOKEN_REQUIRED"));
+});
+
+describe("resolveBuildGitToken — Azure Repos", () => {
+  it("uses the encrypted Azure connection credential without consulting GitHub", async () => {
+    const res = await resolveBuildGitToken({
+      ...base,
+      provider: "azure-devops",
+      owner: "geeksclub/relay",
+      buildStrategy: "server",
+    });
+    expect(res).toEqual({ token: "azdo-pat", username: "openship" });
+    expect(resolveAzureCloneCredential).toHaveBeenCalledWith(ctx, "geeksclub/relay");
+    expect(tokenFor).not.toHaveBeenCalled();
+    expect(resolveServerGitCredential).not.toHaveBeenCalled();
+  });
 });
 
 describe("resolveBuildGitToken — local build", () => {

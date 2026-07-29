@@ -406,7 +406,7 @@ export async function runWizard(): Promise<void> {
   // Domain wiring executed AFTER the service + admin are up.
   let domainPlan:
     | { type: "free"; slug: string; publicHost: string }
-    | { type: "custom"; hostname: string }
+    | { type: "custom"; hostname: string; publicHost: string }
     | { type: "byo"; hostname: string }
     | { type: "none" } = { type: "none" };
 
@@ -573,7 +573,7 @@ export async function runWizard(): Promise<void> {
       publicUrl = url;
       managedEdge = true;
       behindProxy = true; // OpenResty terminates TLS + sets a trusted XFF
-      domainPlan = { type: "custom", hostname };
+      domainPlan = { type: "custom", hostname, publicHost: host };
       break planning;
     }
 
@@ -998,12 +998,14 @@ export async function runWizard(): Promise<void> {
       await internalPost(port, "/api/system/self-register", {
         domainType: "byo",
         hostname: domainPlan.hostname,
+        publicHost: domainPlan.publicHost,
       });
       liveUrl = `https://${domainPlan.hostname}`;
     } else {
       const res = await internalPost(port, "/api/system/self-register", {
         domainType: "custom",
         hostname: domainPlan.hostname,
+        publicHost: domainPlan.publicHost,
         dashPort: Number(started.dashPort),
         acmeEmail: admin?.email,
         edgeTakeover,

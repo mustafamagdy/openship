@@ -46,6 +46,7 @@ import { isPublicRepo } from "./github.http";
 import { getLocalGhToken, hasLocalGitIdentity } from "./github.local-auth";
 import { resolveServerGitCredential } from "./server-github.service";
 import type { RequestContext } from "../../lib/request-context";
+import { resolveCloneCredential as resolveAzureCloneCredential } from "../azure-devops/azure-devops.service";
 
 /**
  * Result of build-token resolution:
@@ -57,6 +58,9 @@ import type { RequestContext } from "../../lib/request-context";
  */
 export interface BuildGitCredential {
   token?: string;
+  /** HTTP Basic username paired with `token`. GitHub defaults to
+   *  `x-access-token`; Azure Repos uses a non-empty placeholder username. */
+  username?: string;
   relay?: boolean;
   /**
    * The TARGET SERVER authenticates the clone with its own pre-existing git
@@ -114,6 +118,7 @@ export async function resolveBuildGitToken(opts: {
    *  App installation lookup uses ctx.organizationId. */
   ctx: RequestContext;
   projectId: string;
+  provider?: string | null;
   owner?: string | null;
   /** Repo name — threaded to the github-access gate for PER-REPO
    *  authorization (so a member granted only repo X can build X). */
@@ -155,6 +160,14 @@ export async function resolveBuildGitToken(opts: {
   /** Build-log sink for the probe's one-line outcome. Never receives secrets. */
   onLog?: (message: string) => void;
 }): Promise<BuildGitCredential> {
+  if (opts.provider === "azure-devops") {
+    if (!opts.owner) {
+      throw new Error("Azure Repos project is missing its organization/project owner");
+    }
+    const credential = await resolveAzureCloneCredential(opts.ctx, opts.owner);
+    return { token: credential.token, username: credential.username };
+  }
+
   const tokenCtx: TokenContext = {
     projectId: opts.projectId,
     owner: opts.owner ?? undefined,

@@ -1,8 +1,8 @@
 "use client";
 
-import React, { useCallback, useEffect, useRef, useState } from "react";
+import React, { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { ChevronDown, Check } from "lucide-react";
+import { ChevronDown, Check, Search } from "lucide-react";
 
 const MENU_OFFSET = 8;
 const MENU_MAX_HEIGHT = 256;
@@ -39,6 +39,10 @@ interface CustomSelectProps<T extends string> {
   footerAction?: CustomSelectFooterAction;
   /** Fired once each time the menu opens — use to lazily load options. */
   onOpen?: () => void;
+  /** Adds an in-menu filter for long option lists. */
+  searchable?: boolean;
+  searchPlaceholder?: string;
+  emptyMessage?: string;
 }
 
 export function CustomSelect<T extends string>({
@@ -49,14 +53,32 @@ export function CustomSelect<T extends string>({
   className = "",
   footerAction,
   onOpen,
+  searchable = false,
+  searchPlaceholder = "Search options",
+  emptyMessage = "No options found.",
 }: CustomSelectProps<T>) {
   const [isOpen, setIsOpen] = useState(false);
+  const [query, setQuery] = useState("");
   const containerRef = useRef<HTMLDivElement>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
+  const searchInputRef = useRef<HTMLInputElement>(null);
   const [menuPosition, setMenuPosition] = useState<DropdownPosition | null>(null);
+  const listboxId = useId();
 
   const selectedOption = options.find((opt) => opt.value === value);
+  const filteredOptions = useMemo(() => {
+    const normalized = query.trim().toLowerCase();
+    if (!normalized) return options;
+    return options.filter((option) =>
+      `${option.label} ${option.description ?? ""}`.toLowerCase().includes(normalized),
+    );
+  }, [options, query]);
+
+  const closeMenu = useCallback(() => {
+    setIsOpen(false);
+    setQuery("");
+  }, []);
 
   const updateMenuPosition = useCallback(() => {
     if (!triggerRef.current || typeof window === "undefined") return;
@@ -104,13 +126,13 @@ export function CustomSelect<T extends string>({
 
     const handleClickOutside = (event: MouseEvent) => {
       if (!isInside(event.target)) {
-        setIsOpen(false);
+        closeMenu();
       }
     };
 
     const handleEscape = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
-        setIsOpen(false);
+        closeMenu();
       }
     };
 
@@ -123,7 +145,7 @@ export function CustomSelect<T extends string>({
       document.removeEventListener("mousedown", handleClickOutside);
       document.removeEventListener("keydown", handleEscape);
     };
-  }, [isOpen]);
+  }, [closeMenu, isOpen]);
 
   useEffect(() => {
     if (!isOpen) {
@@ -132,6 +154,9 @@ export function CustomSelect<T extends string>({
     }
 
     updateMenuPosition();
+    if (searchable) {
+      requestAnimationFrame(() => searchInputRef.current?.focus());
+    }
 
     const handlePositionChange = () => updateMenuPosition();
 
@@ -142,23 +167,22 @@ export function CustomSelect<T extends string>({
       window.removeEventListener("resize", handlePositionChange);
       window.removeEventListener("scroll", handlePositionChange, true);
     };
-  }, [isOpen, updateMenuPosition]);
+  }, [isOpen, searchable, updateMenuPosition]);
 
   const handleSelect = (optionValue: T) => {
     onChange(optionValue);
-    setIsOpen(false);
+    closeMenu();
   };
 
   const handleFooterAction = () => {
     footerAction?.onClick();
-    setIsOpen(false);
+    closeMenu();
   };
 
   const dropdownMenu = isOpen && menuPosition && typeof document !== "undefined"
     ? createPortal(
         <div
           ref={menuRef}
-          role="listbox"
           className="fixed z-[10050] overflow-hidden rounded-2xl border border-border/50 bg-popover shadow-xl shadow-black/[0.08]"
           style={{
             left: menuPosition.left,
@@ -169,8 +193,30 @@ export function CustomSelect<T extends string>({
               : { bottom: menuPosition.bottom }),
           }}
         >
-          <div className="max-h-full overflow-y-auto py-1.5">
-            {options.map((option) => {
+          {searchable && (
+            <div className="border-b border-border/50 p-2">
+              <div className="relative">
+                <Search className="pointer-events-none absolute start-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
+                <input
+                  ref={searchInputRef}
+                  type="search"
+                  value={query}
+                  onChange={(event) => setQuery(event.target.value)}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter" && filteredOptions.length === 1) {
+                      event.preventDefault();
+                      handleSelect(filteredOptions[0].value);
+                    }
+                  }}
+                  placeholder={searchPlaceholder}
+                  aria-label={searchPlaceholder}
+                  className="w-full rounded-xl border border-border/50 bg-muted/40 py-2 ps-9 pe-3 text-sm text-foreground outline-none placeholder:text-muted-foreground focus:ring-2 focus:ring-primary/20"
+                />
+              </div>
+            </div>
+          )}
+          <div id={listboxId} role="listbox" className="max-h-full overflow-y-auto py-1.5">
+            {filteredOptions.map((option) => {
               const isSelected = option.value === value;
               return (
                 <button
@@ -205,6 +251,11 @@ export function CustomSelect<T extends string>({
                 </button>
               );
             })}
+            {filteredOptions.length === 0 && (
+              <p className="px-4 py-6 text-center text-sm text-muted-foreground">
+                {emptyMessage}
+              </p>
+            )}
           </div>
 
           {footerAction && (
@@ -235,6 +286,7 @@ export function CustomSelect<T extends string>({
         }}
         aria-expanded={isOpen}
         aria-haspopup="listbox"
+        aria-controls={isOpen ? listboxId : undefined}
         className={`
           w-full px-4 py-3 rounded-2xl text-sm font-medium
           transition-all duration-200 flex items-center justify-between gap-2

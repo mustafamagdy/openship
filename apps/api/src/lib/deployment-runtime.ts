@@ -4,9 +4,11 @@ import {
   type CommandExecutor,
   type DockerConnectionOptions,
   type Platform,
+  type PlatformConfig,
   type RuntimeAdapter,
   type SshConfig,
 } from "@repo/adapters";
+import { isLoopbackServerHost } from "./loopback-server-host";
 import type { Deployment } from "@repo/db";
 import { repos } from "@repo/db";
 import type { DeployTarget, RuntimeMode } from "@repo/core";
@@ -28,6 +30,9 @@ import { isLocalHostRow } from "./box-org";
 export interface DeploymentMeta {
   deployTarget?: DeployTarget;
   runtimeMode?: RuntimeMode;
+  /** False for a static site that must be published as files, not started as
+   *  a long-running process/container. */
+  hasServer?: boolean;
   serverId?: string;
   /**
    * Adopt an already-running, externally-supervised process instead of building
@@ -209,6 +214,60 @@ export function usesManagedRouting(base: Platform["target"], effectiveTarget: De
 }
 
 /**
+ * Resolve the runtime from the actual workload shape.
+ *
+ * Services always need Docker. A single static site always needs the bare
+ * runtime because it promotes the built files into a durable release directory
+ * that OpenResty can serve directly. Keeping a project's stale Docker selection
+ * for a static site builds an inert container and leaves routing without a
+ * `staticRoot`.
+ */
+export function resolveWorkloadRuntimeMode(
+  snapshot: Pick<DeploymentMeta, "runtimeMode" | "hasServer">,
+  usesServicePipeline: boolean,
+): RuntimeMode | undefined {
+  if (usesServicePipeline) return "docker";
+  if (snapshot.hasServer === false) return "bare";
+  return snapshot.runtimeMode;
+}
+
+export function bareWorkDirFromHome(homeDirectory: string): string {
+  const home = homeDirectory.trim().replace(/\/+$/, "");
+  if (!home.startsWith("/") || home.includes("\0") || home.includes("\n")) {
+    throw new Error("Cannot determine a safe home directory for the direct runtime");
+  }
+  return `${home}/.openship/runtime`;
+}
+
+async function resolveBareOptions(
+  executor: CommandExecutor,
+): Promise<PlatformConfig["bare"]> {
+  const configured = process.env.OPENSHIP_BARE_WORK_DIR?.trim();
+  if (configured) return { workDir: configured };
+
+  // Resolve on the TARGET, not the API host: a remote SSH account may have a
+  // different home directory. `cd` with no argument is shell-portable and
+  // returns the authenticated user's actual home through `pwd`.
+  const targetHome = await executor.exec("cd && pwd");
+  const workDir = bareWorkDirFromHome(targetHome);
+  const home = targetHome.trim().replace(/\/+$/, "");
+  const openshipDir = `${home}/.openship`;
+
+  await executor.mkdir(workDir);
+  // OpenResty's unprivileged worker must be able to traverse to public static
+  // releases. Grant execute-only traversal on the private parent directories
+  // (no directory listing) and read/traverse on the dedicated runtime root.
+  // The deployed files themselves are created world-readable by the normal
+  // source/build umask.
+  const quote = (value: string) => `'${value.replace(/'/g, `'\\''`)}'`;
+  await executor.exec(
+    `chmod o+x ${quote(home)} ${quote(openshipDir)} && chmod o+rx ${quote(workDir)}`,
+  );
+
+  return { workDir };
+}
+
+/**
  * Resolve a cloud-target Platform using ANY cloud-linked org member's
  * token. The deployment doesn't carry a user_id anymore — its
  * `organization_id` is the source of truth. We pick whichever member
@@ -332,12 +391,15 @@ export async function resolveTargetPlatform(
 
     // The auto-registered "This Server" row IS the OpenShip host (VPS /
     // server-host mode): local host executor, host docker socket (DooD),
-    // everything on-box.
+    // everything on-box. resolveServerExecutor also treats legacy loopback
+    // server rows as local, so every caller shares the same compatibility rule.
     if (isLocal) {
       return createPlatform({
         target: "selfhosted",
         runtime: runtimeMode,
         executor,
+        bare: runtimeMode === "bare" ? await resolveBareOptions(executor) : undefined,
+        nginx: localNginxOptions(),
         docker: runtimeMode === "docker" ? { transport: "socket" as const } : undefined,
         provisionLock: createProvisionLock("provision:local"),
       });
@@ -347,8 +409,11 @@ export async function resolveTargetPlatform(
       target: "selfhosted",
       runtime: runtimeMode,
       executor, // ← managed executor from pool
+      bare: runtimeMode === "bare" ? await resolveBareOptions(executor) : undefined,
       ssh: ssh!,
-      docker: runtimeMode === "docker" ? toDockerSshTransport(ssh!, executor) : undefined,
+      docker: runtimeMode === "docker"
+        ? toDockerSshTransport(ssh!, executor)
+        : undefined,
       // Serialize provisioning per target server, so concurrent deploys (across
       // projects / single-app + compose) never race apt/openresty/networks/state.
       provisionLock: createProvisionLock(`provision:server:${id}`),
@@ -357,14 +422,26 @@ export async function resolveTargetPlatform(
 
   // Local target - no SSH, no pooling needed. Still serialize provisioning: two
   // local deploys share the same host's openresty/docker/state.
+  const localExecutor = runtimeMode === "bare" ? createHostExecutor() : undefined;
   return createPlatform({
     target: "selfhosted",
     runtime: runtimeMode,
+    executor: localExecutor,
+    bare:
+      runtimeMode === "bare" && localExecutor
+        ? await resolveBareOptions(localExecutor)
+        : undefined,
+    nginx: localNginxOptions(),
     docker: runtimeMode === "docker"
       ? { transport: "socket" as const }
       : undefined,
     provisionLock: createProvisionLock("provision:local"),
   });
+}
+
+function localNginxOptions(): PlatformConfig["nginx"] {
+  const certbotStateDir = process.env.OPENSHIP_CERTBOT_STATE_DIR?.trim();
+  return certbotStateDir ? { certbotStateDir } : undefined;
 }
 
 /**

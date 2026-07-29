@@ -6,6 +6,7 @@ import { formatDate } from "@/utils/date";
 import FileIcon from "@/components/ui/FileIcon";
 import { useI18n, interpolate } from "@/components/i18n-provider";
 import type { Deployment } from "../types";
+import { commitWebUrl } from "@/utils/gitProvider";
 
 interface CommitDetailsModalProps {
   deployment: Deployment;
@@ -44,7 +45,12 @@ export const CommitDetailsModal: React.FC<CommitDetailsModalProps> = ({
 
   const hasCommitData = deployment.commit && deployment.commit.hash && deployment.commit.hash !== 'N/A';
   const commitUrl = deployment.owner && deployment.repo && deployment.commit?.hash
-    ? `https://github.com/${deployment.owner}/${deployment.repo}/commit/${deployment.commit.hash}`
+    ? commitWebUrl(
+        deployment.gitProvider,
+        deployment.owner,
+        deployment.repo,
+        deployment.commit.fullHash || deployment.commit.hash,
+      )
     : null;
 
   const changedFiles = deployment.commit?.changedFiles || [];
@@ -258,4 +264,3 @@ export const CommitDetailsModal: React.FC<CommitDetailsModalProps> = ({
     </>
   );
 };
-

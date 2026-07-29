@@ -11,7 +11,8 @@
 
 import { useCallback, useEffect, useState } from "react";
 import {
-  RELEASES_LATEST_API,
+  GITHUB_REPO,
+  releasesLatestApi,
   advisoryManifestUrl,
   parseManifest,
   resolveUpdateState,
@@ -91,14 +92,22 @@ async function persistLastSeen(version: string): Promise<void> {
 
 // Session-scoped cache: fetch GitHub once per app session (GitHub rate-limits
 // unauthenticated calls to 60/hr/IP; navigation shouldn't re-hit it).
-let remoteCache: Promise<{ latest: LatestRelease | null; manifest: AdvisoryManifest | null }> | null = null;
+const remoteCache = new Map<
+  string,
+  Promise<{ latest: LatestRelease | null; manifest: AdvisoryManifest | null }>
+>();
 
-async function fetchRemote(): Promise<{ latest: LatestRelease | null; manifest: AdvisoryManifest | null }> {
-  remoteCache ??= (async () => {
+async function fetchRemote(
+  repo: string,
+): Promise<{ latest: LatestRelease | null; manifest: AdvisoryManifest | null }> {
+  const cached = remoteCache.get(repo);
+  if (cached) return cached;
+
+  const request = (async () => {
     let latest: LatestRelease | null = null;
     let manifest: AdvisoryManifest | null = null;
     try {
-      const res = await fetch(RELEASES_LATEST_API, {
+      const res = await fetch(releasesLatestApi(repo), {
         headers: { Accept: "application/vnd.github+json" },
       });
       if (res.ok) {
@@ -108,7 +117,9 @@ async function fetchRemote(): Promise<{ latest: LatestRelease | null; manifest: 
           latest = { version: tag.replace(/^v/, ""), tag, notes: data.body ?? "" };
           // Advisories pinned to the release TAG — main commits never surface.
           try {
-            const m = await fetch(advisoryManifestUrl(tag), { headers: { Accept: "application/json" } });
+            const m = await fetch(advisoryManifestUrl(tag, repo), {
+              headers: { Accept: "application/json" },
+            });
             if (m.ok) manifest = parseManifest(await m.json());
           } catch {
             /* no manifest at this tag → no advisories */
@@ -120,7 +131,8 @@ async function fetchRemote(): Promise<{ latest: LatestRelease | null; manifest: 
     }
     return { latest, manifest };
   })();
-  return remoteCache;
+  remoteCache.set(repo, request);
+  return request;
 }
 
 // The SaaS advisory source: operator-pushed platform notices from our own API
@@ -237,9 +249,10 @@ export function useUpdates(): UseUpdates {
     // Also pull operator-pushed platform notices here (not just on cloud) so a
     // self-hosted/desktop operator sees danger/maintenance advisories through
     // the SAME banner. Merge them with the GitHub release advisories.
+    const releaseRepo = deployInfo?.releaseRepo ?? GITHUB_REPO;
     const [prefs, remote, notices] = await Promise.all([
       getPrefs(),
-      fetchRemote(),
+      fetchRemote(releaseRepo),
       fetchNotices().catch(() => ({ advisories: [] })),
     ]);
     setMutedState(prefs.muted);
@@ -248,6 +261,7 @@ export function useUpdates(): UseUpdates {
       currentVersion: current,
       latestRelease: remote.latest,
       manifest: remote.manifest,
+      repo: releaseRepo,
       dismissed: prefs.dismissed,
       muted: prefs.muted,
       mode,
@@ -267,7 +281,7 @@ export function useUpdates(): UseUpdates {
     } else if (compareSemver(current, prefs.lastSeen) > 0) {
       setWhatsNewVersion(current);
     }
-  }, [deployInfo?.version, deployInfo?.selfHosted, mode]);
+  }, [deployInfo?.releaseRepo, deployInfo?.version, deployInfo?.selfHosted, mode]);
 
   useEffect(() => {
     void load();
@@ -350,7 +364,7 @@ export function useUpdates(): UseUpdates {
   // native wizard + install act on — re-checks in lockstep with the renderer,
   // instead of only being set by the boot check.
   const refresh = useCallback(() => {
-    remoteCache = null;
+    remoteCache.clear();
     void window.desktop?.updates?.check?.();
     void load();
   }, [load]);

@@ -171,9 +171,10 @@ driven from the box running Openship — not over the network. If the service is
 
 ## `openship update`
 
-Updates the globally-installed CLI — which bundles the self-hosted server — to the latest published release,
-then **restarts the running service** so you're immediately on the new version. It checks GitHub releases
-(not your Openship API) and re-installs the global package with your package manager.
+Updates the globally-installed CLI — which bundles the self-hosted server — from the selected GitHub
+release source. A bare persistent service is restarted and its API health endpoint is probed. A Compose
+installation is pulled and recreated without a follow-up health probe. Official upstream releases install
+from the package registry; fork releases install their checksum-verified GitHub release bundle.
 
 ```bash
 # Update to the latest release
@@ -184,12 +185,26 @@ openship update --check
 
 # Force a package manager
 openship update --via npm
+
+# Follow a fork's stable releases
+openship update --set-source fork --repo mustafamagdy/openship
+
+# Pin one exact fork release
+openship update --set-source pinned --repo mustafamagdy/openship --version 0.4.0
+
+# Return to upstream or inspect the effective selection
+openship update --set-source upstream
+openship update --show-source
 ```
 
 | Flag | Purpose |
 |---|---|
 | `--check` | Only report the current + latest version; don't install. |
 | `--via <manager>` | Package manager to update with: `bun` or `npm` (default: `bun` if present, else `npm`). |
+| `--set-source <channel>` | Persist `upstream`, `fork`, or `pinned`. |
+| `--repo <owner/repo>` | GitHub repository used by `fork` and `pinned`. |
+| `--version <version>` | Exact semantic version required by `pinned`. |
+| `--show-source` | Print the effective source, including environment overrides. |
 
 <Callout title="Automatic restart">
 `openship update` restarts the installed service for you after updating, so you land on the new version

@@ -105,20 +105,31 @@ export interface UpdateState {
 export const GITHUB_REPO = "oblien/openship";
 
 /** GitHub API: the latest published (non-prerelease) release. */
-export const RELEASES_LATEST_API = `https://api.github.com/repos/${GITHUB_REPO}/releases/latest`;
+export function releasesLatestApi(repo = GITHUB_REPO): string {
+  return `https://api.github.com/repos/${encodeRepo(repo)}/releases/latest`;
+}
+
+export const RELEASES_LATEST_API = releasesLatestApi();
 
 /**
  * Raw advisory manifest URL, PINNED to a release tag. Because it's pinned to a
  * tag (not a branch), it only changes when a version is released — commits to
  * `main` are invisible to clients. Returns null for an empty tag.
  */
-export function advisoryManifestUrl(tag: string): string {
-  return `https://raw.githubusercontent.com/${GITHUB_REPO}/${encodeURIComponent(tag)}/release-advisories.json`;
+export function advisoryManifestUrl(tag: string, repo = GITHUB_REPO): string {
+  return `https://raw.githubusercontent.com/${encodeRepo(repo)}/${encodeURIComponent(tag)}/release-advisories.json`;
 }
 
 /** Human-facing changelog link — a specific tag's notes, or all releases. */
-export function changelogUrl(tag?: string): string {
+export function changelogUrl(tag?: string, repo = GITHUB_REPO): string {
   return tag
-    ? `https://github.com/${GITHUB_REPO}/releases/tag/${encodeURIComponent(tag)}`
-    : `https://github.com/${GITHUB_REPO}/releases`;
+    ? `https://github.com/${encodeRepo(repo)}/releases/tag/${encodeURIComponent(tag)}`
+    : `https://github.com/${encodeRepo(repo)}/releases`;
+}
+
+function encodeRepo(repo: string): string {
+  return repo
+    .split("/")
+    .map((part) => encodeURIComponent(part))
+    .join("/");
 }

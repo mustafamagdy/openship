@@ -5,6 +5,7 @@ import type { CloudResourceTier, CloudResourceCustom, PublicEndpoint, PortCheckU
 
 export type PrepareProjectSource =
   | { source?: "github"; owner: string; repo: string; branch?: string; force?: string | boolean }
+  | { source: "azure-devops"; owner: string; repo: string; branch?: string; force?: string | boolean }
   | { source: "local"; path: string };
 
 export interface PrepareComposeService {
@@ -235,6 +236,9 @@ export const deployApi = {
     buildStrategy?: "server" | "local";
     deployTarget?: "local" | "server" | "cloud";
     serverId?: string;
+    deploymentEngine?: "native" | "kubernetes";
+    kubernetesServerId?: string;
+    kubernetesReplicas?: number;
     /** Folder-upload deploy: adopt the uploaded source (workspace / staging dir). */
     uploadSessionId?: string;
     runtimeMode?: "bare" | "docker";

@@ -10,13 +10,13 @@
 
 /* --- Low-level client (rarely needed directly) -------------------- */
 export {
-	api,
-	ApiError,
-	getApiErrorMessage,
-	isAbortError,
-	isNetworkError,
-	setNetworkErrorHandler,
-	getApiBaseUrl,
+  api,
+  ApiError,
+  getApiErrorMessage,
+  isAbortError,
+  isNetworkError,
+  setNetworkErrorHandler,
+  getApiBaseUrl,
 } from "./client";
 export type { RequestOptions } from "./client";
 
@@ -30,6 +30,14 @@ export { appsApi } from "./apps";
 export type { AppCatalogEntry, AppCatalogField, InstallAppResult } from "./apps";
 export { deployApi } from "./deploy";
 export { domainsApi } from "./domains";
+export type {
+  RegisteredDomain,
+  RegisteredDomainVerifyResult,
+  DomainDnsRecord,
+  CloudflareConnection,
+  DnsSyncResult,
+  DnsSyncRecord,
+} from "./domains";
 export {
   jobsApi,
   type JobView,
@@ -45,6 +53,17 @@ export {
 export { tokensApi } from "./tokens";
 export type { AccessToken, CreatedAccessToken, McpClient } from "./tokens";
 export { githubApi } from "./github";
+export { azureDevopsApi } from "./azure-devops";
+export type {
+  AzureDevopsConnection,
+  AzureDevopsProject,
+  AzureDevopsRepository,
+} from "./azure-devops";
+export { containerRegistriesApi } from "./container-registries";
+export type {
+  ContainerRegistryConnection,
+  ConnectContainerRegistryInput,
+} from "./container-registries";
 export { iconsApi } from "./icons";
 export { imagesApi } from "./images";
 export type { ImageCatalogEntry, ListImagesResponse } from "./images";
@@ -164,10 +183,7 @@ export type {
 } from "./terminal";
 
 /* --- Service terminal --------------------------------------------- */
-export {
-  requestServiceTerminalTicket,
-  buildServiceTerminalWsUrl,
-} from "./service-terminal";
+export { requestServiceTerminalTicket, buildServiceTerminalWsUrl } from "./service-terminal";
 
 /* --- Notifications ------------------------------------------------- */
 export { notificationsApi } from "./notifications";

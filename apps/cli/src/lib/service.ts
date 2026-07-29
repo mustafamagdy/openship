@@ -14,6 +14,7 @@ import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, writeFileSync, rmSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
+import { loadUpdateSource } from "./update-source";
 
 import { IS_ALT_HOME, OS_DIR } from "./paths";
 
@@ -142,6 +143,10 @@ function serviceEnv(): Record<string, string> {
   const extra: Record<string, string> = {};
   const dashDir = process.env.OPENSHIP_DASHBOARD_DIR?.trim();
   if (dashDir) extra.OPENSHIP_DASHBOARD_DIR = dashDir;
+  const source = loadUpdateSource();
+  extra.OPENSHIP_RELEASE_REPO = source.repo;
+  extra.OPENSHIP_UPDATE_CHANNEL = source.channel;
+  if (source.pinnedVersion) extra.OPENSHIP_UPDATE_VERSION = source.pinnedVersion;
   const home = process.env.OPENSHIP_HOME?.trim();
   if (home) extra.OPENSHIP_HOME = home;
   return extra;

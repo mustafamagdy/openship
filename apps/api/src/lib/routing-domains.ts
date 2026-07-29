@@ -100,7 +100,16 @@ export function buildProjectRouteDomains(opts: {
     if (!route.destination?.targetPath && route.destination?.targetPort === undefined) return;
     seen.add(normalized);
 
-    const managed = resolveManagedHostname(normalized);
+    // A hostname can sit below HOST_DOMAIN and still be an explicitly managed
+    // custom domain (for example doka.mustafamagdy.com under an operator-owned
+    // mustafamagdy.com zone). Only "free" endpoints belong to the Openship
+    // managed-edge namespace. Treating custom endpoints as managed skipped
+    // certbot and left them HTTP-only, so HTTPS fell through to the first TLS
+    // vhost (often the control panel).
+    const managed: { isManaged: boolean; subdomain?: string } =
+      route.domainType === "free"
+        ? resolveManagedHostname(normalized)
+        : { isManaged: false };
     const domainRow = domainByHostname.get(normalized);
     const isVerified = managed.isManaged
       ? true
@@ -237,7 +246,13 @@ export function buildServiceRouteDomains(opts: {
     if (seen.has(normalized)) continue;
     seen.add(normalized);
 
-    const managed = resolveManagedHostname(hostname);
+    // Domain type, not hostname suffix alone, determines whether this route is
+    // on Openship's managed edge. Registered/custom subdomains of HOST_DOMAIN
+    // still need the normal custom-domain verification + certificate flow.
+    const managed: { isManaged: boolean; subdomain?: string } =
+      endpoint.domainType === "free"
+        ? resolveManagedHostname(hostname)
+        : { isManaged: false };
     const domainRow = opts.domainByHostname?.get(normalized);
     const external = !!domainRow?.externalIngress;
     const manualSsl = !!domainRow?.manualSsl;

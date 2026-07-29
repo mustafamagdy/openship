@@ -24,6 +24,7 @@ import {
   DockerRuntime,
   STATIC_RELEASE_BASE,
   resolveStaticOutputPath,
+  resolveStaticReleaseBase,
   DEFAULT_BUILD_RESOURCE_CONFIG,
   ensurePortAvailable,
   allocateHostPort,
@@ -61,6 +62,7 @@ import { normalizeTargetPath } from "../../lib/public-endpoints";
 import { withDefaults } from "../../lib/resources";
 import { resolveBuildGitToken } from "../github/clone-auth";
 import { openDeployRelay } from "../../lib/git-forwarding";
+import { sshManager } from "../../lib/ssh-manager";
 import { resolveOrgOwner } from "../../lib/org-actor";
 import {
   preCreateServiceDeployments,
@@ -74,8 +76,11 @@ import * as sessionManager from "./session-manager";
 import { onFailure, onSuccess, onCancelled, setDeploymentStatus, type LifecycleContext } from "./deployment-lifecycle";
 import { auditPorts } from "./port-audit.service";
 import { auditStaticOutput, staticOutputTargets } from "./output-audit.service";
-import { createBuildConfig } from "./build-config";
-import { resolveClonePlan } from "./clone-plan";
+import {
+  createBuildConfig,
+  resolveStaticRuntimeDirectory,
+} from "./build-config";
+import { needsGitClone, resolveClonePlan } from "./clone-plan";
 import { collapseTerminalLogs } from "./terminal-logs";
 import {
   executeComposePipeline,
@@ -88,6 +93,12 @@ import {
 } from "../domains/project-route.service";
 import { type DeploymentConfigSnapshot } from "./build.service";
 import * as settingsService from "../settings/settings.service";
+import { completePullRequestPreviewStatus } from "./pull-request-preview-status";
+import {
+  getDefaultRegistryAuth,
+  publishBuildArtifact,
+} from "../container-registry/container-registry.service";
+import { deployToKubernetes } from "./kubernetes/kubernetes-provider";
 
 // Build env = CI/telemetry defaults (BUILD_ENV_VARS) + the customer's own env
 // vars. NODE_ENV is deliberately NOT set or overridden here: it's the customer's
@@ -237,6 +248,12 @@ async function markDeploymentFailedFromOutside(deploymentId: string, error: unkn
       level: "error",
     });
     sessionManager.updateStatus(deploymentId, "failed");
+    const project = await repos.project.findById(dep.projectId).catch(() => undefined);
+    if (project) {
+      await completePullRequestPreviewStatus(project, dep, "failure", {
+        error: message,
+      }).catch(() => undefined);
+    }
   } catch (handlerErr) {
     console.error(`[DEPLOY] markDeploymentFailedFromOutside crashed for ${deploymentId}:`, handlerErr);
   }
@@ -583,7 +600,8 @@ async function executeBuildAndDeploy(project: Project, dep: Deployment, buildSes
       buildStrategy,
       isDesktop: plat.target === "desktop",
       forwardGitCredentials: snapshot.forwardGitCredentials,
-      repoIsGithub: !!project.gitOwner,
+      repoIsGithub:
+        (project.gitProvider ?? "github") === "github" && !!project.gitOwner,
     });
     const cloneOnServer = clonePlan.runsOnServer;
     // The relay needs a real SSH reverse tunnel — `reverseForward` exists on every
@@ -602,11 +620,7 @@ async function executeBuildAndDeploy(project: Project, dep: Deployment, buildSes
     // so the two can't disagree. One-click app installs (Convex, n8n, …) are
     // exactly this case: image services, hasBuild=false. This is what makes the
     // app-install and advanced-deploy paths converge on one behavior.
-    const enabledSvcs = (snapshot.composeServices ?? []).filter((s) => s.enabled !== false);
-    const needsGitSource =
-      enabledSvcs.length > 0
-        ? enabledSvcs.some((s) => s.kind === "monorepo" || !!s.build || !!s.dockerfile)
-        : snapshot.hasBuild !== false;
+    const needsGitSource = needsGitClone(snapshot);
 
     const gitCred: Awaited<ReturnType<typeof resolveBuildGitToken>> = needsGitSource
       ? await resolveBuildGitToken({
@@ -616,6 +630,7 @@ async function executeBuildAndDeploy(project: Project, dep: Deployment, buildSes
             label: "build:resolve-git-token",
           }),
           projectId: project.id,
+          provider: project.gitProvider,
           owner: project.gitOwner ?? undefined,
           repo: project.gitRepo ?? undefined,
           buildStrategy: clonePlan.cloneBuildStrategy,
@@ -680,6 +695,7 @@ async function executeBuildAndDeploy(project: Project, dep: Deployment, buildSes
       envVars: buildEnv.envVars,
       resources: buildResources,
       gitToken: gitCred.token,
+      gitUsername: gitCred.username,
     });
     // A static app builds via the minimal nginx image (generateStaticDockerfile);
     // only this flag selects it. Bare builds ignore it.
@@ -792,6 +808,7 @@ async function executeBuildAndDeploy(project: Project, dep: Deployment, buildSes
           buildResources,
           runtimeResources: prodResources,
           gitToken: gitCred.token,
+          gitUsername: gitCred.username,
           gitCredentialHelperPath: composeRelay?.scriptPath,
           gitSsh: gitCred.ssh,
           gitAmbient: effectiveCloneOnServer ? gitCred.ambient : undefined,
@@ -841,7 +858,7 @@ async function executeBuildAndDeploy(project: Project, dep: Deployment, buildSes
         // buildMode is derived from runtime.name === "docker", so the cast is sound.
         buildResult = await (runtime as DockerRuntime).buildStaticToHost(
           buildConfig,
-          `${STATIC_RELEASE_BASE}/.builds/${buildSessionId}`,
+          `${resolveStaticReleaseBase()}/.builds/${buildSessionId}`,
           logger,
         );
       } else {
@@ -872,8 +889,133 @@ async function executeBuildAndDeploy(project: Project, dep: Deployment, buildSes
       return;
     }
 
+    if (runtime instanceof DockerRuntime) {
+      const published = await publishBuildArtifact({
+        organizationId: project.organizationId,
+        runtime,
+        localRef: buildResult.imageRef,
+        projectSlug: project.slug ?? project.name,
+        artifactKey: `${dep.commitSha?.slice(0, 12) ?? "manual"}-${dep.id}`,
+        logger,
+      });
+      if (published) {
+        buildResult = {
+          ...buildResult,
+          imageRef: published.imageRef,
+          imageDigest: published.imageDigest,
+        };
+      }
+    }
+
+    if (snapshot.deploymentEngine === "kubernetes") {
+      if (!(runtime instanceof DockerRuntime)) {
+        throw new Error("Kubernetes deployments require the Docker OCI build runtime.");
+      }
+      if (!snapshot.kubernetesServerId) {
+        throw new Error("Kubernetes deployment has no cluster server configured.");
+      }
+      if (!buildResult.imageDigest) {
+        throw new Error(
+          "Kubernetes deployments require a default container registry. Configure one in Settings → Container Registries, then redeploy.",
+        );
+      }
+
+      await setDeploymentStatus(dep.id, "deploying", {
+        extra: {
+          imageRef: buildResult.imageRef,
+          imageDigest: buildResult.imageDigest,
+          buildDurationMs: buildResult.durationMs,
+        },
+      });
+
+      const clusterServer = await repos.server.getInOrganization(
+        snapshot.kubernetesServerId,
+        dep.organizationId,
+      );
+      if (!clusterServer) {
+        throw new Error("Kubernetes cluster server is no longer available in this organization.");
+      }
+      const registry = await getDefaultRegistryAuth(dep.organizationId);
+      if (!registry) {
+        throw new Error("The configured container registry could not be loaded.");
+      }
+
+      const deployed = await sshManager.withExecutor(
+        snapshot.kubernetesServerId,
+        (executor) =>
+          deployToKubernetes(
+            executor,
+            {
+              projectId: project.id,
+              projectSlug: project.slug ?? project.name,
+              deploymentId: dep.id,
+              imageRef: buildResult.imageRef!,
+              port: snapshot.port,
+              envVars: envMap,
+              resources: prodResources,
+              replicas: snapshot.kubernetesReplicas,
+              registryAuth: {
+                server: registry.connection.registryHost,
+                username: registry.auth.username,
+                password: registry.auth.password,
+              },
+            },
+            (message) => logger.log(`${message}\n`),
+          ),
+      );
+
+      const plannedDomains = buildProjectRouteDomains({
+        project,
+        projectDomains: routeState.projectDomains,
+        managedSlug: routeState.primarySlug,
+        publicEndpoints: routeState.publicEndpoints,
+        runtimeName: "docker",
+        usesManagedRouting: true,
+      });
+      const upstream = `http://${clusterServer.sshHost}:${deployed.nodePort}`;
+      for (const domain of plannedDomains) {
+        try {
+          await routing.registerRoute({
+            domain: domain.hostname,
+            targetUrl: upstream,
+            tls: domain.tls,
+            webhookProxy: webhookProxyTarget,
+          });
+          if (domain.provisionSsl) {
+            await ssl.provisionCert(domain.hostname);
+          }
+        } catch (err) {
+          logger.log(
+            `Kubernetes workload is ready, but route ${domain.hostname} could not be applied: ${safeErrorMessage(err)}\n`,
+            "warn",
+          );
+        }
+      }
+
+      const primary = plannedDomains.find((domain) => domain.isPrimary) ?? plannedDomains[0];
+      await onSuccess(ctx, {
+        containerId: deployed.workloadId,
+        url: primary
+          ? `${primary.tls ? "https" : "http"}://${primary.hostname}`
+          : upstream,
+        durationMs: buildResult.durationMs ?? 0,
+        metaPatch: {
+          kubernetesNamespace: deployed.namespace,
+          kubernetesDeployment: deployed.deploymentName,
+          kubernetesService: deployed.serviceName,
+          kubernetesNodePort: deployed.nodePort,
+        },
+      });
+      await archivePreviousDeployment(dep, project, logger);
+      return;
+    }
+
     await setDeploymentStatus(dep.id, "deploying", {
-      extra: { imageRef: buildResult.imageRef, buildDurationMs: buildResult.durationMs },
+      extra: {
+        imageRef: buildResult.imageRef,
+        imageDigest: buildResult.imageDigest,
+        buildDurationMs: buildResult.durationMs,
+      },
     });
 
     const phase: DeployPhaseInputs = {
@@ -1147,7 +1289,7 @@ async function executeServerDeploy(phase: DeployPhaseInputs): Promise<void> {
   const isStaticFileServe = phase.deployRouting.deployMode === "static-file-serve";
   const staticServeRuntime = isStaticFileServe
     ? new BareRuntime({
-        workDir: STATIC_RELEASE_BASE,
+        workDir: resolveStaticReleaseBase(),
         executor: phase.targetExecutor ?? undefined,
       })
     : null;

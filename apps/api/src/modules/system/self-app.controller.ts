@@ -209,6 +209,23 @@ export async function selfRegister(c: Context) {
   const domainType = body.domainType ?? "byo";
   const dashPort = Number(body.dashPort) || env.OPENSHIP_DASHBOARD_PORT || 3001;
   const { organizationId } = await resolveOrg();
+  const publicHost = (body.publicHost ?? "")
+    .trim()
+    .replace(/^https?:\/\//i, "")
+    .replace(/\/.*$/, "");
+  if (publicHost) {
+    const localServer = await repos.server.findLocal(organizationId);
+    if (localServer && localServer.sshHost !== publicHost) {
+      await repos.server.update(localServer.id, { sshHost: publicHost });
+    } else if (!localServer) {
+      await repos.server.create({
+        organizationId,
+        name: "This Server",
+        sshHost: publicHost,
+        isLocal: true,
+      });
+    }
+  }
   const projectId = await ensureControlPlaneApp(organizationId, dashPort);
 
   // Make the control plane a REAL deployment (adopt the already-running process)

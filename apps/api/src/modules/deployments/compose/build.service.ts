@@ -136,6 +136,7 @@ export async function buildComposeImages(opts: {
   buildEnvVars: Record<string, string>;
   buildResources: ResourceConfig;
   gitToken?: string;
+  gitUsername?: string;
   /** Relay helper path on the build host — desktop clone-on-server credential. */
   gitCredentialHelperPath?: string;
   /** Per-server SSH clone credential (ssh-server-key / deploy-key mode). */
@@ -313,6 +314,7 @@ export async function buildComposeImages(opts: {
           envVars: opts.buildEnvVars,
           resources: opts.buildResources,
           gitToken: opts.gitToken,
+          gitUsername: opts.gitUsername,
           overrides: {
             slug: buildSlug,
             ...resolveSubAppOverrides({ service, snapshot: opts.snapshot, logger: serviceLogger }),
@@ -348,6 +350,7 @@ export async function buildComposeImages(opts: {
           envVars: opts.buildEnvVars,
           resources: opts.buildResources,
           gitToken: opts.gitToken,
+          gitUsername: opts.gitUsername,
           overrides: {
             slug: buildSlug,
             rootDirectory: context,

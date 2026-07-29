@@ -228,6 +228,7 @@ async function cloneGitSource(
   const { cloneUrl, env: gitEnv, credArgs } = assembleGitClone({
     repoUrl: config.repoUrl,
     gitToken: config.gitToken,
+    gitUsername: config.gitUsername,
     ssh: sshMaterial,
   });
 

@@ -65,7 +65,23 @@ export function createWebhookDeliveryRepo(db: Database) {
     return { rows: pageRows, nextCursor: hasMore && last ? encodeCursor(last) : undefined };
   }
 
+  async function claim(input: WebhookDeliveryInput): Promise<{ claimed: boolean; id: string }> {
+    const id = generateId("wdl");
+    const rows = await db
+      .insert(webhookDelivery)
+      .values({ ...input, id })
+      .onConflictDoNothing()
+      .returning();
+    return rows.length > 0 ? { claimed: true, id } : { claimed: false, id: "" };
+  }
+
   return {
+    /**
+     * Atomically claim a signed-provider delivery id. The partial unique index
+     * on (source, delivery_id) makes this safe across restarts and replicas.
+     */
+    claim,
+
     /**
      * Atomically CLAIM a GitHub delivery id (source='github'). Returns
      * claimed:true + the new row id on the FIRST delivery; claimed:false on a
@@ -73,13 +89,7 @@ export function createWebhookDeliveryRepo(db: Database) {
      * idempotency guard formerly in github_webhook_event.claim.
      */
     async claimGithub(input: Omit<WebhookDeliveryInput, "source">): Promise<{ claimed: boolean; id: string }> {
-      const id = generateId("wdl");
-      const rows = await db
-        .insert(webhookDelivery)
-        .values({ ...input, id, source: "github" })
-        .onConflictDoNothing()
-        .returning();
-      return rows.length > 0 ? { claimed: true, id } : { claimed: false, id: "" };
+      return claim({ ...input, source: "github" });
     },
 
     /** Record a delivery row (incoming/backup, or a github fan-out row). Returns its id. */

@@ -33,7 +33,7 @@ import type {
 import { env } from "../../config/env";
 import { resolveApiPublicUrl, sharedWebhookUrl, domainWebhookUrl } from "../../lib/public-url";
 
-export const GITHUB_DEPLOY_WEBHOOK_EVENTS = ["push"] as const;
+export const GITHUB_DEPLOY_WEBHOOK_EVENTS = ["push", "pull_request"] as const;
 const MAX_FALLBACK_TREE_ENTRIES = 5000;
 
 /**
@@ -749,6 +749,7 @@ export async function updateCheckRun(
   opts: {
     status: "completed";
     conclusion: "success" | "failure" | "cancelled" | "neutral" | "skipped";
+    detailsUrl?: string;
     output?: { title: string; summary: string; text?: string };
   },
 ): Promise<void> {
@@ -762,6 +763,7 @@ export async function updateCheckRun(
         status: opts.status,
         completed_at: new Date().toISOString(),
         conclusion: opts.conclusion,
+        ...(opts.detailsUrl ? { details_url: opts.detailsUrl } : {}),
         ...(opts.output ? { output: opts.output } : {}),
       },
     });
@@ -1100,6 +1102,66 @@ export async function backfillWebhookSecrets(): Promise<void> {
     } catch (err) {
       console.warn(
         `[GitHub Webhook] webhook-secret backfill failed for project ${p.id}: ${safeErrorMessage(err)}`,
+      );
+    }
+  }
+}
+
+/**
+ * Self-hosted boot reconciliation for existing repository webhooks. Preview
+ * deployments require `pull_request` deliveries, while hooks created by older
+ * Openship versions subscribed only to `push`. Patch every active production
+ * hook to the canonical event list after secrets have been backfilled.
+ *
+ * The query is bounded and production-only so cloned preview environments do
+ * not cause duplicate API calls. Cloud/App mode is excluded because GitHub App
+ * event subscriptions are configured on the App itself, not per repository.
+ */
+export async function reconcileGitHubDeployWebhookEvents(): Promise<void> {
+  if (env.CLOUD_MODE || getGitHubAuthMode() === "app") return;
+
+  const projects = await dbRepos.project
+    .listRegisteredGitHubDeployWebhooks()
+    .catch(() => []);
+  for (const project of projects) {
+    if (
+      !project.webhookId ||
+      !project.gitOwner ||
+      !project.gitRepo ||
+      !project.webhookSecret
+    ) {
+      continue;
+    }
+
+    try {
+      const owner = await resolveOrgOwner(project.organizationId).catch(() => null);
+      if (!owner?.userId) continue;
+      const ctx = buildBackgroundContext({
+        userId: owner.userId,
+        organizationId: project.organizationId,
+        label: "webhook:reconcile-events",
+      });
+      const webhookUrl = project.webhookDomain
+        ? domainWebhookUrl(project.webhookDomain)
+        : sharedWebhookUrl();
+      await updateWebhook(
+        ctx,
+        project.gitOwner,
+        project.gitRepo,
+        project.webhookId,
+        {
+          active: true,
+          events: [...GITHUB_DEPLOY_WEBHOOK_EVENTS],
+          config: {
+            url: webhookUrl,
+            content_type: "json",
+            secret: decrypt(project.webhookSecret),
+          },
+        },
+      );
+    } catch (err) {
+      console.warn(
+        `[GitHub Webhook] event reconciliation failed for project ${project.id}: ${safeErrorMessage(err)}`,
       );
     }
   }

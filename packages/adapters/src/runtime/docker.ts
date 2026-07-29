@@ -24,6 +24,7 @@
  */
 
 import Dockerode from "dockerode";
+import { randomUUID } from "node:crypto";
 
 import type {
   BuildConfig,
@@ -40,6 +41,7 @@ import type {
   ShellSession,
   ProvisionLock,
 } from "../types";
+import type { RegistryAuthConfig } from "./types";
 import type { PortProbeExecutor } from "../system/port-listen";
 import { PassThrough, Writable, type Readable } from "node:stream";
 
@@ -879,6 +881,7 @@ export class DockerRuntime implements RuntimeAdapter {
     const { cloneUrl, gitEnv: GIT_ENV, credFlag: CRED } = assembleGitClone({
       repoUrl: config.repoUrl,
       gitToken: config.gitToken,
+      gitUsername: config.gitUsername,
       gitCredentialHelperPath: config.gitCredentialHelperPath,
       ssh: sshMaterial,
       ambient: config.gitAmbient,
@@ -1750,6 +1753,54 @@ export class DockerRuntime implements RuntimeAdapter {
     }
   }
 
+  /**
+   * Tag and push a locally-built image to an OCI registry, returning the
+   * content-addressable reference. Credentials are passed ephemerally and are
+   * never written to Docker's persistent config.
+   */
+  async publishImage(
+    localRef: string,
+    remoteRef: string,
+    auth: RegistryAuthConfig,
+  ): Promise<{ imageRef: string; imageDigest: string }> {
+    const executor = this.connectionOptions?.executor;
+    let digest: string | undefined;
+
+    if (executor) {
+      const output = await this.withRemoteRegistryAuth(auth, async (dockerConfig) => {
+        await executor.exec(`docker tag ${sq(localRef)} ${sq(remoteRef)}`);
+        return executor.exec(
+          `DOCKER_CONFIG=${sq(dockerConfig)} docker push ${sq(remoteRef)}`,
+          { timeout: 20 * 60_000 },
+        );
+      });
+      digest = output.match(/digest:\s*(sha256:[0-9a-f]{64})/i)?.[1];
+    } else {
+      const lastSlash = remoteRef.lastIndexOf("/");
+      const lastColon = remoteRef.lastIndexOf(":");
+      const hasTag = lastColon > lastSlash;
+      const repo = hasTag ? remoteRef.slice(0, lastColon) : remoteRef;
+      const tag = hasTag ? remoteRef.slice(lastColon + 1) : "latest";
+      await this.docker.getImage(localRef).tag({ repo, tag });
+      const stream = await this.docker.getImage(remoteRef).push({ authconfig: auth });
+      const events = await new Promise<any[]>((resolve, reject) => {
+        this.docker.modem.followProgress(stream, (error, output) =>
+          error ? reject(error) : resolve(output ?? []),
+        );
+      });
+      digest = events
+        .map((event) => event?.aux?.Digest ?? String(event?.status ?? "").match(/digest:\s*(sha256:[0-9a-f]{64})/i)?.[1])
+        .find((value) => typeof value === "string");
+    }
+
+    digest ??= (await this.resolveImageDigest(remoteRef))?.split("@")[1];
+    if (!digest || !/^sha256:[0-9a-f]{64}$/i.test(digest)) {
+      throw new Error(`Registry push completed but did not return an immutable digest for ${remoteRef}.`);
+    }
+    const repo = remoteRef.slice(0, remoteRef.lastIndexOf(":") > remoteRef.lastIndexOf("/") ? remoteRef.lastIndexOf(":") : remoteRef.length);
+    return { imageRef: `${repo}@${digest}`, imageDigest: digest };
+  }
+
   async destroy(containerId: string): Promise<void> {
     // An absolute-path id is a static build/release DIRECTORY on the host that
     // this runtime produced via buildStaticToHost — not a container.
@@ -2096,7 +2147,10 @@ export class DockerRuntime implements RuntimeAdapter {
    * followProgress hangs forever (this was the cross-server migration stall).
    * A local socket has no such issue, so it keeps the native dockerode pull.
    */
-  async pullImage(ref: string, opts?: { force?: boolean }): Promise<void> {
+  async pullImage(
+    ref: string,
+    opts?: { force?: boolean; auth?: RegistryAuthConfig },
+  ): Promise<void> {
     if (!opts?.force) {
       try {
         await this.docker.getImage(ref).inspect();
@@ -2111,13 +2165,46 @@ export class DockerRuntime implements RuntimeAdapter {
     if (executor) {
       // 10 min ceiling — large images over a slow link; still bounded so a
       // genuinely stuck pull surfaces instead of hanging the whole migration.
-      await executor.exec(`docker pull ${sq(ref)}`, { timeout: 10 * 60_000 });
+      if (opts?.auth) {
+        await this.withRemoteRegistryAuth(opts.auth, (dockerConfig) =>
+          executor.exec(
+            `DOCKER_CONFIG=${sq(dockerConfig)} docker pull ${sq(ref)}`,
+            { timeout: 10 * 60_000 },
+          ),
+        );
+      } else {
+        await executor.exec(`docker pull ${sq(ref)}`, { timeout: 10 * 60_000 });
+      }
       return;
     }
-    const stream = await this.docker.pull(ref);
+    const stream = await this.docker.pull(
+      ref,
+      opts?.auth ? { authconfig: opts.auth } : undefined,
+    );
     await new Promise<void>((resolve, reject) => {
       this.docker.modem.followProgress(stream, (err) => (err ? reject(err) : resolve()));
     });
+  }
+
+  private async withRemoteRegistryAuth<T>(
+    auth: RegistryAuthConfig,
+    operation: (dockerConfigDir: string) => Promise<T>,
+  ): Promise<T> {
+    const executor = this.connectionOptions?.executor;
+    if (!executor) throw new Error("Remote registry authentication requires an executor.");
+    const dir = `/tmp/openship-registry-${randomUUID()}`;
+    const encoded = Buffer.from(`${auth.username}:${auth.password}`, "utf8").toString("base64");
+    try {
+      await executor.mkdir(dir);
+      await executor.writeFile(
+        `${dir}/config.json`,
+        JSON.stringify({ auths: { [auth.serveraddress]: { auth: encoded } } }),
+      );
+      await executor.exec(`chmod 700 ${sq(dir)} && chmod 600 ${sq(`${dir}/config.json`)}`);
+      return await operation(dir);
+    } finally {
+      await executor.rm(dir).catch(() => {});
+    }
   }
 
   /** Is this image tag present on THIS daemon? Distinguishes a locally-built
@@ -2214,8 +2301,14 @@ export class DockerRuntime implements RuntimeAdapter {
       await executor.exec(`docker tag ${sq(source)} ${sq(target)}`);
       return;
     }
-    // dockerode tag wants repo + optional tag split.
-    const [repo, tag] = target.includes(":") ? [target.slice(0, target.lastIndexOf(":")), target.slice(target.lastIndexOf(":") + 1)] : [target, undefined];
+    // dockerode tag wants repo + optional tag split. A registry port is not an
+    // image tag (`localhost:5000/team/app`), so only a colon after the final
+    // slash separates a tag.
+    const lastSlash = target.lastIndexOf("/");
+    const lastColon = target.lastIndexOf(":");
+    const hasTag = lastColon > lastSlash;
+    const repo = hasTag ? target.slice(0, lastColon) : target;
+    const tag = hasTag ? target.slice(lastColon + 1) : undefined;
     await this.docker.getImage(source).tag({ repo, ...(tag ? { tag } : {}) });
   }
 
@@ -2957,7 +3050,10 @@ export class DockerRuntime implements RuntimeAdapter {
         // Shared pull path — blocking `docker pull` over SSH so a first-time
         // pull on a fresh remote server can't hang (followProgress-over-SSH).
         // force-pull on the "update" trigger to roll a moved mutable tag forward.
-        await this.pullImage(config.image, { force: config.forcePull });
+        await this.pullImage(config.image, {
+          force: config.forcePull,
+          auth: config.registryAuth,
+        });
       } catch (err) {
         log({
           timestamp: new Date().toISOString(),

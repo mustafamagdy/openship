@@ -31,6 +31,7 @@ import {
 import { importMigratedSites } from "../lib/edge-import";
 import { edgeIsBroken, edgeCrashReason } from "@repo/adapters/proxy";
 import { LocalExecutor } from "@repo/adapters";
+import { loadUpdateSource } from "../lib/update-source";
 import {
   resolveInstallInputs,
   headlessProvision,
@@ -655,6 +656,14 @@ async function runForeground(opts: UpOpts, source?: FromSourceRun): Promise<void
       PGLITE_DATA_DIR: dataDir,
       BETTER_AUTH_SECRET: ensureAuthSecret(),
     };
+    const updateSource = loadUpdateSource();
+    env.OPENSHIP_RELEASE_REPO = updateSource.repo;
+    env.OPENSHIP_UPDATE_CHANNEL = updateSource.channel;
+    if (updateSource.pinnedVersion) {
+      env.OPENSHIP_UPDATE_VERSION = updateSource.pinnedVersion;
+    } else {
+      delete env.OPENSHIP_UPDATE_VERSION;
+    }
     // Bundled server relocates its migrations + pglite assets next to the entry;
     // from-source resolves them from the dist's workspace layout, so leave unset.
     if (!source) {

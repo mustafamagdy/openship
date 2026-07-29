@@ -1,5 +1,13 @@
 // ─── Database client ─────────────────────────────────────────────────────────
-export { db, getDriver, getPgPool, closeDb, type Database, type Driver } from "./client";
+export {
+  db,
+  getDriver,
+  getPgPool,
+  closeDb,
+  dumpPgliteDataDir,
+  type Database,
+  type Driver,
+} from "./client";
 // The dev hot-reload contract: shutdown must free the PGlite lock inside the
 // successor's takeover grace, or every reload hard-kills the DB mid-close.
 export { DEV_LOCK_TAKEOVER_GRACE_MS, isDevWatchReload } from "./pglite-lock";
@@ -45,9 +53,14 @@ export {
   createSessionRepo,
   createAccountRepo,
   createGitInstallationRepo,
+  createAzureDevopsConnectionRepo,
+  createDnsProviderConnectionRepo,
+  createContainerRegistryConnectionRepo,
+  createOrganizationDomainRepo,
   createProjectGroupRepo,
   createProjectRepo,
   createDeploymentRepo,
+  createDeploymentCheckRunRepo,
   createDomainRepo,
   createServiceRepo,
   createServiceDeploymentRepo,
@@ -70,6 +83,14 @@ export {
   type Account,
   type GitInstallation,
   type NewGitInstallation,
+  type AzureDevopsConnection,
+  type NewAzureDevopsConnection,
+  type DnsProviderConnection,
+  type NewDnsProviderConnection,
+  type ContainerRegistryConnection,
+  type NewContainerRegistryConnection,
+  type OrganizationDomain,
+  type NewOrganizationDomain,
   type ProjectGroup,
   type NewProjectGroup,
   type Project,
@@ -78,6 +99,8 @@ export {
   type NewEnvVar,
   type Deployment,
   type NewDeployment,
+  type DeploymentCheckRunRecord,
+  type NewDeploymentCheckRun,
   type BuildSession,
   type NewBuildSession,
   type Domain,

@@ -15,6 +15,7 @@ import { useRouter } from "next/navigation";
 import { useI18n } from "@/components/i18n-provider";
 import { projectsApi, servicesApi, type Service } from "@/lib/api";
 import { PROJECT_INFO_NOT_FOUND, useProjectInfo } from "@/hooks/useProjectEndpoints";
+import { gitProviderLabel, repositoryWebUrl } from "@/utils/gitProvider";
 
 interface ProjectDomain {
   domain: string;
@@ -496,12 +497,13 @@ export const ProjectSettingsProvider: React.FC<ProviderProps> = ({
         setGitData({
           repository: {
             name: `${response.owner}/${response.repo}`,
-            // `full_name` is the GitHub-canonical field the Source tab's
-            // auto-deploy switch gates on; without it that control was hidden
-            // for every git project.
+            // Source controls use full_name for both GitHub and Azure-backed
+            // projects; provider/url remain provider-aware.
             full_name: `${response.owner}/${response.repo}`,
-            provider: "GitHub",
-            url: `https://github.com/${response.owner}/${response.repo}`,
+            provider: gitProviderLabel(response.provider),
+            url:
+              response.repository_url ||
+              repositoryWebUrl(response.provider, response.owner, response.repo),
           },
           branch: response.branch || "main",
           recentCommits: mappedCommits,

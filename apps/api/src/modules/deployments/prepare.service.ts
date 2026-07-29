@@ -6,6 +6,7 @@
  */
 
 import * as githubService from "../github/github.service";
+import * as azureDevopsService from "../azure-devops/azure-devops.service";
 import type { RequestContext } from "../../lib/request-context";
 import { MANIFEST_FILES, type RepoFile, type StackResult } from "../../lib/stack-detector";
 import { parseComposeEnvFile, parseComposeFile, type ComposeService } from "../../lib/compose-parser";
@@ -35,7 +36,11 @@ import {
   type OpenshipMonorepoApp,
 } from "@repo/core";
 import { env } from "../../config";
-import { createGitHubReader, type ProjectReader } from "./project-reader";
+import {
+  createAzureDevopsReader,
+  createGitHubReader,
+  type ProjectReader,
+} from "./project-reader";
 
 const PREPARE_FILE_CONTENTS = [
   ...MANIFEST_FILES,
@@ -61,6 +66,13 @@ export type Source =
        *  Optional in the type for back-compat with old callers; the
        *  github resolver throws when it's missing. */
       ctx?: RequestContext;
+    }
+  | {
+      source: "azure-devops";
+      owner: string;
+      repo: string;
+      branch?: string;
+      ctx: RequestContext;
     }
   | { source: "local"; path: string };
 
@@ -456,6 +468,14 @@ export async function resolveProjectInfo(input: Source): Promise<ProjectInfo> {
     return resolveFromGitHub(input.ctx, input.owner, input.repo, input.branch);
   }
 
+  if (input.source === "azure-devops") {
+    return resolveFromAzureDevops(
+      input.ctx,
+      azureDevopsService.parseAzureRepoOwner(input.owner, input.repo),
+      input.branch,
+    );
+  }
+
   if (env.CLOUD_MODE) {
     throw new Error("Local project resolution is not available in cloud mode");
   }
@@ -463,6 +483,33 @@ export async function resolveProjectInfo(input: Source): Promise<ProjectInfo> {
   // Dynamic import keeps local-source (node:fs) out of the cloud module graph.
   const { resolveFromLocal } = await import("./local-source");
   return resolveFromLocal(input.path);
+}
+
+async function resolveFromAzureDevops(
+  ctx: RequestContext,
+  coords: azureDevopsService.AzureRepoCoordinates,
+  branch?: string,
+): Promise<ProjectInfo> {
+  const repository = await azureDevopsService.getRepository(ctx, coords, {
+    withBranches: true,
+  });
+  const requestedBranch = branch?.trim();
+  const selectedBranch = requestedBranch || repository.default_branch;
+
+  if (requestedBranch) {
+    const head = await azureDevopsService.getLatestCommit(ctx, coords, selectedBranch);
+    if (!head) {
+      throw new Error(
+        `Branch "${selectedBranch}" was not found for ${coords.organization}/${coords.project}/${coords.repo}`,
+      );
+    }
+  }
+
+  return resolveFromReader(
+    createAzureDevopsReader(ctx, coords, selectedBranch),
+    repository,
+    selectedBranch,
+  );
 }
 
 type RepoMeta = Parameters<typeof toProjectInfo>[0];

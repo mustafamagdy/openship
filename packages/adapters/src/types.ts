@@ -186,6 +186,8 @@ export interface BuildConfig {
   resources: ResourceConfig;
   /** Ephemeral token for cloning private repos - never persisted */
   gitToken?: string;
+  /** HTTP Basic username used when embedding `gitToken` in an HTTPS clone URL. */
+  gitUsername?: string;
   /**
    * Desktop-only: absolute path to a git credential-helper script on the
    * REMOTE build host (written by the deploy git-credential relay). When set,
@@ -300,6 +302,8 @@ export interface BuildResult {
   status: ContainerStatus;
   /** Opaque reference to the built image / snapshot */
   imageRef?: string;
+  /** Digest returned when the build artifact was published to an OCI registry. */
+  imageDigest?: string;
   durationMs?: number;
   /** Human-readable error description when status is "failed" */
   errorMessage?: string;

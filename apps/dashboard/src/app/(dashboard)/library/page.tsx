@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useState, useEffect, useCallback } from "react";
-import { FolderUp, Github, Link2, Sparkles, Boxes } from "lucide-react";
+import { FolderUp, Github, GitBranch, Link2, Sparkles, Boxes } from "lucide-react";
 import { useGitHub } from "@/context/GitHubContext";
 import { usePlatform } from "@/context/PlatformContext";
 import { useCloud } from "@/context/CloudContext";
@@ -18,10 +18,11 @@ import { TemplateGrid } from "./components/TemplateGrid";
 import { PageContainer } from "@/components/ui/PageContainer";
 import { HelpMenu } from "@/components/HelpMenu";
 import { ServerMigrationWizard } from "@/components/migration/ServerMigrationWizard";
+import { AzureReposList } from "./components/AzureReposList";
 import { useI18n } from "@/components/i18n-provider";
 import { useToast } from "@/context/ToastContext";
 
-type Tab = "folder" | "repositories" | "url" | "template" | "server";
+type Tab = "folder" | "repositories" | "azure-repos" | "url" | "template" | "server";
 
 /** One-time gh-CLI repo-read consent flag (per browser — desktop is single-user). */
 const GH_CLI_CONSENT_KEY = "openship.gh-cli-consent";
@@ -92,6 +93,7 @@ export default function LibraryPage() {
   const tabs: TabItem[] = [
     { key: "folder", label: t.library.page.tabs.folder, icon: FolderUp },
     { key: "repositories", label: t.library.page.tabs.github, icon: Github },
+    { key: "azure-repos", label: "Azure Repos", icon: GitBranch },
     { key: "url", label: t.library.page.tabs.url, icon: Link2 },
     { key: "template", label: t.library.page.tabs.template, icon: Sparkles },
     // Adopting a running Docker deployment needs SSH into the user's own box —
@@ -173,6 +175,8 @@ export default function LibraryPage() {
             ) : (
               <FolderUpload />
             )
+          ) : activeTab === "azure-repos" ? (
+            <AzureReposList />
           ) : activeTab === "url" ? (
             <UrlImport />
           ) : activeTab === "template" ? (
@@ -215,18 +219,29 @@ export default function LibraryPage() {
         </div>
 
         {/* ── RIGHT COLUMN ───────────────────────────────────────── */}
-        <LibrarySidebar
-          selectedOwner={selectedOwner}
-          repos={libRepos.repos}
-          selfHosted={selfHosted}
-          state={state}
-          cloudConnected={cloudConnected}
-          counts={{
-            total: libRepos.meta.total,
-            publicCount: libRepos.meta.publicCount,
-            privateCount: libRepos.meta.privateCount,
-          }}
-        />
+        {activeTab === "azure-repos" ? (
+          <div className="h-fit rounded-2xl border border-border/50 bg-card p-5">
+            <h3 className="text-sm font-semibold text-foreground">Azure Repos</h3>
+            <p className="mt-2 text-sm leading-relaxed text-muted-foreground">
+              Select an organization, project, and repository. OpenShip will detect
+              the stack, clone with the encrypted connection credential, and let
+              you choose the target server explicitly.
+            </p>
+          </div>
+        ) : (
+          <LibrarySidebar
+            selectedOwner={selectedOwner}
+            repos={libRepos.repos}
+            selfHosted={selfHosted}
+            state={state}
+            cloudConnected={cloudConnected}
+            counts={{
+              total: libRepos.meta.total,
+              publicCount: libRepos.meta.publicCount,
+              privateCount: libRepos.meta.privateCount,
+            }}
+          />
+        )}
       </div>
 
       <ServerMigrationWizard isOpen={showMigrate} onClose={() => setShowMigrate(false)} />

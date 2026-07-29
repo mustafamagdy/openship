@@ -20,6 +20,7 @@ import { verifyHmacSha256 } from "../webhooks/webhook.service";
 import { handleInstallation } from "./webhook-installation";
 import { handlePush } from "./webhook-push";
 import { handleCheckRun } from "./webhook-check-run";
+import { handlePullRequest } from "./webhook-pull-request";
 import type {
   WebhookProvider,
   WebhookVerifyResult,
@@ -28,6 +29,7 @@ import type {
 import type {
   GitHubCheckRunPayload,
   GitHubInstallationPayload,
+  GitHubPullRequestPayload,
   GitHubPushPayload,
 } from "./github.types";
 
@@ -70,7 +72,7 @@ async function collectDeliverySecrets(
   const event = headers["x-github-event"];
   // installation / ping events aren't repo-scoped on the deploy side — they hit
   // api.openship.io's App webhook, verified with the env secret (no project).
-  if (event !== "push" && event !== "check_run") return [];
+  if (event !== "push" && event !== "check_run" && event !== "pull_request") return [];
 
   let parsed: unknown;
   try {
@@ -189,6 +191,9 @@ export const githubWebhookProvider: WebhookProvider = {
         break;
       case "check_run":
         result = await handleCheckRun(payload as GitHubCheckRunPayload);
+        break;
+      case "pull_request":
+        result = await handlePullRequest(payload as GitHubPullRequestPayload);
         break;
       case "ping":
         result = { success: true, event, message: "Pong" };

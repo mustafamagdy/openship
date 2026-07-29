@@ -40,6 +40,10 @@ import {
 import { removeProjectFromServerManifests } from "../../lib/openship-manifest-sync";
 import { cancelBuildSession } from "../deployments/build.service";
 import { deleteWebhook as deleteGitHubWebhook } from "../github/github.service";
+import {
+  deletePushSubscription as deleteAzurePushSubscription,
+  parseAzureRepoOwner,
+} from "../azure-devops/azure-devops.service";
 import type { RequestContext } from "../../lib/request-context";
 import { env } from "../../config";
 import {
@@ -597,6 +601,61 @@ async function stepDeleteWebhook(
   project: Project,
   push: (s: TeardownStep) => void,
 ): Promise<void> {
+  if (
+    project.gitProvider === "azure-devops" &&
+    project.webhookExternalId &&
+    project.gitOwner &&
+    project.gitRepo
+  ) {
+    try {
+      const siblings = (await repos.project.findByGitRepo(project.gitOwner, project.gitRepo)).filter(
+        (row) =>
+          row.id !== project.id &&
+          row.organizationId === project.organizationId &&
+          row.gitProvider === "azure-devops",
+      );
+      if (siblings.some((row) => row.autoDeploy)) {
+        push({
+          step: "azure_devops_webhook",
+          status: "skipped",
+          details: "shared by another environment",
+        });
+        return;
+      }
+      const { organization } = parseAzureRepoOwner(project.gitOwner, project.gitRepo);
+      await deleteAzurePushSubscription(
+        ctx,
+        organization,
+        project.webhookExternalId,
+      );
+      await Promise.all(
+        siblings.map((row) =>
+          repos.project.update(row.id, {
+            webhookExternalId: null,
+            webhookSecret: null,
+          }),
+        ),
+      );
+      push({
+        step: "azure_devops_webhook",
+        status: "ok",
+        details: `subscription ${project.webhookExternalId}`,
+      });
+    } catch (err) {
+      const msg = safeErrorMessage(err);
+      if (msg.toLowerCase().includes("not found") || msg.includes("404")) {
+        push({
+          step: "azure_devops_webhook",
+          status: "skipped",
+          details: "already gone",
+        });
+        return;
+      }
+      push({ step: "azure_devops_webhook", status: "failed", error: msg });
+    }
+    return;
+  }
+
   if (!project.webhookId || !project.gitOwner || !project.gitRepo) {
     push({ step: "github_webhook", status: "skipped", details: "no webhook bound" });
     return;

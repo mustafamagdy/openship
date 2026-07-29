@@ -1,6 +1,7 @@
 import type { BuildConfig, ResourceConfig } from "@repo/adapters";
 import type { Deployment, Project } from "@repo/db";
 import type { BuildStrategy } from "@repo/core";
+import { posix as pathPosix } from "node:path";
 
 export interface BuildConfigSnapshotLike {
   repoUrl: string;
@@ -38,13 +39,42 @@ export interface BuildConfigFactoryOptions {
   envVars: Record<string, string>;
   resources: ResourceConfig;
   gitToken?: string;
+  gitUsername?: string;
   /** Desktop-only: remote credential-helper script path (deploy relay fallback). */
   gitCredentialHelperPath?: string;
   overrides?: Partial<BuildConfig>;
 }
 
+/**
+ * Static output paths are relative to the configured project root. Docker's
+ * build context already applies `rootDirectory`; the direct/bare deploy must
+ * preserve the same convention when it hands a file root to OpenResty.
+ */
+export function resolveStaticRuntimeDirectory(
+  rootDirectory: string,
+  outputDirectory: string,
+): string {
+  const root = rootDirectory.trim().replace(/^\/+|\/+$/g, "");
+  const output = outputDirectory.trim();
+
+  if (!root) return output || ".";
+  if (!output || output === ".") return root;
+  return pathPosix.join(root, output);
+}
+
 export function createBuildConfig(opts: BuildConfigFactoryOptions): BuildConfig {
-  const { project, dep, snapshot, sessionId, envVars, resources, gitToken, gitCredentialHelperPath, overrides } = opts;
+  const {
+    project,
+    dep,
+    snapshot,
+    sessionId,
+    envVars,
+    resources,
+    gitToken,
+    gitUsername,
+    gitCredentialHelperPath,
+    overrides,
+  } = opts;
 
   return {
     sessionId,
@@ -71,6 +101,7 @@ export function createBuildConfig(opts: BuildConfigFactoryOptions): BuildConfig 
     envVars,
     resources,
     gitToken,
+    gitUsername,
     gitCredentialHelperPath,
     ...overrides,
   };

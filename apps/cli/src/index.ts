@@ -46,6 +46,7 @@ import { cacheCommand } from "./commands/cache";
 import { runWizard, runControl, isSetupInProgress } from "./commands/wizard";
 import { serviceStatus } from "./lib/service";
 import { readInstallMethod } from "./lib/compose";
+import { shouldRunControl } from "./lib/setup-state";
 
 // Injected at build time by tsup (define). Always present in the built binary.
 declare const __CLI_VERSION__: string;
@@ -66,14 +67,13 @@ program
     // A service is installed AND setup finished → manage it. If a prior setup
     // was interrupted (service installed but never completed), resume the wizard
     // instead of showing the control panel as if the install were done.
-    //
-    // "installed" must cover a Docker Compose install too: that path installs NO
-    // systemd/launchd unit (the stack restarts via Docker's own policy), so
-    // serviceStatus().installed is false for it. Without the readInstallMethod
-    // check, re-running `openship` after a finished compose install (the Linux
-    // default) drops back into the full setup wizard instead of the control panel.
-    const installed = serviceStatus().installed || readInstallMethod() === "compose";
-    if (installed && !isSetupInProgress()) await runControl();
+    if (
+      shouldRunControl({
+        serviceInstalled: serviceStatus().installed,
+        installMethod: readInstallMethod(),
+        setupInProgress: isSetupInProgress(),
+      })
+    ) await runControl();
     else await runWizard();
   });
 

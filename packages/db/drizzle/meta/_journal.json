@@ -512,6 +512,55 @@
       "when": 1785358400651,
       "tag": "0072_gh_device_token_method",
       "breakpoints": true
+    },
+    {
+      "idx": 73,
+      "version": "7",
+      "when": 1785358698651,
+      "tag": "0070_add_azure_devops_connection",
+      "breakpoints": true
+    },
+    {
+      "idx": 74,
+      "version": "7",
+      "when": 1785358798651,
+      "tag": "0071_add_project_webhook_external_id",
+      "breakpoints": true
+    },
+    {
+      "idx": 75,
+      "version": "7",
+      "when": 1785358898651,
+      "tag": "0072_add_organization_domain",
+      "breakpoints": true
+    },
+    {
+      "idx": 76,
+      "version": "7",
+      "when": 1785358998651,
+      "tag": "0073_add_cloudflare_dns_automation",
+      "breakpoints": true
+    },
+    {
+      "idx": 77,
+      "version": "7",
+      "when": 1785359098651,
+      "tag": "0074_add_oci_registry_distribution",
+      "breakpoints": true
+    },
+    {
+      "idx": 78,
+      "version": "7",
+      "when": 1785359198651,
+      "tag": "0075_ensure_merged_schema",
+      "breakpoints": true
+    },
+    {
+      "idx": 79,
+      "version": "7",
+      "when": 1785359298651,
+      "tag": "0076_provider_webhook_delivery_dedup",
+      "breakpoints": true
     }
   ]
 }

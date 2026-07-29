@@ -11,9 +11,10 @@ const MIGRATIONS_DIR = resolve(dirname(fileURLToPath(import.meta.url)), "../../d
 
 /**
  * Real (in-memory PGlite) test for the webhook_delivery repo — the correctness-
- * critical part is `claimGithub`, which REPLACES the old github_webhook_event
- * dedup that stops double-deploys. FK enforcement is disabled so we can insert
- * rows without the org/project chain.
+ * critical part is provider-scoped claiming, which REPLACES the old
+ * github_webhook_event dedup and also protects Azure deliveries from double
+ * deploys. FK enforcement is disabled so we can insert rows without the
+ * org/project chain.
  */
 /**
  * Migrating a fresh PGlite is the expensive part (~1s idle, several seconds when
@@ -30,7 +31,7 @@ async function freshRepo() {
   return { client, repo: createWebhookDeliveryRepo(db) };
 }
 
-describe("webhookDelivery repo — GitHub idempotency (claim) + feed", () => {
+describe("webhookDelivery repo — provider idempotency (claim) + feed", () => {
   let client: PGlite;
   let repo: Awaited<ReturnType<typeof freshRepo>>["repo"];
   beforeAll(async () => {
@@ -51,6 +52,26 @@ describe("webhookDelivery repo — GitHub idempotency (claim) + feed", () => {
 
     const other = await repo.claimGithub({ deliveryId: "d2", event: "push", outcome: "received" });
     expect(other.claimed).toBe(true); // a different delivery still claims
+  });
+
+  it("deduplicates Azure deliveries without colliding with the same GitHub id", async () => {
+    const azure = {
+      source: "azure-devops",
+      deliveryId: "shared-id",
+      event: "git.push",
+      outcome: "received",
+    };
+    expect((await repo.claim(azure)).claimed).toBe(true);
+    expect((await repo.claim(azure)).claimed).toBe(false);
+    expect(
+      (
+        await repo.claimGithub({
+          deliveryId: "shared-id",
+          event: "push",
+          outcome: "received",
+        })
+      ).claimed,
+    ).toBe(true);
   });
 
   it("incoming rows (null deliveryId) never conflict — each call is distinct", async () => {

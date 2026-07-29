@@ -71,4 +71,6 @@ jobs:
       # script (@repo/core, @repo/adapters, @repo/db [PGlite — no external DB],
       # apps/api, apps/dashboard). Packages resolve to src, so no build needed.
       - name: Run tests
-        run: bun run test
+        run: |
+          bun run test
+          bun test scripts/sanitize-cli-package.test.ts

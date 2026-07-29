@@ -31,6 +31,7 @@ interface PreparedConfigArgs {
   project: PersistedProject;
   repoName: string;
   owner: string;
+  gitProvider?: "github" | "azure-devops";
   branch: string;
   branches: string[];
   projectId?: string;
@@ -594,6 +595,7 @@ export function useDeploymentConfig() {
         project,
         repoName,
         owner,
+        gitProvider,
         branch,
         branches,
         projectId,
@@ -614,6 +616,7 @@ export function useDeploymentConfig() {
         projectId,
         repo: repoName,
         owner,
+        gitProvider: gitProvider ?? project?.gitProvider ?? "github",
         localPath,
         uploadSessionId,
         projectName: project?.name || repoName,
@@ -685,7 +688,11 @@ export function useDeploymentConfig() {
       owner: string,
       repo: string,
       force?: string,
-      context?: { branch?: string; projectId?: string },
+      context?: {
+        branch?: string;
+        projectId?: string;
+        provider?: "github" | "azure-devops";
+      },
     ): Promise<{ success: boolean; error?: string; errorType?: string; buildInProgress?: boolean }> => {
       try {
         let project: PersistedProject = null;
@@ -705,10 +712,16 @@ export function useDeploymentConfig() {
 
         const sourceOwner = project?.gitOwner || owner;
         const sourceRepo = project?.gitRepo || repo;
+        const sourceProvider =
+          project?.gitProvider === "azure-devops" ||
+          context?.provider === "azure-devops"
+            ? "azure-devops"
+            : "github";
         const projectBranch = typeof project?.gitBranch === "string" ? project.gitBranch : "";
         const requestedBranch = (projectBranch || context?.branch || "").trim() || undefined;
 
         const response = await deployApi.prepare({
+          source: sourceProvider,
           owner: sourceOwner,
           repo: sourceRepo,
           branch: requestedBranch,
@@ -739,6 +752,7 @@ export function useDeploymentConfig() {
           project,
           repoName,
           owner: response.repository.owner?.login || sourceOwner,
+          gitProvider: sourceProvider,
           branch: selectedBranch,
           branches: branchOptions,
           projectId: context?.projectId,
@@ -973,6 +987,10 @@ export function useDeploymentConfig() {
               // Non-empty owner keeps the page's `!config.owner` guard satisfied;
               // local-sourced projects use the "local" sentinel (matches initializeFromLocal).
               owner: project.gitOwner || (project.localPath ? "local" : repoName),
+              gitProvider:
+                project.gitProvider === "azure-devops"
+                  ? "azure-devops"
+                  : "github",
               branch,
               branches: branch ? [branch] : [],
               projectId,

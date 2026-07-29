@@ -74,6 +74,31 @@ describe("buildProjectRouteDomains", () => {
     expect(custom?.isPrimary).toBe(true);
   });
 
+  it("treats a registered subdomain below HOST_DOMAIN as custom and provisions SSL", () => {
+    const hostname = `doka.${getRoutingBaseDomain()}`;
+    const planned = buildProjectRouteDomains({
+      project: { slug: "mbg-doka-poc" } as any,
+      projectDomains: [
+        { hostname, verified: true, domainType: "custom", externalIngress: false } as any,
+      ],
+      publicEndpoints: [
+        { port: 3000, customDomain: hostname, domainType: "custom" },
+      ],
+      runtimeName: "bare",
+      usesManagedRouting: true,
+    });
+
+    expect(planned).toEqual([
+      expect.objectContaining({
+        hostname,
+        domainType: "custom",
+        isCloud: false,
+        provisionSsl: true,
+        managedSubdomain: undefined,
+      }),
+    ]);
+  });
+
   it("still attaches the free .opsh.io fallback when there is no custom domain", () => {
     const planned = buildProjectRouteDomains({
       project: { slug: "girls-collage" } as any,
@@ -162,6 +187,30 @@ describe("buildServiceRouteDomains — custom-domain SSL gate", () => {
       domainByHostname,
     });
     expect(route?.provisionSsl).toBe(true);
+  });
+
+  it("provisions SSL for a verified custom service below HOST_DOMAIN", () => {
+    const hostname = `api.${getRoutingBaseDomain()}`;
+    const domainByHostname = new Map<string, any>([
+      [hostname, { hostname, verified: true, domainType: "custom" }],
+    ]);
+    const [route] = buildServiceRouteDomains({
+      project,
+      service: { ...customSvc, customDomain: hostname },
+      runtimeName: "bare",
+      usesManagedRouting: true,
+      domainByHostname,
+    });
+
+    expect(route).toEqual(
+      expect.objectContaining({
+        hostname,
+        domainType: "custom",
+        isCloud: false,
+        provisionSsl: true,
+        managedSubdomain: undefined,
+      }),
+    );
   });
 
   it("canonicalizes a scheme/slash-dressed custom domain to the stored host", () => {

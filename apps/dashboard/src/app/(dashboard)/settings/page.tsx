@@ -26,7 +26,9 @@ import { RoutePreferences } from "./_components/RoutePreferences";
 import { DeployDefaults } from "./_components/DeployDefaults";
 import { CloudConnection } from "./_components/CloudConnection";
 import { GitHubConnection } from "./_components/GitHubConnection";
+import { AzureDevopsConnection } from "./_components/AzureDevopsConnection";
 import { CloneCredentials } from "./_components/CloneCredentials";
+import { ContainerRegistryConnection } from "./_components/ContainerRegistryConnection";
 import { PersonalAccessTokens } from "./_components/PersonalAccessTokens";
 import { McpConnection } from "./_components/McpConnection";
 import { InstanceInfo } from "./_components/InstanceInfo";
@@ -112,6 +114,8 @@ function SettingsPageInner() {
           {activeTab === "general" && (
             <>
               <GitHubConnection />
+              <AzureDevopsConnection />
+              {showBuildPreferences && <ContainerRegistryConnection />}
               {/* Deploy Defaults + Routing hidden for now — advanced/rarely-needed,
                   reduces general-settings noise. The edge defaults to loopback-port
                   and both keep a per-project override; re-enable by uncommenting. */}

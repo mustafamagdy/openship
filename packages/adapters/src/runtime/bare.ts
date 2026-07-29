@@ -85,6 +85,26 @@ const DEFAULT_BUILD_TIMEOUT = 10 * 60 * 1000;
  */
 export const STATIC_RELEASE_BASE = "/opt/openship/static";
 
+/**
+ * Host directory used for extracted static releases.
+ *
+ * Remote servers commonly run the OpenShip agent as an unprivileged SSH user,
+ * so `/opt/openship/static` is not always writable. Operators can point static
+ * releases at a dedicated readable directory they own (for example
+ * `/home/deploy/.openship/static`) without granting the control plane broad
+ * sudo access.
+ */
+export function resolveStaticReleaseBase(
+  env: { OPENSHIP_STATIC_RELEASE_BASE?: string } = process.env,
+): string {
+  const configured = env.OPENSHIP_STATIC_RELEASE_BASE?.trim();
+  if (!configured) return STATIC_RELEASE_BASE;
+  if (!configured.startsWith("/") || configured === "/" || /[\0\r\n]/.test(configured)) {
+    throw new Error("OPENSHIP_STATIC_RELEASE_BASE must be a safe absolute directory path");
+  }
+  return configured.replace(/\/+$/, "");
+}
+
 
 
 // ─── Bare runtime ────────────────────────────────────────────────────────────

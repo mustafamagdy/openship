@@ -16,6 +16,17 @@ import { sshManager } from "../../lib/ssh-manager";
 import { sizeOfMoveSet, type SizedItem } from "./migration-size";
 import { sq } from "./direct-transfer";
 
+/** True when another Docker host can pull this reference from a registry. */
+export function isPortableRegistryImage(image: string | undefined): boolean {
+  if (!image || image.startsWith("openship/")) return false;
+  const first = image.split("/")[0]?.toLowerCase() ?? "";
+  return image.includes("/") && (
+    first === "localhost" ||
+    first.includes(".") ||
+    first.includes(":")
+  );
+}
+
 /**
  * Which bind-mount host paths are worth (and safe to) copy across servers.
  * App data dirs move; sockets, devices, and system paths never do — copying
@@ -156,7 +167,7 @@ export async function buildMigrationPreview(opts: {
 
   const services: MigrationPreviewService[] = chosen.map((s) => {
     // Build-only = has a build context and no runnable registry image.
-    const isBuild = Boolean(s.build) && !s.image;
+    const isBuild = Boolean(s.build) && !isPortableRegistryImage(s.image);
     const isProxy = Boolean(s.proxyKind);
     const volumes = s.volumes
       .filter((v) => v.type === "volume" && v.source)

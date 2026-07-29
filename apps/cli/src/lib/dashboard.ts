@@ -2,7 +2,8 @@
  * Lazy-download of the Openship dashboard (Next standalone) so `openship up`
  * can serve a local browser UI without bloating the npm package. Mirrors the
  * desktop-app download in `openship install`: fetch the release asset, verify
- * its sha256 sidecar, extract, and cache under ~/.openship/cache/dashboard/<tag>/.
+ * its sha256 sidecar, extract, and cache under
+ * ~/.openship/cache/dashboard/<owner>/<repo>/<tag>/.
  *
  * The bundle has NO native deps (dashboard `output: "standalone"`, no
  * sharp/etc.), so a single Linux-built tarball runs cross-platform under Node.
@@ -13,6 +14,7 @@ import { join } from "node:path";
 
 import { CACHE_DIR, downloadToFile } from "./cache";
 import { assetUrl, expectedSha256, resolveLatestTag } from "./github-releases";
+import { loadUpdateSource, validateReleaseRepo } from "./update-source";
 
 const DASHBOARD_CACHE = join(CACHE_DIR, "dashboard");
 
@@ -48,7 +50,11 @@ function resolveDashboardEntry(cwd: string): string {
 }
 
 export async function ensureDashboard(
-  opts: { tag?: string; onProgress?: (received: number, total: number) => void } = {},
+  opts: {
+    tag?: string;
+    repo?: string;
+    onProgress?: (received: number, total: number) => void;
+  } = {},
 ): Promise<DashboardBundle> {
   // Local override for testing an UNPUBLISHED build (dev / pre-release / CI):
   // point at a locally-built Next standalone dir instead of downloading from
@@ -66,18 +72,19 @@ export async function ensureDashboard(
     return { tag: "local", entry: resolveDashboardEntry(cwd), cwd };
   }
 
-  const requested = opts.tag ?? (await resolveLatestTag());
+  const repo = validateReleaseRepo(opts.repo ?? loadUpdateSource().repo);
+  const requested = opts.tag ?? (await resolveLatestTag(repo));
   try {
-    return await fetchBundle(requested, opts.onProgress);
+    return await fetchBundle(requested, repo, opts.onProgress);
   } catch (err) {
     // A pinned tag whose dashboard asset isn't published — a dev/source build
     // whose version was never released, or a release that shipped no dashboard —
     // falls back to the latest published release instead of hard-404ing. Only
     // triggers when a tag was explicitly requested (default already = latest).
     if (opts.tag && /\b404\b/.test((err as Error)?.message ?? "")) {
-      const latest = await resolveLatestTag();
+      const latest = await resolveLatestTag(repo);
       if (latest && latest !== requested) {
-        return await fetchBundle(latest, opts.onProgress);
+        return await fetchBundle(latest, repo, opts.onProgress);
       }
     }
     throw err;
@@ -89,9 +96,11 @@ export async function ensureDashboard(
  *  missing sidecar, or checksum mismatch. */
 async function fetchBundle(
   tag: string,
+  repo: string,
   onProgress?: (received: number, total: number) => void,
 ): Promise<DashboardBundle> {
-  const dir = join(DASHBOARD_CACHE, tag);
+  const [owner, repoName] = repo.split("/");
+  const dir = join(DASHBOARD_CACHE, owner, repoName, tag);
   const cwd = join(dir, "apps", "dashboard");
   const serverJs = join(cwd, "server.js");
   const marker = join(dir, ".extracted");
@@ -107,9 +116,9 @@ async function fetchBundle(
 
   const name = assetName(tag);
   const tarball = join(dir, name);
-  const { sha256 } = await downloadToFile(assetUrl(tag, name), tarball, onProgress);
+  const { sha256 } = await downloadToFile(assetUrl(tag, name, repo), tarball, onProgress);
 
-  const expected = await expectedSha256(tag, name);
+  const expected = await expectedSha256(tag, name, repo);
   if (!expected) {
     throw new Error(
       `No .sha256 sidecar for ${name}; refusing to run an unverified dashboard bundle.`,

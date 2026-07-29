@@ -29,7 +29,13 @@ import { randomBytes } from "node:crypto";
 import { promisify } from "node:util";
 import { dirname, join } from "node:path";
 
-import type { CommandExecutor, ManualCert, RouteConfig, SslResult } from "../types";
+import type {
+  CommandExecutor,
+  ManualCert,
+  ProvisionLock,
+  RouteConfig,
+  SslResult,
+} from "../types";
 import type { RoutingProvider, SslProvider } from "./types";
 import { LUA_LOGGER_PATH, RULES_GUARD_PATH, luaSourceAvailable, buildReloadCommand, detectOpenRestyPaths, ACME_HTTP01_PORT, ACME_CHALLENGE_LOCATION, type OpenRestyPaths } from "./openresty-lua";
 import { safeErrorMessage, sanitizeProxySettings, PROXY_GZIP_TYPES, type ProxySettings } from "@repo/core";
@@ -171,6 +177,12 @@ export interface NginxProviderOptions {
    */
   certDir?: string;
   /**
+   * User-writable Certbot state root. When set, Certbot stores its config,
+   * work files, logs, and live certificates below this directory instead of
+   * root-owned /etc/letsencrypt and /var/lib/letsencrypt.
+   */
+  certbotStateDir?: string;
+  /**
    * Command executor for file operations.
    * When provided, all ops go through the executor (SSH remote).
    * When omitted, uses node:fs directly (local).
@@ -192,9 +204,15 @@ export interface NginxProviderOptions {
    * means a failed reload kills the container and 502s every site.
    */
   containerEdge?: boolean;
+  /**
+   * Serializes shared OpenResty mutations across workers/replicas managing the
+   * same host. The API injects its server-scoped in-process + advisory lock.
+   */
+  provisionLock?: ProvisionLock;
 }
 
 const DEFAULT_CERT_DIR = "/etc/letsencrypt/live";
+const HTTPS_DEFAULT_CONFIG = "_default-https.conf";
 
 /** Only allow valid domain characters - prevents shell injection. */
 const DOMAIN_RE = /^[a-zA-Z0-9]([a-zA-Z0-9.-]*[a-zA-Z0-9])?$/;
@@ -317,7 +335,9 @@ export class NginxProvider implements RoutingProvider, SslProvider {
   private sitesDir: string;
   private readonly acmeEmail: string | undefined;
   private readonly certDir: string;
+  private readonly certbotStateDir: string | undefined;
   private readonly executor: CommandExecutor | null;
+  private readonly provisionLock: ProvisionLock | undefined;
   private reloadCommand: string;
   private readonly pinPaths: boolean;
   private readonly containerEdge: boolean;
@@ -325,8 +345,12 @@ export class NginxProvider implements RoutingProvider, SslProvider {
   constructor(opts: NginxProviderOptions) {
     this.sitesDir = opts.paths.sitesDir;
     this.acmeEmail = opts.acmeEmail;
-    this.certDir = opts.certDir ?? DEFAULT_CERT_DIR;
+    this.certbotStateDir = opts.certbotStateDir?.replace(/\/+$/, "") || undefined;
+    this.certDir =
+      opts.certDir ??
+      (this.certbotStateDir ? join(this.certbotStateDir, "config", "live") : DEFAULT_CERT_DIR);
     this.executor = opts.executor ?? null;
+    this.provisionLock = opts.provisionLock;
     this.containerEdge = opts.containerEdge ?? false;
     this.reloadCommand = buildReloadCommand(opts.paths, { containerEdge: this.containerEdge });
     this.pinPaths = opts.pinPaths ?? false;
@@ -500,12 +524,27 @@ export class NginxProvider implements RoutingProvider, SslProvider {
    * still sees the real cause.
    */
   private async _execCertbot(args: string[], onLog?: (line: string) => void): Promise<string> {
+    const stateArgs = this.certbotStateDir
+      ? [
+          "--config-dir", join(this.certbotStateDir, "config"),
+          "--work-dir", join(this.certbotStateDir, "work"),
+          "--logs-dir", join(this.certbotStateDir, "logs"),
+        ]
+      : [];
+    if (this.certbotStateDir) {
+      await Promise.all([
+        this._mkdir(join(this.certbotStateDir, "config")),
+        this._mkdir(join(this.certbotStateDir, "work")),
+        this._mkdir(join(this.certbotStateDir, "logs")),
+      ]);
+    }
+    const effectiveArgs = [...args, ...stateArgs];
     if (!onLog || !this.executor) {
-      const out = await this._exec("certbot", args);
+      const out = await this._exec("certbot", effectiveArgs);
       if (out) onLog?.(out);
       return out;
     }
-    const full = `certbot ${args.map(sq).join(" ")}`;
+    const full = `certbot ${effectiveArgs.map(sq).join(" ")}`;
     let output = "";
     const { code } = await this.executor.streamExec(full, (log) => {
       output += log.message;
@@ -546,6 +585,17 @@ export class NginxProvider implements RoutingProvider, SslProvider {
    * via provisionCert).
    */
   async registerRoute(route: RouteConfig): Promise<void> {
+    const register = () => this.registerRouteUnlocked(route);
+    return this.provisionLock ? this.provisionLock.run(register) : register();
+  }
+
+  /**
+   * The whole route + shared HTTPS fallback transaction runs inside the
+   * server-scoped provision lock when one is available. Keeping snapshot,
+   * writes, validation/reload, and rollback in one critical section prevents a
+   * concurrent registration from restoring stale `_default-https.conf` state.
+   */
+  private async registerRouteUnlocked(route: RouteConfig): Promise<void> {
     assertValidDomain(route.domain);
     await this._mkdir(this.sitesDir);
 
@@ -599,10 +649,28 @@ export class NginxProvider implements RoutingProvider, SslProvider {
       : "";
 
     let serverBlock: string;
+    let httpsDefaultBlock: string | null = null;
 
     if (route.tls && (await this.certsExist(route.domain))) {
       const certPath = join(this.certDir, route.domain, "fullchain.pem");
       const keyPath = join(this.certDir, route.domain, "privkey.pem");
+      // TLS has no hostname-independent fallback unless we define one. Without
+      // this block, an unknown SNI hostname is handled by nginx's first 443
+      // vhost; on an OpenShip host that is commonly the control panel, so a
+      // typo or undeployed subdomain redirects to /login. Reuse a valid local
+      // certificate to complete the origin TLS handshake, then return a real
+      // HTTP 404. Exact server_name vhosts still win for deployed apps.
+      httpsDefaultBlock = `# Auto-generated by Openship - do not edit manually
+server {
+    listen 443 ssl default_server;
+    server_name _;
+
+    ssl_certificate ${certPath};
+    ssl_certificate_key ${keyPath};
+
+    return 404;
+}
+`;
       // Full SSL config - certs already provisioned
       serverBlock = `# Auto-generated by Openship - do not edit manually
 server {
@@ -654,12 +722,22 @@ ${webhookLocation}${extraLocations}
     // Snapshot the prior conf so a block that fails `openresty -t` can be
     // rolled back — otherwise a bad conf stays on disk and poisons every
     // subsequent reload box-wide (same self-rollback applyRateLimit uses).
+    const httpsDefaultPath = join(this.sitesDir, HTTPS_DEFAULT_CONFIG);
     const snapshot = await this._captureFile(configPath);
+    const httpsDefaultSnapshot = httpsDefaultBlock
+      ? await this._captureFile(httpsDefaultPath)
+      : null;
     await this._writeFile(configPath, serverBlock);
+    if (httpsDefaultBlock) {
+      await this._writeFile(httpsDefaultPath, httpsDefaultBlock);
+    }
     try {
       await this.reload();
     } catch (err) {
       await this._restoreFile(configPath, snapshot);
+      if (httpsDefaultSnapshot) {
+        await this._restoreFile(httpsDefaultPath, httpsDefaultSnapshot);
+      }
       await this.reload().catch(() => undefined);
       throw err;
     }
