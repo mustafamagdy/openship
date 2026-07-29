@@ -46,7 +46,10 @@ import { resolveSmartRoute } from "./smart-route";
 import { resolveProjectInfo } from "./prepare.service";
 import { getFolderSession } from "../projects/folder/session-store";
 import { type RequestContext } from "../../lib/request-context";
-import { type PortCheckResult } from "../../lib/deployment-runtime";
+import {
+  supportsKubernetesDeployment,
+  type PortCheckResult,
+} from "../../lib/deployment-runtime";
 import * as sessionManager from "./session-manager";
 import {
   collectDeploymentManifest,
@@ -987,7 +990,7 @@ export async function requestBuildAccess(ctx: RequestContext, input: BuildAccess
     if (!clusterServer) {
       throw new AppError("Kubernetes cluster server not found in this organization.", 404);
     }
-    if (!snapshot.hasServer) {
+    if (!supportsKubernetesDeployment(snapshot.hasServer, useServicePipeline)) {
       throw new AppError(
         "Kubernetes supports long-running applications and image-based service stacks; deploy static sites with the native edge target.",
         400,
