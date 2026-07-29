@@ -21,6 +21,7 @@ import {
   type KubernetesClusterOverview,
   type KubernetesClustersResponse,
 } from "@/lib/api/system";
+import { groupWorkloadsByProject } from "./kubernetes-workload-groups";
 
 function SummaryCard({
   label,
@@ -49,9 +50,8 @@ function SummaryCard({
 
 function ClusterCard({ cluster }: { cluster: KubernetesClusterOverview }) {
   const readyNodes = cluster.nodes.filter((node) => node.ready).length;
-  const readyWorkloads = cluster.workloads.filter(
-    (workload) => workload.readyReplicas === workload.desiredReplicas,
-  ).length;
+  const projects = groupWorkloadsByProject(cluster.workloads);
+  const readyProjects = projects.filter((project) => project.ready).length;
 
   return (
     <section className="overflow-hidden rounded-2xl border border-border/50 bg-card">
@@ -126,56 +126,50 @@ function ClusterCard({ cluster }: { cluster: KubernetesClusterOverview }) {
 
         <div>
           <div className="mb-3 flex items-center justify-between">
-            <h3 className="text-sm font-medium">OpenShip workloads</h3>
+            <h3 className="text-sm font-medium">OpenShip projects</h3>
             <span className="text-xs text-muted-foreground">
-              {readyWorkloads}/{cluster.workloads.length} ready
+              {readyProjects}/{projects.length} ready
             </span>
           </div>
-          {cluster.workloads.length === 0 ? (
+          {projects.length === 0 ? (
             <div className="rounded-xl border border-dashed border-border px-4 py-8 text-center">
-              <p className="text-sm text-muted-foreground">
-                No OpenShip workloads on this cluster.
-              </p>
+              <p className="text-sm text-muted-foreground">No OpenShip projects on this cluster.</p>
             </div>
           ) : (
             <div className="space-y-2">
-              {cluster.workloads.map((workload) => {
-                const ready = workload.readyReplicas === workload.desiredReplicas;
+              {projects.map((project) => {
                 const content = (
                   <>
                     <span
                       className={`size-2 shrink-0 rounded-full ${
-                        ready ? "bg-success-solid" : "bg-warning-solid"
+                        project.ready ? "bg-success-solid" : "bg-warning-solid"
                       }`}
                     />
                     <div className="min-w-0 flex-1">
-                      <p className="truncate text-sm font-medium">
-                        {workload.projectName ?? workload.name}
-                      </p>
+                      <p className="truncate text-sm font-medium">{project.projectName}</p>
                       <p className="truncate text-[11px] text-muted-foreground">
-                        {workload.namespace} / {workload.name}
+                        {project.serviceCount} {project.serviceCount === 1 ? "service" : "services"}{" "}
+                        · {project.namespace}
                       </p>
                     </div>
                     <span className="text-xs tabular-nums text-muted-foreground">
-                      {workload.readyReplicas}/{workload.desiredReplicas}
+                      {project.readyReplicas}/{project.desiredReplicas}
                     </span>
-                    {workload.projectId && (
-                      <ArrowRight className="size-3.5 text-muted-foreground" />
-                    )}
+                    {project.projectId && <ArrowRight className="size-3.5 text-muted-foreground" />}
                   </>
                 );
 
-                return workload.projectId ? (
+                return project.projectId ? (
                   <Link
-                    key={`${workload.namespace}/${workload.name}`}
-                    href={`/projects/${workload.projectId}/monitoring`}
+                    key={project.key}
+                    href={`/projects/${project.projectId}/monitoring`}
                     className="flex items-center gap-3 rounded-xl border border-border/40 bg-muted/20 px-3 py-2.5 transition-colors hover:bg-muted/50"
                   >
                     {content}
                   </Link>
                 ) : (
                   <div
-                    key={`${workload.namespace}/${workload.name}`}
+                    key={project.key}
                     className="flex items-center gap-3 rounded-xl border border-border/40 bg-muted/20 px-3 py-2.5"
                   >
                     {content}
