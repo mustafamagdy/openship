@@ -45,6 +45,8 @@ export function KubernetesControlPanel({ deploymentId }: { deploymentId?: string
   const [unsupported, setUnsupported] = useState(false);
   const [acting, setActing] = useState<string | null>(null);
   const [replicas, setReplicas] = useState<Record<string, number>>({});
+  const [podToReplace, setPodToReplace] = useState<string | null>(null);
+  const [replacementConfirmation, setReplacementConfirmation] = useState("");
 
   const refresh = useCallback(async () => {
     if (!deploymentId) return;
@@ -233,15 +235,8 @@ export function KubernetesControlPanel({ deploymentId }: { deploymentId?: string
                       type="button"
                       disabled={acting !== null}
                       onClick={() => {
-                        const confirmation = window.prompt(
-                          `Replace ${pod.name}? Type REPLACE POD to run this controlled chaos test.`,
-                        );
-                        if (confirmation !== "REPLACE POD") return;
-                        void run(
-                          `pod:${pod.name}`,
-                          () => deployApi.replaceKubernetesPod(deploymentId, pod.name),
-                          `${pod.name} replacement requested`,
-                        );
+                        setPodToReplace(pod.name);
+                        setReplacementConfirmation("");
                       }}
                       className="inline-flex items-center gap-1.5 rounded-lg border border-red-500/30 px-2.5 py-1.5 text-xs text-red-600 hover:bg-red-500/5 disabled:opacity-50"
                     >
@@ -255,6 +250,74 @@ export function KubernetesControlPanel({ deploymentId }: { deploymentId?: string
           </table>
         </div>
       </div>
+
+      {podToReplace && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="replace-pod-title"
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm"
+        >
+          <div className="w-full max-w-md rounded-2xl border border-border bg-card p-6 shadow-2xl">
+            <div className="flex items-start gap-3">
+              <div className="rounded-lg bg-red-500/10 p-2 text-red-600">
+                <Skull className="size-5" />
+              </div>
+              <div>
+                <h3 id="replace-pod-title" className="font-semibold">
+                  Replace Kubernetes pod?
+                </h3>
+                <p className="mt-1 text-sm text-muted-foreground">
+                  OpenShip will delete <span className="font-mono">{podToReplace}</span> and wait
+                  for its owning workload to recover.
+                </p>
+              </div>
+            </div>
+
+            <label className="mt-5 block text-sm font-medium" htmlFor="replace-pod-confirmation">
+              Type <span className="font-mono">REPLACE POD</span> to run this controlled chaos test
+            </label>
+            <input
+              id="replace-pod-confirmation"
+              autoFocus
+              value={replacementConfirmation}
+              onChange={(event) => setReplacementConfirmation(event.target.value)}
+              className="mt-2 w-full rounded-lg border border-border bg-background px-3 py-2 font-mono text-sm"
+              placeholder="REPLACE POD"
+            />
+
+            <div className="mt-6 flex justify-end gap-3">
+              <button
+                type="button"
+                onClick={() => {
+                  setPodToReplace(null);
+                  setReplacementConfirmation("");
+                }}
+                className="rounded-lg border border-border px-4 py-2 text-sm hover:bg-muted"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                disabled={replacementConfirmation !== "REPLACE POD"}
+                onClick={() => {
+                  const pod = podToReplace;
+                  setPodToReplace(null);
+                  setReplacementConfirmation("");
+                  void run(
+                    `pod:${pod}`,
+                    () => deployApi.replaceKubernetesPod(deploymentId, pod),
+                    `${pod} replacement requested`,
+                  );
+                }}
+                className="rounded-lg bg-red-600 px-4 py-2 text-sm text-white hover:bg-red-700 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                Replace pod
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </section>
   );
 }
