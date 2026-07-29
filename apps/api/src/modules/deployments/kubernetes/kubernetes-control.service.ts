@@ -239,11 +239,25 @@ export async function openServiceShell(
         (item.status.containerStatuses ?? []).every((status) => status.ready),
       ) ?? pods.find((item) => item.status?.phase === "Running");
     const podName = safeName(pod?.metadata?.name ?? "", "pod");
+    const shellPath = await (async () => {
+      for (const candidate of ["/bin/bash", "/bin/sh", "/busybox/sh"]) {
+        const available = await executor
+          .exec(
+            `sudo -n kubectl -n ${target.namespace} exec ${podName} -- ${candidate} -c true`,
+            { timeout: 15_000 },
+          )
+          .then(() => true)
+          .catch(() => false);
+        if (available) return candidate;
+      }
+      return null;
+    })();
     const shell = await executor.openShell(opts);
     shell.onClose(() => release());
-    shell.stdin.write(
-      `exec sudo -n kubectl -n ${target.namespace} exec -it ${podName} -- /bin/sh -lc 'exec $(command -v bash || echo /bin/sh)'\n`,
-    );
+    const command = shellPath
+      ? `exec sudo -n kubectl -n ${target.namespace} exec -it ${podName} -- ${shellPath}`
+      : `exec sudo -n kubectl -n ${target.namespace} debug -it pod/${podName} --image=busybox:1.36 --target=${safeServiceName} -- /bin/sh`;
+    shell.stdin.write(`${command}\n`);
     return {
       ...shell,
       close(signal?: string) {
