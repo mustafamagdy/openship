@@ -182,7 +182,18 @@ export function resolveEffectiveTarget(base: Platform["target"], snapshot: Deplo
   // (base "cloud") reaches its workloads via the cloud API instead of SSH. This
   // is what makes a desktop→remote-server deploy's edge/SSL run on the SERVER
   // (over SSH), not silently fall back to the laptop's noop provider.
-  if (base !== "cloud" && snapshot.serverId) return "server";
+  // An explicit target wins over stale merged metadata. Snapshot redeploys can
+  // retain a historical build serverId while activation moves routing back to
+  // the local edge (notably Kubernetes: workload on kubernetesServerId, edge on
+  // deployTarget:"local"). Treat serverId alone as the legacy auto-detect signal
+  // only when no target was persisted, or when the target is explicitly server.
+  if (
+    base !== "cloud" &&
+    snapshot.serverId &&
+    (snapshot.deployTarget === undefined || snapshot.deployTarget === "server")
+  ) {
+    return "server";
+  }
   if (base === "desktop") return snapshot.deployTarget ?? "cloud";
   if (base === "selfhosted") {
     // UI chose "server" target but serverId may be missing → still route to SSH
