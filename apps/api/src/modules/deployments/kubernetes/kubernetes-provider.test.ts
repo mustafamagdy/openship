@@ -104,9 +104,12 @@ describe("Kubernetes provider", () => {
 
   it("deploys every stack workload and returns public service ports", async () => {
     const commands: string[] = [];
+    const writtenFiles = new Map<string, string>();
     const executor = {
       mkdir: async () => {},
-      writeFile: async () => {},
+      writeFile: async (path: string, contents: string) => {
+        writtenFiles.set(path, contents);
+      },
       exec: async (command: string) => {
         commands.push(command);
         return command.includes("jsonpath") ? "31234" : "";
@@ -130,5 +133,25 @@ describe("Kubernetes provider", () => {
     expect(result.services[0]?.nodePort).toBe(31234);
     expect(commands.filter((command) => command.includes("rollout status"))).toHaveLength(2);
     expect(commands.some((command) => command.includes("--timeout=900s"))).toBe(true);
+    expect(commands.filter((command) => command.includes(" apply "))).toHaveLength(3);
+    const firstRollout = commands.findIndex((command) =>
+      command.includes("rollout status deployment/frontend"),
+    );
+    const catalogApply = commands.findIndex((command) =>
+      command.includes("deployment-catalog.json"),
+    );
+    expect(firstRollout).toBeGreaterThan(-1);
+    expect(catalogApply).toBeGreaterThan(firstRollout);
+
+    const foundation = [...writtenFiles.entries()].find(([path]) =>
+      path.endsWith("/foundation.json"),
+    );
+    expect(foundation).toBeDefined();
+    expect(JSON.parse(foundation![1]).items.every((object: any) => object.kind !== "Deployment")).toBe(
+      true,
+    );
+    expect(
+      [...writtenFiles.keys()].filter((path) => path.includes("/deployment-")),
+    ).toHaveLength(2);
   });
 });
