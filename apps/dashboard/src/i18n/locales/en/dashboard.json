@@ -61,6 +61,7 @@
     "domains": "Domains",
     "monitoring": "Monitoring",
     "servers": "Servers",
+    "kubernetes": "Kubernetes",
     "emails": "Emails",
     "jobs": "Jobs",
     "settings": "Settings",

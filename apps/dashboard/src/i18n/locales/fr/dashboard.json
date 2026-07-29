@@ -60,6 +60,7 @@
     "domains": "Domaines",
     "monitoring": "Supervision",
     "servers": "Serveurs",
+    "kubernetes": "Kubernetes",
     "emails": "E-mails",
     "settings": "Paramètres",
     "billing": "Facturation et utilisation",
