@@ -1558,9 +1558,7 @@ const DeployTargetStep: React.FC<DeployTargetStepProps> = ({ targets, onContinue
             ))}
             {config.deployTarget === "server" &&
               !!config.serverId &&
-              config.options.hasServer &&
-              config.projectType !== "services" &&
-              config.serviceDeploymentMode !== "services" && (
+              config.options.hasServer && (
                 <div className="rounded-xl border border-border/60 bg-card px-4 py-4 space-y-3">
                   <label className="flex items-start gap-3 cursor-pointer">
                     <input
@@ -1580,8 +1578,8 @@ const DeployTargetStep: React.FC<DeployTargetStepProps> = ({ targets, onContinue
                         Deploy through Kubernetes
                       </span>
                       <span className="mt-1 block text-xs leading-relaxed text-muted-foreground">
-                        This server must have kubectl access to the cluster. OpenShip builds and
-                        publishes an immutable image, then performs a rolling deployment.
+                        This server must have kubectl access to the cluster. OpenShip deploys the
+                        workload or image-based stack, monitors it, and provides guarded actions.
                       </span>
                     </span>
                   </label>

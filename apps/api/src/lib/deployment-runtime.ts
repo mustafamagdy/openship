@@ -34,6 +34,19 @@ export interface DeploymentMeta {
    *  a long-running process/container. */
   hasServer?: boolean;
   serverId?: string;
+  /** Kubernetes control-plane binding written after a successful rollout. */
+  kubernetesServerId?: string;
+  kubernetesNamespace?: string;
+  kubernetesDeployment?: string;
+  kubernetesDeployments?: string[];
+  kubernetesService?: string;
+  kubernetesServices?: Array<{
+    name: string;
+    serviceName: string;
+    port: number;
+    nodePort?: number;
+  }>;
+  kubernetesNodePort?: number;
   /**
    * Adopt an already-running, externally-supervised process instead of building
    * + starting one. Set for the self-deployed control plane (the "openship"

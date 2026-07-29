@@ -1733,6 +1733,218 @@
           }
         ]
       }
+    },
+    {
+      "available": true,
+      "verified": true,
+      "id": "online-boutique",
+      "name": "Online Boutique",
+      "description": "Google Cloud's cloud-native microservices demo: an e-commerce frontend backed by ten independently deployable services. Ideal for validating Kubernetes orchestration, scaling, rolling updates, and failure recovery.",
+      "kind": "template",
+      "logo": "googlecloud",
+      "category": "other",
+      "tags": [
+        "kubernetes",
+        "microservices",
+        "ecommerce",
+        "high-availability",
+        "demo"
+      ],
+      "framework": "docker-compose",
+      "services": [
+        {
+          "name": "frontend",
+          "image": "us-central1-docker.pkg.dev/online-boutique-ci/microservices-demo/frontend:v0.10.6",
+          "ports": [
+            "8080:8080"
+          ],
+          "exposedPort": 8080,
+          "exposed": true,
+          "routes": [
+            {
+              "port": 8080
+            }
+          ],
+          "environment": {
+            "PORT": "8080",
+            "PRODUCT_CATALOG_SERVICE_ADDR": "productcatalogservice:3550",
+            "CURRENCY_SERVICE_ADDR": "currencyservice:7000",
+            "CART_SERVICE_ADDR": "cartservice:7070",
+            "RECOMMENDATION_SERVICE_ADDR": "recommendationservice:8080",
+            "SHIPPING_SERVICE_ADDR": "shippingservice:50051",
+            "CHECKOUT_SERVICE_ADDR": "checkoutservice:5050",
+            "AD_SERVICE_ADDR": "adservice:9555",
+            "SHOPPING_ASSISTANT_SERVICE_ADDR": "shoppingassistantservice:80",
+            "ENABLE_PROFILER": "0"
+          },
+          "dependsOn": [
+            "productcatalogservice",
+            "currencyservice",
+            "cartservice",
+            "recommendationservice",
+            "shippingservice",
+            "checkoutservice",
+            "adservice"
+          ],
+          "restart": "unless-stopped"
+        },
+        {
+          "name": "adservice",
+          "image": "us-central1-docker.pkg.dev/online-boutique-ci/microservices-demo/adservice:v0.10.6",
+          "ports": [
+            "9555:9555"
+          ],
+          "environment": {
+            "PORT": "9555"
+          },
+          "restart": "unless-stopped"
+        },
+        {
+          "name": "currencyservice",
+          "image": "us-central1-docker.pkg.dev/online-boutique-ci/microservices-demo/currencyservice:v0.10.6",
+          "ports": [
+            "7000:7000"
+          ],
+          "environment": {
+            "PORT": "7000",
+            "DISABLE_PROFILER": "1"
+          },
+          "restart": "unless-stopped"
+        },
+        {
+          "name": "cartservice",
+          "image": "us-central1-docker.pkg.dev/online-boutique-ci/microservices-demo/cartservice:v0.10.6",
+          "ports": [
+            "7070:7070"
+          ],
+          "environment": {
+            "REDIS_ADDR": "redis-cart:6379"
+          },
+          "dependsOn": [
+            "redis-cart"
+          ],
+          "restart": "unless-stopped"
+        },
+        {
+          "name": "redis-cart",
+          "image": "redis:8.2.1-alpine",
+          "ports": [
+            "6379:6379"
+          ],
+          "restart": "unless-stopped"
+        },
+        {
+          "name": "recommendationservice",
+          "image": "us-central1-docker.pkg.dev/online-boutique-ci/microservices-demo/recommendationservice:v0.10.6",
+          "ports": [
+            "8080:8080"
+          ],
+          "environment": {
+            "PORT": "8080",
+            "PRODUCT_CATALOG_SERVICE_ADDR": "productcatalogservice:3550",
+            "DISABLE_PROFILER": "1"
+          },
+          "dependsOn": [
+            "productcatalogservice"
+          ],
+          "restart": "unless-stopped"
+        },
+        {
+          "name": "checkoutservice",
+          "image": "us-central1-docker.pkg.dev/online-boutique-ci/microservices-demo/checkoutservice:v0.10.6",
+          "ports": [
+            "5050:5050"
+          ],
+          "environment": {
+            "PORT": "5050",
+            "PRODUCT_CATALOG_SERVICE_ADDR": "productcatalogservice:3550",
+            "SHIPPING_SERVICE_ADDR": "shippingservice:50051",
+            "PAYMENT_SERVICE_ADDR": "paymentservice:50051",
+            "EMAIL_SERVICE_ADDR": "emailservice:8080",
+            "CURRENCY_SERVICE_ADDR": "currencyservice:7000",
+            "CART_SERVICE_ADDR": "cartservice:7070"
+          },
+          "dependsOn": [
+            "productcatalogservice",
+            "shippingservice",
+            "paymentservice",
+            "emailservice",
+            "currencyservice",
+            "cartservice"
+          ],
+          "restart": "unless-stopped"
+        },
+        {
+          "name": "emailservice",
+          "image": "us-central1-docker.pkg.dev/online-boutique-ci/microservices-demo/emailservice:v0.10.6",
+          "ports": [
+            "8080:8080"
+          ],
+          "environment": {
+            "PORT": "8080",
+            "DISABLE_PROFILER": "1"
+          },
+          "restart": "unless-stopped"
+        },
+        {
+          "name": "paymentservice",
+          "image": "us-central1-docker.pkg.dev/online-boutique-ci/microservices-demo/paymentservice:v0.10.6",
+          "ports": [
+            "50051:50051"
+          ],
+          "environment": {
+            "PORT": "50051",
+            "DISABLE_PROFILER": "1"
+          },
+          "restart": "unless-stopped"
+        },
+        {
+          "name": "shippingservice",
+          "image": "us-central1-docker.pkg.dev/online-boutique-ci/microservices-demo/shippingservice:v0.10.6",
+          "ports": [
+            "50051:50051"
+          ],
+          "environment": {
+            "PORT": "50051",
+            "DISABLE_PROFILER": "1"
+          },
+          "restart": "unless-stopped"
+        },
+        {
+          "name": "productcatalogservice",
+          "image": "us-central1-docker.pkg.dev/online-boutique-ci/microservices-demo/productcatalogservice:v0.10.6",
+          "ports": [
+            "3550:3550"
+          ],
+          "environment": {
+            "PORT": "3550",
+            "DISABLE_PROFILER": "1"
+          },
+          "restart": "unless-stopped"
+        }
+      ],
+      "management": {
+        "kind": "schema"
+      },
+      "connection": {
+        "title": "Open Online Boutique",
+        "description": "Use the public storefront to exercise the complete microservice stack.",
+        "outputs": [
+          {
+            "id": "storefront",
+            "label": "Storefront",
+            "source": "publicUrl:frontend"
+          }
+        ]
+      },
+      "endpoints": [
+        {
+          "service": "frontend",
+          "port": 8080,
+          "label": "Storefront",
+          "kind": "http"
+        }
+      ]
     }
   ]
 }
