@@ -22,6 +22,7 @@ import {
   installOpenResty,
   installCertbot,
   foreignProxyOnEdge,
+  resolveOurEdgeContainer,
 } from "@repo/adapters";
 
 // ─── Shell quoting helper ─────────────────────────────────────────────────────
@@ -43,9 +44,12 @@ const REMOTE_ENGINE_DIR = "/root/iRedMail-engine";
 /**
  * Absolute path to `apps/email/engine/` on the openship API host.
  *
- * `MAIL_SERVER_ENGINE_DIR` overrides for ops who pin a packaged build to a
- * fixed location; otherwise resolved relative to apps/api's cwd so the
- * monorepo dev layout works without configuration.
+ * `MAIL_SERVER_ENGINE_DIR` is the authoritative source when set: the packaged
+ * desktop app (services.ts) and the CLI-bundled server (up.ts) point it at the
+ * engine tree they ship, because they run with a cwd that has no monorepo. The
+ * cwd-relative fallback only holds for the monorepo dev layout (cwd=apps/api)
+ * and from-source runs — anywhere else it resolves to a nonexistent path and
+ * the tar in step "Transfer iRedMail Engine" fails with "could not chdir".
  */
 function resolveLocalEngineDir(): string {
   if (process.env.MAIL_SERVER_ENGINE_DIR) {
@@ -304,6 +308,26 @@ export async function stepEnsureReverseProxy(
   log: StepLogger,
 ): Promise<StepResult> {
   const stepId = 4;
+
+  // A CONTAINER edge is the main path now, and it has no host `openresty.service`
+  // to query or start — `systemctl start openresty` would fail on a box where the
+  // edge is perfectly healthy. Ask the container instead, and let the shared
+  // detector below confirm it really owns the ports (#288).
+  const edgeContainer = await resolveOurEdgeContainer(exec).catch(() => null);
+  if (edgeContainer) {
+    log(stepId, "info", `Edge container ${edgeContainer} provides OpenResty — checking it serves :80/:443...`);
+    const { blocked, owner } = await foreignProxyOnEdge(exec);
+    if (blocked) {
+      return {
+        stepId,
+        success: false,
+        message: `Ports 80/443 are held by another proxy (${owner}). Stop it, or migrate it from the dashboard, then rerun.`,
+      };
+    }
+    log(stepId, "info", `Openship's edge container is the active reverse proxy`);
+    return { stepId, success: true, message: "Openship's edge container is the active reverse proxy" };
+  }
+
   log(stepId, "info", "Checking OpenResty service status...");
 
   const active = (

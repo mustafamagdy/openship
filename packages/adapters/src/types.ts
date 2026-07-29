@@ -10,6 +10,20 @@ import type { BuildStrategy, ProxySettings } from "@repo/core";
 import type { Readable, Duplex } from "node:stream";
 export type { BuildStrategy } from "@repo/core";
 
+/**
+ * How a host authenticates to git using its OWN pre-existing credentials —
+ * nothing is shipped to it and nothing is read back off it.
+ *
+ *   "gh"     → the `gh` CLI is installed and logged in; git authenticates via
+ *              `gh auth git-credential` (injected per-invocation, so it works
+ *              even if `gh auth setup-git` was never run).
+ *   "helper" → a git credential helper is already configured on the host (or
+ *              `~/.git-credentials` exists); let git consult it.
+ *   "ssh"    → the host's own ssh keys/agent can reach the remote; clone over
+ *              `git@`.
+ */
+export type AmbientGitVia = "gh" | "helper" | "ssh";
+
 // ─── Resource configuration ──────────────────────────────────────────────────
 
 export interface ResourceConfig {
@@ -144,6 +158,28 @@ export interface BuildConfig {
    * monorepo pipeline is container-only).
    */
   isStatic?: boolean;
+  /**
+   * Static build whose output is EXTRACTED, not run.
+   *
+   * `buildStaticToHost` copies the built doc-root onto a host directory the edge
+   * serves, then discards the image — so a web-server runtime stage in that recipe
+   * is pure waste: it pulls `nginx:alpine`, runs six more build steps, and writes an
+   * nginx config nothing ever reads, all to be deleted moments later. With this set,
+   * the recipe stops at the builder and stages the output at
+   * {@link STATIC_EXTRACT_DIR}.
+   *
+   * NOT the same as plain `isStatic`. A static monorepo sub-app in a compose project
+   * (see isStaticService) really is RUN as a container and genuinely needs the nginx
+   * stage — that's why this is a separate flag rather than a change to isStatic.
+   */
+  staticExtractOnly?: boolean;
+  /**
+   * Host directory the extract-only build's files are moved to. Set together with
+   * `staticExtractOnly`; the build's `imageRef` becomes this path instead of an
+   * image tag, matching BareRuntime.build's host-dir contract so the file-backed
+   * serve path consumes it unchanged.
+   */
+  staticOutDir?: string;
   /** Environment variables injected at build time */
   envVars: Record<string, string>;
   /** Resources allocated for the build container */
@@ -171,6 +207,18 @@ export interface BuildConfig {
     privateKey: string;
     knownHosts: string;
   };
+  /**
+   * The BUILD HOST authenticates the clone with its OWN pre-existing git
+   * credentials (`gh` login, a configured credential helper, or its ssh keys) —
+   * verified against this exact repo before the build starts. Nothing is shipped
+   * to the host and nothing is read back off it, so this is the narrowest of the
+   * clone-on-server credentials.
+   *
+   * Valid ONLY for a clone that runs on that host: the orchestrator's api-host
+   * clone must ignore it (see docker-build-context.ts). Mutually exclusive with
+   * `gitToken` / `gitCredentialHelperPath` / `gitSsh`.
+   */
+  gitAmbient?: { via: AmbientGitVia };
   /**
    * Clone the repo ON the remote build host instead of cloning on the
    * orchestrator and transferring the context. The Docker runtime honors this
@@ -405,6 +453,20 @@ export interface StaticRouteConfig extends BaseRouteConfig {
   /** Absolute path on the target machine to serve via Nginx root. */
   staticRoot: string;
   targetUrl?: never;
+  /**
+   * This root is being ADOPTED from a proxy we're taking over, not produced by an
+   * Openship build.
+   *
+   * Openship-managed roots are confined to {@link MANAGED_STATIC_BASE}: a route we
+   * generate must never be able to publish an arbitrary host directory, so a bad or
+   * crafted value fails closed instead of serving `/etc` to the internet.
+   *
+   * Adoption is the one legitimate exception — an imported vhost's root (e.g.
+   * `/var/www/site`) is a path the operator's own nginx is ALREADY serving publicly,
+   * and refusing it would break proxy migration. Opt-in and named so it can only be
+   * used deliberately, never reached by a caller that forgot the base.
+   */
+  staticRootAdopted?: boolean;
 }
 
 export type RouteConfig = ProxyRouteConfig | StaticRouteConfig;
@@ -429,7 +491,21 @@ export interface SslResult {
    * downgrading a healthy `active` domain to `provisioning`.
    */
   verified: boolean;
-  reason?: "issued" | "renewed" | "missing" | "read_error";
+  /**
+   * `not_local` means no certificate was issued here BY DESIGN — TLS for this
+   * hostname is terminated or supplied elsewhere (an upstream ingress, the managed
+   * `*.opsh.io` edge, an operator-uploaded cert). Distinct from `missing`, which
+   * means a cert was expected and isn't there: persisting `not_local` as
+   * "provisioning" would overwrite a correct `external` status with a lie.
+   */
+  /**
+   * `invalid` means a certificate IS on disk but can't be served for this
+   * hostname — expired, a key that doesn't open it, or issued for other names.
+   * Distinct from `missing` (nothing there) and `read_error` (transient): the file
+   * exists, so a retry won't help, and treating it as valid is what let "Recheck
+   * SSL" report green on a cert browsers reject.
+   */
+  reason?: "issued" | "renewed" | "missing" | "read_error" | "not_local" | "invalid";
 }
 
 // ─── Log streaming callback ──────────────────────────────────────────────────
@@ -518,6 +594,22 @@ export interface CommandExecutor {
   rm(path: string): Promise<void>;
 
   /**
+   * Rename within the same filesystem — a FILE operation, not a command.
+   *
+   * It exists because expressing it as `exec("mv a b")` is wrong on a decorated
+   * executor: `edgeContainerExecutor` runs commands INSIDE the edge container while
+   * file ops land on the HOST, so nginx's atomic vhost write (write temp → mv into
+   * place) renamed a path the container cannot see and failed with ENOENT on a file
+   * that had just been written successfully. Routing a rename through the file
+   * channel keeps it in the same namespace as the write.
+   *
+   * Optional: callers must fall back to a shell `mv` when an executor doesn't
+   * implement it (correct for any executor whose commands and files share a
+   * namespace, which is all of the plain ones).
+   */
+  rename?(from: string, to: string): Promise<void>;
+
+  /**
    * Transfer a local directory into the target environment.
    *
    * LocalExecutor: cp -a (same filesystem).
@@ -591,6 +683,17 @@ export interface CommandExecutor {
    * Not available on LocalExecutor (local Docker uses socket transport directly).
    */
   forwardUnixSocket?(socketPath: string): Promise<Duplex>;
+
+  /**
+   * Open a `docker system dial-stdio` exec channel to the target's Docker
+   * daemon and return it as a duplex (writes → daemon socket, reads ← daemon
+   * socket). This carries the Docker Engine API over a plain SSH *exec*
+   * channel — no streamlocal forwarding — so it works on every sshd and under
+   * the Bun-compiled desktop runtime where streamlocal hangs. Runs with the
+   * same env/PATH as `streamExec`, so it matches the (working) remote build.
+   * Not available on LocalExecutor (local Docker uses socket transport).
+   */
+  openDockerDialStdio?(): Promise<Duplex>;
 
   /**
    * Open a TCP tunnel to a port on the remote machine (SSH direct-tcpip).

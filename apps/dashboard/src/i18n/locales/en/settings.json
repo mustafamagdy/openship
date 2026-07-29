@@ -140,8 +140,39 @@
       "optionalSuffix": "on this machine to enable local-build clones of repos outside your App installations. Remote deploys use each server's SSH key or the App.",
       "disconnectPrefix": "To disconnect, run",
       "disconnectSuffix": "in your terminal.",
-      "use": "Use gh CLI"
-    }
+      "use": "Use gh CLI",
+      "login": "Log in with GitHub",
+      "deviceHint": "Enter this one-time code at GitHub to authorize this instance:",
+      "waiting": "Waiting for authorization — this updates automatically.",
+      "tokenAltPrefix": "Prefer a token? Add a personal access token under",
+      "tokenAltLink": "Clone credentials.",
+      "forwardOnNote": "Forwarding is on — gh CLI also authenticates remote server clones. Your identity is tunneled over SSH per clone; nothing is stored on the server.",
+      "forwardOffHint": "Local builds only for now. Turn on \"Forward my git identity to build servers\" to use gh CLI for remote server deploys too.",
+      "manageForward": "Manage forwarding",
+      "disconnectBody": "Openship will stop using this GitHub sign-in for clones. You can sign in again at any time.",
+      "recheck": "Check again"
+    },
+    "activeVia": "Connected via {method}",
+    "pickMethod": "Pick how Openship reaches your repositories.",
+    "methodDevice": "GitHub sign-in",
+    "methodApp": "Openship Cloud GitHub App",
+    "methodAppDesc": "Managed App — deploy to remote servers with short-lived tokens.",
+    "methodSshDesc": "Attach a deploy key to each server (Servers → GitHub).",
+    "methodTokenDesc": "A personal access token, usable everywhere.",
+    "signIn": "Sign in with GitHub",
+    "signInDesc": "Browser sign-in with a device code. Nothing to register, no SSH into the server.",
+    "changeMethod": "Change method",
+    "otherMethods": "Other methods",
+    "openGithub": "Open GitHub",
+    "copyCode": "Click to copy",
+    "tokenConnect": "Connect",
+    "tokenCreate": "Create a token on GitHub",
+    "tokenGhHint": "Already signed in on the server with",
+    "tokenSaveFailed": "Could not save the token.",
+    "forwardOffHint": "Local builds only. Turn on \"Forward my git identity to build servers\" to use it for remote server deploys too.",
+    "remoteCredentialHint": "Used for repo browsing and builds that run on this host. Deploys that build on a remote server use that server's own credential — add a deploy key or token per server.",
+    "methodToken": "GitHub token",
+    "methodHostCli": "gh CLI on this host"
   },
   "deployDefaults": {
     "title": "Deploy Defaults",
@@ -219,6 +250,9 @@
     "clear": "Clear",
     "useAsDefault": "Use as default clone token",
     "useAsDefaultDesc": "When on, the clone module uses this token as the second tier in the chain (after per-project overrides). When off, the token is stored but not used - handy if you only want it active for specific deploys.",
+    "forwardGitLabel": "Forward my git identity to build servers",
+    "forwardGitDesc": "When a build runs on a remote server, forward your local GitHub CLI login over the SSH tunnel so private repos clone directly on the server — no GitHub App needed. When off, the server falls back to its own git login, a stored token, or the public/local clone path.",
+    "forwardGitFailed": "Failed to update git forwarding",
     "toast": {
       "pasteFirst": "Paste a token before saving",
       "notLikeToken": "That doesn't look like a GitHub token. Save anyway if you're sure.",
@@ -324,7 +358,7 @@
       "pendingBody": "Your Openship domain is pending verification (DNS / SSL). Invites turn on once it's live.",
       "viewDomain": "View domain"
     },
-    "descPersonal": "People with access to your personal workspace. Invite collaborators directly, or create a separate team organization.",
+    "descPersonal": "People with access to your personal workspace.",
     "descTeam": "People with access to this organization's projects, deployments, and servers.",
     "inviteMember": "Invite member",
     "createTeamCard": {
@@ -474,6 +508,16 @@
     "toast": {
       "disconnected": "Disconnected from Openship Cloud",
       "disconnectFailed": "Failed to disconnect"
+    },
+    "pitch": {
+      "title": "Add Openship Cloud",
+      "body": "Every project gets a free .{domain} domain with automatic SSL — no DNS, no certificates. Your own servers keep working exactly as they do now.",
+      "perkDomain": "Free .{domain} domain + automatic SSL on every project",
+      "perkDeploy": "Deploy to managed cloud, or stay on your own servers",
+      "perkServices": "Managed Postgres, Redis and more, provisioned in a click",
+      "perkGithub": "GitHub connected without registering your own app",
+      "noLockIn": "Free to connect. Nothing moves, and you can disconnect at any time.",
+      "viewPricing": "View pricing"
     }
   },
   "instance": {

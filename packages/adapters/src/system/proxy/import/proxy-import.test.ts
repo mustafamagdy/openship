@@ -120,6 +120,121 @@ describe("scanNginx", () => {
     expect(res.warnings.some((w) => w.includes("redir.example.com"))).toBe(true);
   });
 
+  test("certbot HTTP→HTTPS stubs + the default catch-all are skipped SILENTLY", async () => {
+    // The real shape of a certbot-managed nginx (the hekai box): per host a :443
+    // vhost with the route and a :80 stub that only upgrades to HTTPS, plus one
+    // default_server. Every route must be found and NOTHING may be reported as
+    // "won't migrate" — that warning is how a clean scan looked broken.
+    const hosts = [
+      ["api.onvo.me", "http://localhost:1010"],
+      ["onvo.me", "http://127.0.0.1:39801"],
+      ["reflx.me", "http://localhost:3100"],
+    ];
+    const conf = `
+      server { listen 80 default_server; server_name _; return 444; }
+      ${hosts
+        .map(
+          ([host, up]) => `
+        server {
+          listen 80;
+          server_name ${host};
+          return 301 https://$host$request_uri;
+        }
+        server {
+          listen 443 ssl;
+          server_name ${host};
+          ssl_certificate /etc/letsencrypt/live/${host}/fullchain.pem;
+          ssl_certificate_key /etc/letsencrypt/live/${host}/privkey.pem;
+          location / { proxy_pass ${up}; }
+        }`,
+        )
+        .join("\n")}
+    `;
+    const res = await scanNginx(makeExecutor([["nginx -T", conf]]));
+
+    expect(res.sites).toHaveLength(hosts.length);
+    for (const [host, up] of hosts) {
+      const site = res.sites.find((s) => s.serverNames.includes(host));
+      // `localhost` is pinned to IPv4 on the way in — see the normalization test
+      // below for why carrying it verbatim breaks.
+      expect(site?.target).toEqual({
+        kind: "proxy",
+        url: up.replace("//localhost:", "//127.0.0.1:"),
+      });
+      expect(site?.ssl).toBe(true);
+    }
+    expect(res.warnings).toEqual([]);
+  });
+
+  test("pins a localhost upstream to IPv4 (nginx resolves localhost to ::1 first)", async () => {
+    // Carried verbatim, this 502s against any app bound to IPv4 only:
+    // `connect() failed (111: Connection refused) … upstream: http://[::1]:4000`.
+    const conf = `
+      server { listen 443 ssl; server_name a.example.com; location / { proxy_pass http://localhost:4000; } }
+      server { listen 443 ssl; server_name b.example.com; location / { proxy_pass http://localhost:5000/api/; } }
+      server { listen 443 ssl; server_name c.example.com; location / { proxy_pass http://127.0.0.1:6000; } }
+    `;
+    const res = await scanNginx(makeExecutor([["nginx -T", conf]]));
+
+    const url = (host: string) =>
+      (res.sites.find((s) => s.serverNames.includes(host))?.target as { url: string }).url;
+    expect(url("a.example.com")).toBe("http://127.0.0.1:4000");
+    // The path suffix survives the host rewrite.
+    expect(url("b.example.com")).toBe("http://127.0.0.1:5000/api/");
+    expect(url("c.example.com")).toBe("http://127.0.0.1:6000");
+  });
+
+  test("a certbot :80 helper never overwrites the real :443 site for the same host", async () => {
+    // The shape that silently lost sites: the :80 half carries BOTH the ACME
+    // webroot `root` and the redirect, so it used to parse as a STATIC site and
+    // then win the one-file-per-host race against the real proxy vhost.
+    const conf = `
+      server {
+        listen 80;
+        server_name apistage.example.com;
+        location /.well-known/acme-challenge/ { root /var/www/certbot; }
+        return 301 https://$host$request_uri;
+      }
+      server {
+        listen 443 ssl;
+        server_name apistage.example.com;
+        ssl_certificate /etc/letsencrypt/live/apistage.example.com/fullchain.pem;
+        ssl_certificate_key /etc/letsencrypt/live/apistage.example.com/privkey.pem;
+        location / { proxy_pass http://127.0.0.1:5002; }
+      }
+    `;
+    const res = await scanNginx(makeExecutor([["nginx -T", conf]]));
+
+    expect(res.sites).toHaveLength(1);
+    expect(res.sites[0].ssl).toBe(true);
+    expect(res.sites[0].target).toEqual({ kind: "proxy", url: "http://127.0.0.1:5002" });
+    expect(res.sites[0].tls?.certPath).toContain("apistage.example.com");
+  });
+
+  test("an ACME-only webroot block is not migrated as a static site", async () => {
+    // certbot's `--webroot-path` pointed at a nonexistent dir. Imported as a
+    // static root it becomes a vhost whose try_files loops → 500.
+    const conf = `
+      server {
+        listen 80;
+        server_name www.example.com;
+        root /var/lib/letsencrypt/http_01_nonexistent;
+      }
+    `;
+    const res = await scanNginx(makeExecutor([["nginx -T", conf]]));
+    expect(res.sites).toHaveLength(0);
+  });
+
+  test("a literal same-host HTTPS upgrade is silent, a cross-host redirect still warns", async () => {
+    const conf = `
+      server { server_name self.example.com; return 301 https://self.example.com$request_uri; }
+      server { server_name away.example.com; return 301 https://other.example.com$request_uri; }
+    `;
+    const res = await scanNginx(makeExecutor([["nginx -T", conf]]));
+    expect(res.warnings.some((w) => w.includes("self.example.com"))).toBe(false);
+    expect(res.warnings.some((w) => w.includes("away.example.com"))).toBe(true);
+  });
+
   test("ssl detection: IPv6 :443 counts, 8443 does not false-positive", async () => {
     const conf = `
       server {

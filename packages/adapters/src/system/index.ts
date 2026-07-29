@@ -46,10 +46,15 @@ export type { EdgeConflictDetails, ImportedSite, ProxyScanResult } from "./types
 export { scanImportableSites, canImportProxy } from "./proxy/import";
 export {
   runEdgeTakeover,
-  recoverInterruptedTakeover,
   type EdgeTakeoverOptions,
   type EdgeTakeoverResult,
 } from "./proxy/takeover";
+export {
+  recoverInterruptedTakeover,
+  beginEdgeTakeover,
+  rollbackEdgeTakeover,
+  completeEdgeTakeover,
+} from "./proxy/takeover-journal";
 // The consolidated reverse-proxy / edge facade (single point for the chain).
 export { detectEdge, importSites, takeoverOnMigrate, foreignProxyOnEdge, ensureEdge } from "./proxy";
 
@@ -67,10 +72,9 @@ export { elevatedExecutor, elevateCommand } from "./elevated-executor";
 export {
   checkAll,
   checkComponents,
-  checkCertbot,
   checkDocker,
   checkGit,
-  checkOpenResty,
+  checkEdge,
   checkRsync,
   COMPONENT_CHECKS,
 } from "./checks";
@@ -85,8 +89,7 @@ export {
   installGit,
   installOpenResty,
   installRsync,
-  uninstallCertbot,
-  uninstallOpenResty,
+  uninstallEdge,
   uninstallRsync,
 } from "./installer";
 

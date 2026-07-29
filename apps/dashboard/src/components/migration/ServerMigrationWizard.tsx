@@ -10,7 +10,6 @@ import {
   Network,
   AlertTriangle,
   AlertCircle,
-  Layers,
   Container,
   Boxes,
   Check,
@@ -25,6 +24,7 @@ import {
   Globe,
   ChevronRight,
   KeyRound,
+  ShieldCheck,
 } from "lucide-react";
 import { Modal } from "@/components/ui/Modal";
 import ServerSelector, { type ServerOption } from "@/components/shared/ServerSelector";
@@ -51,6 +51,7 @@ import { RepositoryList } from "@/app/(dashboard)/library/components/RepositoryL
 import PublicEndpointsCard from "@/components/routing/PublicEndpointsCard";
 import EnvironmentVariables from "@/components/import-project/EnvironmentVariables";
 import { CustomSelect } from "@/components/ui/CustomSelect";
+import { Switch } from "@/components/ui/Switch";
 import {
   createPublicEndpoint,
   type PublicEndpoint,
@@ -62,6 +63,7 @@ import { AppLogo } from "@/components/AppLogo";
 import { Logo } from "@/components/logo";
 import { DeploymentTerminal } from "@/components/import-project/DeploymentTerminal";
 import { ServerConnectionCard } from "@/app/(dashboard)/servers/[serverId]/_components/connection-card";
+import { MigrationIllustration } from "@/components/migration/MigrationIllustration";
 
 /** Platforms whose Docker/Compose apps this flow can adopt — shown as faint,
  *  clean brand marks under the intro (decorative). Only brands with a crisp
@@ -87,6 +89,73 @@ const edgePortLabel = (s: DiscoveredService) => (s.edgePorts ?? []).map((p) => `
  *  keying selection by name makes them toggle together. Use the real container
  *  id (unique per running container); fall back to name only if it's absent. */
 const svcUid = (s: DiscoveredService) => s.containerId ?? s.name;
+
+/** Synthesize a DiscoveredService-shaped card model from a repo compose service
+ *  that has NO running container (e.g. `redis`, or a `build:` app that isn't
+ *  running). It renders through the SAME ServiceConfigCard — env from the repo
+ *  compose, route controls, no volumes/keep — so a migration screen is the full
+ *  native service list, and these services deploy (build/pull) from the repo. */
+const synthServiceFromRepo = (c: ComposeRepoService): DiscoveredService => ({
+  name: c.name,
+  source: "compose",
+  running: false,
+  image: c.image,
+  build: c.build,
+  dockerfile: c.dockerfile,
+  ports: c.ports ?? [],
+  env: c.environment ?? {},
+  volumes: [],
+  networks: [],
+  dependsOn: c.dependsOn ?? [],
+  warnings: [],
+});
+
+/** How a service is deployed at migration — drives the card badge/color:
+ *  reuse = a running container's image is reused (mapped); build = built from
+ *  the repo (`build:`); pull = a registry image is pulled (`image:`). */
+type DeployAction = "reuse" | "build" | "pull";
+
+/** A card in the migration's deployment plan: a selected running container
+ *  (mapped, reused) OR a repo compose service with no container (new, built/
+ *  pulled from the repo). `uid` keys the per-service route/env/mode state. */
+interface PlanCard {
+  uid: string;
+  service: DiscoveredService;
+  isNew: boolean;
+  action: DeployAction;
+}
+
+/** Build the deployment-plan card list for a project: every selected running
+ *  container, PLUS every linked-repo compose service that has no container
+ *  (built/pulled fresh). Mirrors a native compose deploy's service list; the
+ *  mapping step is the only migration-specific overlay. */
+function buildPlanCards(
+  project: ImportProject,
+  services: DiscoveredService[],
+): PlanCard[] {
+  const picked = services.filter((s) => project.services.has(svcUid(s)));
+  const cards: PlanCard[] = picked.map((s) => ({
+    uid: svcUid(s),
+    service: s,
+    isNew: false,
+    action: "reuse",
+  }));
+  // Repo compose services with no selected container → deployed from the repo.
+  const mappedRepoNames = new Set(
+    picked.map((s) => project.serviceMap[svcUid(s)]).filter((n): n is string => !!n),
+  );
+  const pickedNames = new Set(picked.map((s) => s.name));
+  for (const c of project.composeServices) {
+    if (mappedRepoNames.has(c.name) || pickedNames.has(c.name)) continue;
+    cards.push({
+      uid: `new:${c.name}`,
+      service: synthServiceFromRepo(c),
+      isNew: true,
+      action: c.build ? "build" : "pull",
+    });
+  }
+  return cards;
+}
 
 /** Stable key for a group — the compose project name, or the standalone sentinel. */
 const STANDALONE = "__standalone__";
@@ -124,6 +193,9 @@ interface RepoLink {
 interface ImportProject {
   id: string;
   name: string;
+  /** True once the user typed a name — stops the auto-derive (from the selected
+   *  stack) from overwriting it. False = name still tracks the picked stack. */
+  nameEdited: boolean;
   services: Set<string>;
   bound: string | null;
   /** Optional project-level repo (step 2 "source"). */
@@ -158,6 +230,9 @@ interface MigrateItem {
   gitSource?: { provider: "github"; owner: string; repo: string; branch?: string };
   /** serviceName → build subpath (sent to the migrate API). */
   serviceSubpaths?: Record<string, string>;
+  /** discovered serviceName → repo compose service name (step-2 map, sent to the
+   *  migrate API so the adopted row is named after the repo service). */
+  serviceRenames?: Record<string, string>;
   /** serviceName → env override (sent to the migrate API). */
   serviceEnv?: Record<string, Record<string, string>>;
   /** serviceName → routes to apply AFTER the run verifies (client-only, NOT sent). */
@@ -447,16 +522,20 @@ export function ServerMigrationWizard({
       // whole group ONLY when it's a real compose project (a cohesive unit);
       // standalone containers have no natural grouping, so start empty and let the
       // user pick first. The user adds more project tabs for the rest.
-      const first = scanned.groups.find((g) => g.services.some((s) => !isExcluded(s)));
-      if (first) {
-        const uids = first.services.filter((s) => !isExcluded(s)).map(svcUid);
-        const preselect = first.project ? uids : [];
+      // Seed ONE EMPTY project — NEVER auto-select a group or its services.
+      // Auto-picking the first group previously pinned ITS name/identity (e.g.
+      // "n8n") onto a DIFFERENT stack the user actually chose, and shipped a
+      // 1-service "app" instead of the multi-service stack. The user picks the
+      // stack; the name derives from that selection (toggleService/toggleGroup).
+      const hasCandidate = scanned.groups.some((g) => g.services.some((s) => !isExcluded(s)));
+      if (hasCandidate) {
         setProjects([
           {
             id: randomUUID(),
-            name: first.project ?? serverName ?? "migrated-app",
-            services: new Set(preselect),
-            bound: groupKey(first),
+            name: "",
+            nameEdited: false,
+            services: new Set(),
+            bound: null,
             repo: null,
             composeServices: [],
             serviceMap: {},
@@ -489,19 +568,11 @@ export function ServerMigrationWizard({
   const groupLabel = (key: string | null) =>
     key === null || key === STANDALONE ? m.discover.standaloneGroup : key;
 
-  const nextProjectName = () => {
-    const usedComposes = new Set(projects.map((p) => p.bound).filter(Boolean));
-    const freeCompose = stack?.groups.find(
-      (g) => g.project && !usedComposes.has(g.project),
-    )?.project;
-    if (freeCompose) return freeCompose;
-    return `project-${projects.length + 1}`;
-  };
-
   const addProject = () => {
     const p: ImportProject = {
       id: randomUUID(),
-      name: nextProjectName(),
+      name: "", // derived from the stack the user picks (never auto-guessed)
+      nameEdited: false,
       services: new Set(),
       bound: null,
       repo: null,
@@ -596,11 +667,23 @@ export function ServerMigrationWizard({
   };
 
   const renameProject = (id: string, name: string) =>
-    setProjects((prev) => prev.map((p) => (p.id === id ? { ...p, name } : p)));
+    // Typing a name (non-empty) marks it user-owned so the auto-derive stops
+    // overwriting it; clearing the box re-enables derive-from-selection.
+    setProjects((prev) =>
+      prev.map((p) => (p.id === id ? { ...p, name, nameEdited: name.trim().length > 0 } : p)),
+    );
 
-  /** Can the active project accept a service from `key` group? Empty project →
-   *  binds to any group; otherwise only its already-bound group. */
-  const canBind = (key: string) => !active || active.services.size === 0 || active.bound === key;
+  /** Project name derived from the SELECTED stack: the bound compose group's
+   *  name, else the server name. Never the first-discovered group. */
+  const deriveName = (bound: string | null) =>
+    bound && bound !== STANDALONE ? bound : (serverName ?? "");
+
+  /** Free select: a project can pull services from ANY compose group. The old
+   *  one-compose-per-project guard (which dimmed other groups with "add a
+   *  separate project to import it") is relaxed — everything is selectable into
+   *  the active project. `bound` is still tracked, but only to auto-derive the
+   *  project name from the first group picked. */
+  const canBind = (_key: string) => true;
 
   const toggleService = (svc: DiscoveredService, key: string) => {
     if (!active || isExcluded(svc)) return;
@@ -617,7 +700,13 @@ export function ServerMigrationWizard({
           if (!canBind(key)) return p; // one-compose-per-project guard
           services.add(uid);
         }
-        return { ...p, services, bound: services.size ? (p.bound ?? key) : null };
+        const nextBound = services.size ? (p.bound ?? key) : null;
+        return {
+          ...p,
+          services,
+          bound: nextBound,
+          name: p.nameEdited ? p.name : deriveName(nextBound),
+        };
       }),
     );
   };
@@ -639,7 +728,13 @@ export function ServerMigrationWizard({
           if (allOn) services.delete(u);
           else services.add(u);
         }
-        return { ...p, services, bound: services.size ? (p.bound ?? key) : null };
+        const nextBound = services.size ? (p.bound ?? key) : null;
+        return {
+          ...p,
+          services,
+          bound: nextBound,
+          name: p.nameEdited ? p.name : deriveName(nextBound),
+        };
       }),
     );
   };
@@ -698,6 +793,7 @@ export function ServerMigrationWizard({
         conflictResolution: Object.keys(conflictResolution).length ? conflictResolution : undefined,
         gitSource: item.gitSource,
         serviceSubpaths: item.serviceSubpaths,
+        serviceRenames: item.serviceRenames,
         serviceEnv: item.serviceEnv,
         flatDocker,
       });
@@ -733,12 +829,16 @@ export function ServerMigrationWizard({
       // the discovered→compose mapping (matched compose service's build context).
       const composeByName = new Map(p.composeServices.map((c) => [c.name, c]));
       const serviceSubpaths: Record<string, string> = {};
+      const serviceRenames: Record<string, string> = {};
       const serviceEnv: Record<string, Record<string, string>> = {};
       const routesByServiceName: Record<string, PublicEndpoint[]> = {};
       for (const s of picked) {
         const mapped = p.serviceMap[svcUid(s)];
         const build = mapped ? composeByName.get(mapped)?.build?.trim() : undefined;
         if (build) serviceSubpaths[s.name] = build;
+        // Adopt the row under the mapped REPO compose service name so a later
+        // git-compose reconcile matches it in place (no duplicate / empty volume).
+        if (mapped && mapped !== s.name) serviceRenames[s.name] = mapped;
         const env = p.serviceEnvs[svcUid(s)];
         if (env) serviceEnv[s.name] = env; // only edited services carry an override
         // Resolve the route by the per-container mode. "keep" reuses the domain
@@ -765,6 +865,25 @@ export function ServerMigrationWizard({
         }
         if (routes.length) routesByServiceName[s.name] = routes;
       }
+      // Repo compose services with no running container (built/pulled fresh from
+      // the repo): carry their route + env override keyed by the REPO service
+      // name. The backend creates the row (reconcileFromCompose) and publishRoutes
+      // routes it by that name — so they deploy and route like any native service.
+      const mappedRepoNames = new Set(
+        picked.map((s) => p.serviceMap[svcUid(s)]).filter((n): n is string => !!n),
+      );
+      const pickedNames = new Set(picked.map((s) => s.name));
+      for (const c of p.composeServices) {
+        if (mappedRepoNames.has(c.name) || pickedNames.has(c.name)) continue;
+        const uid = `new:${c.name}`;
+        const env = p.serviceEnvs[uid];
+        if (env) serviceEnv[c.name] = env;
+        const mode = p.serviceRouteMode[uid] ?? "none";
+        if (mode === "free" || mode === "custom") {
+          const routes = (p.serviceRoutes[uid] ?? []).filter(routeHasDomain);
+          if (routes.length) routesByServiceName[c.name] = routes;
+        }
+      }
       return {
         name: p.name.trim(),
         serviceNames: picked.map((s) => s.name),
@@ -773,6 +892,7 @@ export function ServerMigrationWizard({
           ? { provider: "github" as const, owner: p.repo.owner, repo: p.repo.repo, branch: p.repo.branch }
           : undefined,
         serviceSubpaths: Object.keys(serviceSubpaths).length ? serviceSubpaths : undefined,
+        serviceRenames: Object.keys(serviceRenames).length ? serviceRenames : undefined,
         serviceEnv: Object.keys(serviceEnv).length ? serviceEnv : undefined,
         routesByServiceName: Object.keys(routesByServiceName).length ? routesByServiceName : undefined,
       };
@@ -1000,30 +1120,58 @@ export function ServerMigrationWizard({
   // (adopting/moving_data) have only a short step list → stay compact.
   const wide = expanded && (!inProgress || Boolean(run?.deploymentId));
 
-  // "Flat Docker" scan-mode toggle — shown beside the scan / re-scan control in
-  // both footer states. Flipping it re-scans (when results are already shown).
-  const flatToggle = (
-    <label
-      className="flex items-center gap-1.5 cursor-pointer select-none text-xs text-muted-foreground shrink-0"
+  // "Flat Docker" scan mode. One handler, two shells: an option row inside the
+  // scan / Select card (tab variant — it belongs with the scan controls, not in
+  // the header), and an inline switch beside the modal's scan button. Flipping it
+  // re-scans when results are already shown.
+  const setFlat = (next: boolean) => {
+    setFlatDocker(next);
+    if (selectedId && stack) void handleScan(next);
+  };
+
+  /** Bordered option row: label (+ one-line hint) with the shared Switch. The
+   *  hint is `truncate`d so no locale can grow the card past two lines — the
+   *  full explanation stays on the row's tooltip. */
+  const flatOption = (withHint: boolean) => (
+    <div
+      className="flex items-center justify-between gap-3 rounded-xl border border-border/50 bg-muted/10 px-3.5 py-2.5"
       title={m.wizard.flatDockerHint}
     >
-      <input
-        type="checkbox"
+      <div className="min-w-0">
+        <p className="text-[13px] font-medium text-foreground">{m.wizard.flatDocker}</p>
+        {withHint && (
+          <p className="truncate text-xs text-muted-foreground">{m.wizard.flatDockerShort}</p>
+        )}
+      </div>
+      <Switch
+        size="sm"
         checked={flatDocker}
         disabled={scanning}
-        onChange={() => {
-          const next = !flatDocker;
-          setFlatDocker(next);
-          if (selectedId && stack) void handleScan(next);
-        }}
-        className="size-3.5 rounded border-border/60 bg-card text-primary focus:ring-2 focus:ring-primary/30 focus:ring-offset-0 cursor-pointer"
+        onChange={setFlat}
+        ariaLabel={m.wizard.flatDocker}
       />
-      {m.wizard.flatDocker}
-    </label>
+    </div>
   );
 
-  // Compact inline "← Back to migrations" (tab variant only) — sits in the
-  // existing header rows beside flatToggle so it never adds a pushing-down row.
+  const flatInline = (
+    <div
+      className="flex shrink-0 items-center gap-2 text-xs text-muted-foreground"
+      title={m.wizard.flatDockerHint}
+    >
+      <Switch
+        size="sm"
+        checked={flatDocker}
+        disabled={scanning}
+        onChange={setFlat}
+        ariaLabel={m.wizard.flatDocker}
+      />
+      {m.wizard.flatDocker}
+    </div>
+  );
+
+  // "← Back to migrations" (tab variant only) — rendered on its own line above
+  // the project tabs: it leaves the flow, so it shouldn't share a row with the
+  // controls that act inside it.
   const backBtn = onBack ? (
     <button
       type="button"
@@ -1183,7 +1331,6 @@ export function ServerMigrationWizard({
                       }`}
                       onClick={() => setActiveId(p.id)}
                     >
-                      <Layers className={`size-3.5 ${on ? "text-foreground" : "text-muted-foreground"}`} />
                       <span className="font-medium truncate max-w-[160px]">
                         {p.name || m.wizard.projectName}
                       </span>
@@ -1313,28 +1460,28 @@ export function ServerMigrationWizard({
                   {step === "domains" && (
                     <div className="h-full min-h-0 flex-1 overflow-y-auto pe-1">
                       <div className="grid gap-4 items-start grid-cols-[repeat(auto-fill,minmax(420px,1fr))]">
-                        {stack.services
-                          .filter((sv) => active.services.has(svcUid(sv)))
-                          .map((sv) => (
-                            <ServiceConfigCard
-                              key={svcUid(sv)}
-                              service={sv}
-                              routes={active.serviceRoutes[svcUid(sv)]}
-                              envOverride={active.serviceEnvs[svcUid(sv)]}
-                              sameServer={sameServer}
-                              volumeStrategy={volumeStrategy[svcUid(sv)]}
-                              routeMode={
-                                active.serviceRouteMode[svcUid(sv)] ??
-                                (hasKeepableRoute(sv) ? "keep" : "none")
-                              }
-                              onSetRoutes={(r) => setServiceRoutes(active.id, svcUid(sv), r)}
-                              onSetEnv={(env) => setServiceEnv(active.id, svcUid(sv), env)}
-                              onSetStrategy={(strat) =>
-                                setVolumeStrategy((prev) => ({ ...prev, [svcUid(sv)]: strat }))
-                              }
-                              onSetRouteMode={(mode) => setServiceRouteMode(active.id, svcUid(sv), mode)}
-                            />
-                          ))}
+                        {buildPlanCards(active, stack.services).map(({ uid, service, isNew, action }) => (
+                          <ServiceConfigCard
+                            key={uid}
+                            service={service}
+                            isNew={isNew}
+                            deployAction={action}
+                            routes={active.serviceRoutes[uid]}
+                            envOverride={active.serviceEnvs[uid]}
+                            sameServer={sameServer}
+                            volumeStrategy={volumeStrategy[uid]}
+                            routeMode={
+                              active.serviceRouteMode[uid] ??
+                              (hasKeepableRoute(service) ? "keep" : "none")
+                            }
+                            onSetRoutes={(r) => setServiceRoutes(active.id, uid, r)}
+                            onSetEnv={(env) => setServiceEnv(active.id, uid, env)}
+                            onSetStrategy={(strat) =>
+                              setVolumeStrategy((prev) => ({ ...prev, [uid]: strat }))
+                            }
+                            onSetRouteMode={(mode) => setServiceRouteMode(active.id, uid, mode)}
+                          />
+                        ))}
                       </div>
                     </div>
                   )}
@@ -1370,7 +1517,7 @@ export function ServerMigrationWizard({
                 step === "select" ? (
                   /* Step 1 footer: flat toggle + rescan + Cancel + Next */
                   <>
-                    {flatToggle}
+                    {flatInline}
                     <div className="flex items-center gap-2 shrink-0">
                       <button
                         type="button"
@@ -1517,7 +1664,7 @@ export function ServerMigrationWizard({
                 )
               ) : (
                 <>
-                  {flatToggle}
+                  {flatInline}
                   <div className="flex items-center gap-2 shrink-0">
                     <button
                       type="button"
@@ -1554,7 +1701,7 @@ export function ServerMigrationWizard({
         disabled={!selectedId || scanning}
         title={m.wizard.rescan}
         aria-label={m.wizard.rescan}
-        className="p-2 rounded-lg border border-border text-muted-foreground hover:text-foreground hover:bg-muted transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+        className="p-2.5 rounded-xl text-muted-foreground hover:text-foreground hover:bg-muted transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
       >
         {scanning ? <Loader2 className="size-4 animate-spin" /> : <RefreshCw className="size-4" />}
       </button>
@@ -1797,19 +1944,21 @@ export function ServerMigrationWizard({
                target card + finalize button reused in the right rail. */
             <div className="grid grid-cols-1 gap-6 items-start lg:grid-cols-[minmax(0,1fr)_340px]">
               <div className="grid min-w-0 grid-cols-1 gap-3.5 items-stretch xl:grid-cols-2">
-                {picked.map((sv) => (
+                {buildPlanCards(active, stack.services).map(({ uid, service, isNew, action }) => (
                   <ServiceConfigCard
-                    key={svcUid(sv)}
-                    service={sv}
-                    routes={active.serviceRoutes[svcUid(sv)]}
-                    envOverride={active.serviceEnvs[svcUid(sv)]}
+                    key={uid}
+                    service={service}
+                    isNew={isNew}
+                    deployAction={action}
+                    routes={active.serviceRoutes[uid]}
+                    envOverride={active.serviceEnvs[uid]}
                     sameServer={sameServer}
-                    volumeStrategy={volumeStrategy[svcUid(sv)]}
-                    routeMode={active.serviceRouteMode[svcUid(sv)] ?? (hasKeepableRoute(sv) ? "keep" : "none")}
-                    onSetRoutes={(r) => setServiceRoutes(active.id, svcUid(sv), r)}
-                    onSetEnv={(env) => setServiceEnv(active.id, svcUid(sv), env)}
-                    onSetStrategy={(strat) => setVolumeStrategy((prev) => ({ ...prev, [svcUid(sv)]: strat }))}
-                    onSetRouteMode={(mode) => setServiceRouteMode(active.id, svcUid(sv), mode)}
+                    volumeStrategy={volumeStrategy[uid]}
+                    routeMode={active.serviceRouteMode[uid] ?? (hasKeepableRoute(service) ? "keep" : "none")}
+                    onSetRoutes={(r) => setServiceRoutes(active.id, uid, r)}
+                    onSetEnv={(env) => setServiceEnv(active.id, uid, env)}
+                    onSetStrategy={(strat) => setVolumeStrategy((prev) => ({ ...prev, [uid]: strat }))}
+                    onSetRouteMode={(mode) => setServiceRouteMode(active.id, uid, mode)}
                   />
                 ))}
               </div>
@@ -1879,56 +2028,18 @@ export function ServerMigrationWizard({
       <div ref={stepTopRef} className="grid grid-cols-1 gap-6 items-start lg:grid-cols-[minmax(0,1fr)_340px]">
         {/* ── LEFT: discovered containers ── */}
         <div className="min-w-0 space-y-4">
-          {/* Header (always on): Flat-Docker toggle lives at the top of the list
-              so it's available before the first scan; project tabs + rescan join
-              it once a scan has results. */}
-          <div className="flex flex-wrap items-center justify-between gap-3">
-            <div className="flex items-center gap-1.5 flex-wrap min-w-0">
-              {backBtn}
-              {adoptable && stack && (
-                <>
-              {projects.map((p) => {
-                const on = p.id === active?.id;
-                return (
-                  <div
-                    key={p.id}
-                    className={`group inline-flex items-center gap-2 rounded-lg px-3 py-1.5 text-sm transition-colors cursor-pointer ${
-                      on ? " bg-primary/10 text-foreground" : "text-muted-foreground hover:bg-muted/40"
-                    }`}
-                    onClick={() => setActiveId(p.id)}
-                  >
-                    <Layers className={`size-3.5 ${on ? "text-primary" : ""}`} />
-                    <span className="font-medium truncate max-w-[160px]">{p.name || m.wizard.projectName}</span>
-                    <span className="text-xs text-muted-foreground">· {p.services.size}</span>
-                    {projects.length > 1 && (
-                      <button
-                        type="button"
-                        onClick={(e) => { e.stopPropagation(); removeProject(p.id); }}
-                        className="rounded p-0.5 text-muted-foreground hover:text-destructive hover:bg-destructive/10"
-                        aria-label={m.wizard.removeProject}
-                      >
-                        <X className="size-3.5" />
-                      </button>
-                    )}
-                  </div>
-                );
-              })}
-              <button
-                type="button"
-                onClick={addProject}
-                className="inline-flex items-center gap-1.5 rounded-lg border border-dashed border-border px-3 py-1.5 text-sm font-medium text-muted-foreground hover:text-foreground hover:bg-muted/40 transition-colors"
-              >
-                <Plus className="size-3.5" />
-                {m.wizard.addProject}
-              </button>
-                </>
-              )}
-              </div>
-              <div className="flex items-center gap-3 shrink-0">
-                {flatToggle}
-                {adoptable && stack && rescanBtn}
-              </div>
-            </div>
+          {/* "← Back to migrations" leaves the flow; the rescan is a control of
+              it, but they share this one line so the page doesn't spend two rows
+              on chrome.
+
+              The project tabs + "Add project" that used to own the row below are
+              deliberately NOT rendered here for now. Multi-project splitting is
+              still fully wired — projects / activeId / addProject / removeProject
+              state, exclusive `claimedBy` assignment, and the modal variant that
+              still renders the tabs — so bringing this back is a JSX-only change.
+              `active` falls back to projects[0], which the scan always creates,
+              so the single-project path works untouched. */}
+          {backBtn && <div className="flex items-center gap-3">{backBtn}</div>}
 
           {!stack && !error && <EmptyHint scanning={scanning} status={scanStatus} />}
           {stack && !adoptable && !hasReimport && <NoResults message={m.discover.nothing} />}
@@ -2044,6 +2155,9 @@ export function ServerMigrationWizard({
                     <p className="rounded-xl border border-border/50 bg-muted/10 px-3.5 py-3 text-[13px] leading-relaxed text-muted-foreground">
                       {m.wizard.steps.repoOnSourceHint}
                     </p>
+                    {/* Still reachable after a scan (flipping it re-scans) without
+                        putting a control back in the list header. */}
+                    {flatOption(false)}
                   </>
                 )}
 
@@ -2058,23 +2172,23 @@ export function ServerMigrationWizard({
 
                 {step === "domains" && (
                   <div className="space-y-4">
-                    {stack.services
-                      .filter((sv) => active.services.has(svcUid(sv)))
-                      .map((sv) => (
-                        <ServiceConfigCard
-                          key={svcUid(sv)}
-                          service={sv}
-                          routes={active.serviceRoutes[svcUid(sv)]}
-                          envOverride={active.serviceEnvs[svcUid(sv)]}
-                          sameServer={sameServer}
-                          volumeStrategy={volumeStrategy[svcUid(sv)]}
-                          routeMode={active.serviceRouteMode[svcUid(sv)] ?? (hasKeepableRoute(sv) ? "keep" : "none")}
-                          onSetRoutes={(r) => setServiceRoutes(active.id, svcUid(sv), r)}
-                          onSetEnv={(env) => setServiceEnv(active.id, svcUid(sv), env)}
-                          onSetStrategy={(strat) => setVolumeStrategy((prev) => ({ ...prev, [svcUid(sv)]: strat }))}
-                          onSetRouteMode={(mode) => setServiceRouteMode(active.id, svcUid(sv), mode)}
-                        />
-                      ))}
+                    {buildPlanCards(active, stack.services).map(({ uid, service, isNew, action }) => (
+                      <ServiceConfigCard
+                        key={uid}
+                        service={service}
+                        isNew={isNew}
+                        deployAction={action}
+                        routes={active.serviceRoutes[uid]}
+                        envOverride={active.serviceEnvs[uid]}
+                        sameServer={sameServer}
+                        volumeStrategy={volumeStrategy[uid]}
+                        routeMode={active.serviceRouteMode[uid] ?? (hasKeepableRoute(service) ? "keep" : "none")}
+                        onSetRoutes={(r) => setServiceRoutes(active.id, uid, r)}
+                        onSetEnv={(env) => setServiceEnv(active.id, uid, env)}
+                        onSetStrategy={(strat) => setVolumeStrategy((prev) => ({ ...prev, [uid]: strat }))}
+                        onSetRouteMode={(mode) => setServiceRouteMode(active.id, uid, mode)}
+                      />
+                    ))}
 
                     {/* Target + move options */}
                     <div className="rounded-xl border border-border/50 bg-muted/20 p-3 space-y-2.5">
@@ -2122,6 +2236,7 @@ export function ServerMigrationWizard({
                       className="px-4 py-2.5 rounded-xl border border-border text-sm font-medium text-foreground hover:bg-muted transition-colors">
                       {m.wizard.cancel}
                     </button>
+                    {rescanBtn}
                     <button type="button" onClick={() => setStep("source")} disabled={migratable.length === 0}
                       className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl bg-primary text-primary-foreground text-sm font-semibold hover:bg-primary/90 transition-colors disabled:opacity-40 disabled:cursor-not-allowed">
                       {m.wizard.steps.next}
@@ -2179,27 +2294,27 @@ export function ServerMigrationWizard({
               </div>
             </div>
           ) : (
-            <>
-              {server && <ServerConnectionCard server={server} />}
-              <div className="rounded-2xl border border-border/50 bg-card p-5 space-y-3.5">
-                <div className="flex items-center gap-2.5">
-                  <div className="size-9 rounded-xl bg-info/10 flex items-center justify-center shrink-0">
-                    <Boxes className="size-[18px] text-info" />
-                  </div>
-                  <h3 className="text-sm font-semibold text-foreground leading-tight">{m.entry.cardTitle}</h3>
+            /* No host/connection card here — only the scan card. */
+            <div className="rounded-2xl border border-border/50 bg-card p-5 space-y-3.5">
+              <div className="flex items-center gap-2.5">
+                <div className="size-9 rounded-xl bg-info/10 flex items-center justify-center shrink-0">
+                  <Boxes className="size-[18px] text-info" />
                 </div>
-                <p className="text-[13px] leading-relaxed text-muted-foreground">{m.entry.cardDesc}</p>
-                <button
-                  type="button"
-                  onClick={() => handleScan()}
-                  disabled={!selectedId || scanning}
-                  className="w-full inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl bg-primary text-primary-foreground text-sm font-semibold hover:bg-primary/90 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
-                >
-                  {scanning ? <Loader2 className="size-4 animate-spin" /> : <Search className="size-4" />}
-                  {scanning ? m.wizard.scanning : m.wizard.scan}
-                </button>
+                <h3 className="text-sm font-semibold text-foreground leading-tight">{m.entry.cardTitle}</h3>
               </div>
-            </>
+              <p className="text-[13px] leading-relaxed text-muted-foreground">{m.entry.cardDesc}</p>
+              {/* Scan-mode option sits directly above the button it changes. */}
+              {flatOption(true)}
+              <button
+                type="button"
+                onClick={() => handleScan()}
+                disabled={!selectedId || scanning}
+                className="w-full inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl bg-primary text-primary-foreground text-sm font-semibold hover:bg-primary/90 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+              >
+                {scanning ? <Loader2 className="size-4 animate-spin" /> : <Search className="size-4" />}
+                {scanning ? m.wizard.scanning : m.wizard.scan}
+              </button>
+            </div>
           )}
         </div>
       </div>
@@ -2227,59 +2342,24 @@ export function ServerMigrationWizard({
 function EmptyHint({ scanning, status }: { scanning?: boolean; status?: string }) {
   const { t } = useI18n();
   return (
-    <div className="flex flex-col items-center justify-center text-center py-14 gap-4">
-      {/* Themed illustration — a container stack being inspected under a lens
-          (read-only "adopt"). Kept during the scan (pulses to signal loading)
-          so the body never goes blank. */}
-      <div className={`relative h-36 w-52 ${scanning ? "animate-pulse" : ""}`}>
-        <svg className="absolute inset-0 h-full w-full" viewBox="0 0 220 150" fill="none">
-          {/* ground */}
-          <line x1="34" y1="112" x2="150" y2="112" stroke="var(--th-bd-subtle)" strokeWidth="1" />
-
-          {/* back container */}
-          <rect x="44" y="74" width="52" height="38" rx="4" fill="var(--th-sf-03)" stroke="var(--th-bd-default)" strokeWidth="1" />
-          <line x1="60" y1="74" x2="60" y2="112" stroke="var(--th-bd-subtle)" strokeWidth="1" />
-          <line x1="78" y1="74" x2="78" y2="112" stroke="var(--th-bd-subtle)" strokeWidth="1" />
-
-          {/* front container */}
-          <rect x="82" y="84" width="56" height="28" rx="4" fill="var(--th-sf-05)" stroke="var(--th-bd-default)" strokeWidth="1" />
-          <line x1="100" y1="84" x2="100" y2="112" stroke="var(--th-bd-subtle)" strokeWidth="1" />
-          <line x1="120" y1="84" x2="120" y2="112" stroke="var(--th-bd-subtle)" strokeWidth="1" />
-
-          {/* small top container + activity lights */}
-          <rect x="58" y="56" width="34" height="18" rx="3" fill="var(--th-card-bg)" stroke="var(--th-bd-default)" strokeWidth="1" />
-          <circle cx="66" cy="65" r="2" fill="#22c55e" fillOpacity="0.7" />
-          <circle cx="74" cy="65" r="2" fill="#eab308" fillOpacity="0.5" />
-          <circle cx="82" cy="65" r="2" fill="var(--th-on-12)" />
-
-          {/* magnifier inspecting a container */}
-          <circle cx="150" cy="62" r="26" fill="var(--th-card-bg)" stroke="var(--th-bd-strong)" strokeWidth="2" />
-          <rect x="139" y="55" width="22" height="15" rx="2" fill="var(--th-sf-06)" stroke="var(--th-bd-default)" strokeWidth="1" />
-          <line x1="146" y1="55" x2="146" y2="70" stroke="var(--th-bd-subtle)" strokeWidth="1" />
-          <line x1="154" y1="55" x2="154" y2="70" stroke="var(--th-bd-subtle)" strokeWidth="1" />
-          <line x1="169" y1="81" x2="186" y2="98" stroke="var(--th-bd-strong)" strokeWidth="4" strokeLinecap="round" />
-
-          {/* decorative dots + sparkles */}
-          <circle cx="24" cy="46" r="3.5" fill="var(--th-on-10)" />
-          <circle cx="30" cy="126" r="5" fill="var(--th-on-08)" />
-          <circle cx="200" cy="40" r="3" fill="var(--th-on-12)" />
-          <circle cx="196" cy="118" r="4.5" fill="var(--th-on-06)" />
-          <path d="M14 82l2-4 2 4-4-2 4 0-4 2z" fill="var(--th-on-16)" />
-          <path d="M202 76l1.5-3 1.5 3-3-1.5 3 0-3 1.5z" fill="var(--th-on-12)" />
-        </svg>
+    <div className="overflow-hidden rounded-2xl border border-border/50 bg-card">
+      <div className="flex flex-col items-center px-6 pb-12 pt-10 text-center">
+        {/* The migration illustration — the same one the runs-list empty state
+            uses. Pulses during the scan so the body never goes blank. */}
+        <MigrationIllustration className={`relative mb-7 h-32 w-72 max-w-full ${scanning ? "animate-pulse" : ""}`} />
+        <p className="mx-auto max-w-md text-sm leading-relaxed text-muted-foreground">
+          {scanning ? (status || t.migration.wizard.scanning) : t.migration.wizard.intro}
+        </p>
       </div>
-      <p className="max-w-sm text-sm text-muted-foreground">
-        {scanning ? (status || t.migration.wizard.scanning) : t.migration.wizard.intro}
-      </p>
-      {!scanning && (
-        <div className="mt-1 flex items-center gap-4 opacity-40" aria-hidden>
-          {MIGRATE_SOURCES.map((slug) => (
-            <AppLogo key={slug} slug={slug} className="size-5 grayscale" />
-          ))}
-          <ArrowRight className="size-4 text-muted-foreground/60" />
-          <Logo size={20} />
-        </div>
-      )}
+      {/* Safety guarantee footer — migration COPIES, never moves; nothing is
+          deleted unless you explicitly cut over. */}
+      <div className="flex items-start gap-2.5 border-t border-border/50 bg-muted/30 px-5 py-4 text-start">
+        <ShieldCheck className="mt-0.5 size-4 shrink-0 text-success" />
+        <p className="text-xs leading-relaxed text-muted-foreground">
+          <span className="font-medium text-foreground">{t.migration.tab.safetyTitle}</span>{" "}
+          {t.migration.tab.safetyBody}
+        </p>
+      </div>
     </div>
   );
 }
@@ -2494,8 +2574,9 @@ function ServiceGroup({
   const isCompose = group.project !== null;
   const key = group.project ?? "__standalone__";
 
-  // The active project can bind to this group iff empty or already bound to it.
-  const bindable = activeProject.services.size === 0 || activeProject.bound === key;
+  // Free select — every group is bindable into the active project (no
+  // one-compose-per-project restriction; no "add a separate project" gating).
+  const bindable = true;
   const selectable = group.services.filter(
     (s) => !isExcluded(s) && (claimedBy.get(svcUid(s)) ?? activeProject.id) === activeProject.id,
   );
@@ -2506,19 +2587,15 @@ function ServiceGroup({
   return (
     <section className="space-y-2.5">
       <div className="flex items-center justify-between gap-3 px-0.5">
-        <div className="flex items-center gap-2 min-w-0">
-          {isCompose && (
-            <Layers className="size-4 text-muted-foreground shrink-0" />
-          )}
-          <span className="text-sm font-semibold text-foreground truncate">
+        {/* Name + one muted meta string. No glyph, no pill: the group's kind is
+            already the same for every row here, so a badge per group is noise. */}
+        <div className="flex min-w-0 items-baseline gap-2">
+          <span className="truncate text-sm font-semibold text-foreground">
             {isCompose ? group.project : m.standaloneGroup}
           </span>
-          {isCompose && (
-            <span className="text-xs font-medium px-1.5 py-0.5 rounded-md bg-muted/70 text-muted-foreground shrink-0">
-              {m.composeGroup}
-            </span>
-          )}
-          <span className="text-[13px] text-muted-foreground shrink-0">· {group.services.length}</span>
+          <span className="shrink-0 text-xs text-muted-foreground">
+            {isCompose ? `${m.composeGroup} · ${group.services.length}` : `· ${group.services.length}`}
+          </span>
         </div>
         {!readOnly && bindable && selectable.length > 0 && (
           <button
@@ -2591,18 +2668,18 @@ function ServiceRow({
         interactionBlocked
           ? "cursor-not-allowed border-border/50 bg-card/40 opacity-55"
           : readOnly
-            ? "cursor-default border-primary/30 bg-primary/[0.05]"
+            ? "cursor-default border-success-border bg-success/[0.05]"
             : checked
-              ? "cursor-pointer border-primary/40 bg-primary/[0.05]"
-              : "cursor-pointer border-border bg-card hover:border-foreground/25 hover:bg-muted/20"
+              ? "cursor-pointer border-success-border bg-success/[0.05]"
+              : "cursor-pointer border-border/50 bg-card hover:border-foreground/25 hover:bg-muted/20"
       }`}
     >
       <span
-        className={`mt-0.5 size-[18px] rounded-md border flex items-center justify-center shrink-0 transition-colors ${
+        className={`mt-0.5 size-4 rounded-md border flex items-center justify-center shrink-0 transition-colors ${
           interactionBlocked
             ? "border-border bg-muted"
             : checked
-              ? "bg-primary border-primary text-primary-foreground"
+              ? "bg-success-solid border-success-solid text-white"
               : "border-border bg-transparent group-hover:border-foreground/40"
         }`}
       >
@@ -2661,15 +2738,15 @@ function ServiceRow({
         )}
       </div>
 
-      {/* Quiet status — no loud filled pill; running takes the on-brand success
-          tint, the notable "stopped" state the warning tint. */}
+      {/* Quiet status MARK — a small hollow "holo" ring instead of the loud
+          RUNNING/STOPPED text, so the card stays clean. Full label on hover. */}
       <span
-        className={`mt-0.5 shrink-0 text-[11px] font-medium uppercase tracking-wide ${
-          service.running ? "text-success" : "text-warning"
+        className={`mt-1 block size-2.5 shrink-0 rounded-full ring-2 ring-inset ${
+          service.running ? "ring-success/70" : "ring-warning/70"
         }`}
-      >
-        {service.running ? m.running : m.stopped}
-      </span>
+        title={service.running ? m.running : m.stopped}
+        aria-label={service.running ? m.running : m.stopped}
+      />
     </label>
   );
 }
@@ -2957,6 +3034,8 @@ function ServiceConfigCard({
   sameServer,
   volumeStrategy,
   routeMode,
+  isNew = false,
+  deployAction = "reuse",
   onSetRoutes,
   onSetEnv,
   onSetStrategy,
@@ -2968,6 +3047,11 @@ function ServiceConfigCard({
   sameServer: boolean;
   volumeStrategy: VolumeStrategy | undefined;
   routeMode: RouteMode;
+  /** True when this card is a repo compose service with no running container —
+   *  it deploys fresh from the repo (not adopted from a container). */
+  isNew?: boolean;
+  /** How the service is deployed — drives the badge/color. */
+  deployAction?: DeployAction;
   onSetRoutes: (routes: PublicEndpoint[]) => void;
   onSetEnv: (env: Record<string, string>) => void;
   onSetStrategy: (strat: VolumeStrategy) => void;
@@ -3035,6 +3119,29 @@ function ServiceConfigCard({
             {p}
           </span>
         ))}
+        {/* Deploy action: reuse the mapped container's image (adopted), build from
+            the repo, or pull a registry image. `New` marks a repo service with no
+            running container — it deploys fresh from the repo, not adopted. */}
+        <span className="ms-auto flex items-center gap-1.5">
+          {isNew && (
+            <span className="rounded-md bg-warning-bg px-1.5 py-0.5 text-[10px] font-medium text-warning">
+              {s.serviceNewBadge}
+            </span>
+          )}
+          <span
+            className={`rounded-md px-1.5 py-0.5 text-[10px] font-medium ${
+              deployAction === "build"
+                ? "bg-info-bg text-info"
+                : "bg-muted/60 text-muted-foreground"
+            }`}
+          >
+            {deployAction === "build"
+              ? s.deployActionBuild
+              : deployAction === "pull"
+                ? s.deployActionPull
+                : s.deployActionReuse}
+          </span>
+        </span>
       </div>
 
       {/* Route: Free / Custom / None (+ Keep when a route was already detected) */}
@@ -3567,11 +3674,11 @@ export function MigrationProgress({
   const allDone = completed.length >= queueTotal;
 
   return (
-    <div className="py-2 space-y-5">
+    <div className="py-2 space-y-5 text-sm">
       <div className="flex items-center justify-between gap-3">
-        <h3 className="text-base font-semibold text-foreground">{m.run.title}</h3>
+        <h3 className="text-lg font-semibold text-foreground">{m.run.title}</h3>
         {queueTotal > 1 && !allDone && (
-          <span className="text-xs font-medium text-muted-foreground">
+          <span className="text-sm font-medium text-muted-foreground">
             {interpolate(m.run.queueHeader, {
               index: String(queueIndex + 1),
               total: String(queueTotal),

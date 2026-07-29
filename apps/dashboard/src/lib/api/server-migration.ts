@@ -45,13 +45,17 @@ export interface DiscoveredService {
   warnings: string[];
 }
 
-/** A service parsed from a LINKED repo's docker-compose (the map-step reference). */
+/** A service parsed from a LINKED repo's docker-compose (the map-step reference).
+ *  Carries env + deps so a repo service with no running container renders as a
+ *  full native service card in the wizard, not just a chip. */
 export interface ComposeRepoService {
   name: string;
   build?: string;
   dockerfile?: string;
   image?: string;
   ports: string[];
+  environment: Record<string, string>;
+  dependsOn: string[];
 }
 
 export interface DiscoveredGroup {
@@ -397,6 +401,9 @@ export const dockerMigrationApi = {
     gitSource?: { provider: "github"; owner: string; repo: string; branch?: string };
     /** serviceName → build subpath (rootDirectory) inside the linked repo. */
     serviceSubpaths?: Record<string, string>;
+    /** discovered serviceName → repo compose service name to adopt the row AS,
+     *  so a later git-compose reconcile matches it in place (no duplicate). */
+    serviceRenames?: Record<string, string>;
     /** serviceName → env override (edited in the wizard; else discovered env). */
     serviceEnv?: Record<string, Record<string, string>>;
     /** Extra paths to move (cross-server): source host path → target host path. */

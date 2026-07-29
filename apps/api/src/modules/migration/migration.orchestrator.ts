@@ -33,6 +33,9 @@ import {
   transferVolume,
   transferImage,
   scopedVolumeName,
+  readEdgeFile,
+  writeEdgeFile,
+  edgeProxy,
   type ServiceHandle,
   type TransferEndpoint,
   type TransferMode,
@@ -49,12 +52,14 @@ import { sizeOfMoveSet } from "./migration-size";
 import { withKeyedMutex } from "../../lib/provision-lock";
 import { requestBuildAccess } from "../deployments/build.service";
 import { restartServiceContainer, updateService } from "../services/service.service";
+import { describeLiveState, resolveLiveServiceState } from "../services/live-state";
 import { applyProjectRouting } from "../domains/routing-apply.service";
+import { resolveProjectRouteState, reapplyProjectLiveRoutes } from "../domains/project-route.service";
 import { linkProjectRepo } from "../projects/project-crud.service";
 import type { ProjectCompositeRoute } from "@repo/core";
 import { teardownProject } from "../projects/project-teardown";
 import { discoverServerStack } from "./docker-inspect.service";
-import { adoptServerStack, attachLiveRuntime } from "./migrate.service";
+import { adoptServerStack, attachLiveRuntime, joinReusedContainersToGroup, parseRepoCompose } from "./migrate.service";
 import { isMovableBind } from "./migration-preflight";
 import { migrationRunBus } from "./migration.sse";
 
@@ -93,6 +98,11 @@ export interface StartMigrationInput {
   gitSource?: { provider: "github"; owner: string; repo: string; branch?: string };
   /** serviceName → build subpath inside the linked repo. Metadata only. */
   serviceSubpaths?: Record<string, string>;
+  /** DISCOVERED service name → the repo compose service name to adopt the row AS
+   *  (the wizard's step-2 mapping). Names the adopted row after the repo service
+   *  so a later git-compose reconcile matches it in place instead of creating a
+   *  duplicate row with a fresh empty volume. */
+  serviceRenames?: Record<string, string>;
   /** serviceName → env override (defaults to the discovered container's env). */
   serviceEnv?: Record<string, Record<string, string>>;
   /** User-selected extra paths to move (cross-server): each a source path on the
@@ -114,6 +124,19 @@ export interface StartMigrationInput {
   flatDocker?: boolean;
 }
 
+/** Re-key a DISCOVERED-name-keyed map onto the adopted ROW names via a
+ *  discovered→row rename map. Keys with no rename entry pass through unchanged.
+ *  Used so migrate inputs (e.g. routesByServiceName) land on renamed rows. */
+function remapKeys<T>(
+  map: Record<string, T> | undefined,
+  renames: Record<string, string>,
+): Record<string, T> | undefined {
+  if (!map) return map;
+  const out: Record<string, T> = {};
+  for (const [k, v] of Object.entries(map)) out[renames[k] ?? k] = v;
+  return out;
+}
+
 /** A built image to move: probed/saved by `id` (reliable), re-tagged to `tag`
  *  on the target so the adopted service's deploy imageRef resolves. */
 interface BuiltImage {
@@ -131,6 +154,55 @@ export interface PendingItem {
   serviceName?: string;
   reason: "missing" | "denied" | "error";
   message?: string;
+}
+
+/**
+ * The service's ORIGINAL container id on the SOURCE, for building a
+ * `ServiceHandle` passed to `listSources()` — NOT null unless we genuinely
+ * never scanned one. `listSources()` treats a null containerId as "not
+ * deployed yet" and falls back to GUESSING the volume name from
+ * `service.volumes` + `namespaceVolumes` (the name OpenShip's OWN deploy
+ * pipeline would assign) — correct for the backup/restore use case
+ * `listSources` was built for, but wrong for an adopted source service (e.g.
+ * from Coolify), which was never namespaced by OpenShip: the guess doesn't
+ * match any volume that actually exists on the source, and enumeration
+ * silently produces a name the source (or target) rejects with "no such
+ * volume". Passing the real id makes `listSources` inspect the live
+ * container's actual `Mounts` instead, which is always correct.
+ */
+export function resolveScannedContainerId(
+  serviceName: string,
+  scannedContainerIds: Record<string, string>,
+): string | null {
+  return scannedContainerIds[serviceName] ?? null;
+}
+
+/** What `runResume` must actually call for one pending item, given any
+ *  operator-supplied override. Centralizing the decision (rather than
+ *  inlining it at each `link.transferX(...)` call site) is what makes an
+ *  override for a "no such volume" volume item actually reach the transfer —
+ *  a previous version computed `src` but then called
+ *  `transferVolume(item.source, …)`, silently ignoring it. */
+export type ResumeTransferPlan =
+  | { kind: "volume"; source: string }
+  | { kind: "bind"; asPath: true; source: string; dest: string }
+  | { kind: "bind"; asPath: false; source: string }
+  | { kind: "path"; source: string; dest: string };
+
+export function planResumeTransfer(
+  item: PendingItem,
+  overrides: Record<string, string>,
+): ResumeTransferPlan {
+  const source = overrides[item.key] ?? item.source;
+  if (item.kind === "volume") return { kind: "volume", source };
+  if (item.kind === "bind") {
+    // An override reads from a NEW source path but still writes to the
+    // ORIGINAL bind path (where the target container mounts it).
+    return source !== item.source
+      ? { kind: "bind", asPath: true, source, dest: item.source }
+      : { kind: "bind", asPath: false, source: item.source };
+  }
+  return { kind: "path", source, dest: item.dest ?? item.source };
 }
 
 /** moveData result: bytes written + the items that didn't make it + the volume
@@ -390,6 +462,18 @@ class MigrationOrchestratorImpl {
         deployChosen.filter((s) => s.containerId).map((s) => [s.name, s.containerId as string]),
       );
 
+      // Parse the linked repo's compose so adopted rows take their NATIVE
+      // build/image spec (mapped by the wizard) instead of a frozen running-image
+      // tag — the fix that makes a later Redeploy reclone + rebuild rather than
+      // 404 on a stale build tag. Best-effort: a GitHub hiccup falls back to
+      // legacy image-only adoption (the migration must never fail on this).
+      const repoServices = await (async () => {
+        const gs = input.gitSource;
+        if (!gs?.owner || !gs?.repo) return undefined;
+        const parsed = await parseRepoCompose(ctx, gs.owner, gs.repo, gs.branch).catch(() => []);
+        return parsed.length ? new Map(parsed.map((s) => [s.name, s])) : undefined;
+      })();
+
       const adopt = await adoptServerStack({
         serverId: sourceServerId,
         organizationId,
@@ -399,7 +483,9 @@ class MigrationOrchestratorImpl {
         volumeStrategies: input.volumeStrategies,
         serviceSubpaths: input.serviceSubpaths,
         serviceEnv: input.serviceEnv,
+        serviceRenames: input.serviceRenames,
         flatDocker: input.flatDocker,
+        repoServices,
       });
       const projectId = adopt.projectId;
       if (adopt.created) createdProjectId = projectId;
@@ -418,10 +504,23 @@ class MigrationOrchestratorImpl {
         }
       }
 
-      const attachNames = new Set(attachChosen.map((s) => s.name));
+      // Translate the discovered attach names onto the adopted ROW names (repo
+      // names when the wizard mapped them) — the rows are keyed by their final
+      // name, so matching by the discovered name would miss every renamed row.
+      const attachNames = new Set(attachChosen.map((s) => adopt.renames[s.name] ?? s.name));
       const attachRows = (await repos.service.listByProject(projectId)).filter((r) =>
         attachNames.has(r.name),
       );
+
+      // Repo compose services with no adopted container (e.g. a same-server run
+      // whose only running container is `postgres`, but the repo compose also
+      // declares web/dashboard/api/redis) are already created as native rows —
+      // with their env — by adoptServerStack. This just gates whether the native
+      // deploy has to run to build/pull them (and publish their domains).
+      const adoptedRowNames = new Set(chosen.map((s) => adopt.renames[s.name] ?? s.name));
+      const hasNewRepoServices = repoServices
+        ? [...repoServices.keys()].some((n) => !adoptedRowNames.has(n))
+        : false;
 
       // Cancel checkpoint on the attach-live path too: a same-server reuse run
       // has an empty deploy set (skips every check below), so without this a
@@ -429,7 +528,12 @@ class MigrationOrchestratorImpl {
       // proceed to `succeeded`. (Same-server has no killable transfer process.)
       this.throwIfCancelled(id);
 
-      if (deployChosen.length > 0) {
+      // Run the native deploy when there are containers to move (cross-server /
+      // copy) OR new repo services to build/pull. Attach-live services are
+      // disabled during the build (below) so they stay zero-downtime; the deploy
+      // only builds the new ones. Only a pure same-server reuse with NO new repo
+      // services skips the deploy entirely (the `else`).
+      if (deployChosen.length > 0 || hasNewRepoServices) {
         // ── moving_data: quiesce the deploy set's originals + copy volumes ──
         this.throwIfCancelled(id);
         await this.transition(id, "moving_data");
@@ -529,14 +633,34 @@ class MigrationOrchestratorImpl {
         }
 
         // ── deploying ──
-        // Scope the compose deploy to the deploy set: attach-live rows are
-        // temporarily disabled so the build skips them (deployComposeServices
-        // only deploys enabled rows), then re-enabled + attached below. Restored
-        // in finally so a failure never leaves rows disabled.
+        // Scope the compose deploy to the reuse set: attach-live rows are disabled
+        // so the pipeline builds/deploys ONLY the new/moved services and never
+        // recreates the still-running reused containers. requestBuildAccess kicks
+        // the build off in the BACKGROUND and returns immediately, so the rows must
+        // stay disabled for the ENTIRE build+verify — re-enabling right after the
+        // call returns would race the async build into reading them enabled and
+        // recreating the reused containers. Re-enabled in the finally only AFTER
+        // waitForDeployment resolves (by then the build has read the disabled set);
+        // the finally still restores them on any failure/cancel.
         this.throwIfCancelled(id);
         await this.transition(id, "deploying");
         for (const r of attachRows) {
           await repos.service.update(r.id, { enabled: false });
+        }
+        // Unify with a native deploy: join the reused (attach-live) containers to
+        // the project network (alias = row name) BEFORE the build, so a freshly-
+        // built service resolves them by name from its first start (web →
+        // postgres:5432). The deploy's ensureServiceGroup reuses this network.
+        // Best-effort — a join failure must never block the migration.
+        if (attachRows.length > 0) {
+          await joinReusedContainersToGroup({
+            serverId: targetServerId,
+            organizationId,
+            slug: adopt.slug,
+            attach: attachChosen,
+            serviceRows: attachRows,
+            renames: adopt.renames,
+          }).catch((err) => log(`network join skipped: ${safeErrorMessage(err)}`));
         }
         log(`deploying to target server…`);
         try {
@@ -546,29 +670,33 @@ class MigrationOrchestratorImpl {
             serverId: targetServerId,
             runtimeMode: "docker",
             serviceDeploymentMode: "services",
+            // One-time cutover: native `build:` rows reuse the transferred/running
+            // image on THIS deploy (no rebuild); a later Redeploy has no handover
+            // and rebuilds from the repo.
+            handoverImages: adopt.handover,
           });
           deploymentId = dep.deployment_id;
+          await this.transition(id, "deploying", { deploymentId });
+          log(`target deployment ${deploymentId} started; verifying health…`);
+
+          // ── verifying ──
+          this.throwIfCancelled(id);
+          await this.transition(id, "verifying");
+          const verified = await this.waitForDeployment(deploymentId, id);
+          if (!verified || verified.status !== "ready") {
+            // Surface WHY, not a dead-end "did not become ready": a timeout, or the
+            // deployment's own error PLUS which service(s) failed (so a
+            // "partial_failure" names the culprit instead of a bare status).
+            const mins = Math.round(VERIFY_TIMEOUT_MS / 60000);
+            const reason = !verified
+              ? `it was still deploying after ${mins} minutes`
+              : await this.describeDeployFailure(deploymentId, verified);
+            throw new Error(`The target deployment did not become ready — ${reason}.`);
+          }
         } finally {
           for (const r of attachRows) {
             await repos.service.update(r.id, { enabled: true }).catch(() => {});
           }
-        }
-        await this.transition(id, "deploying", { deploymentId });
-        log(`target deployment ${deploymentId} started; verifying health…`);
-
-        // ── verifying ──
-        this.throwIfCancelled(id);
-        await this.transition(id, "verifying");
-        const verified = await this.waitForDeployment(deploymentId, id);
-        if (!verified || verified.status !== "ready") {
-          // Surface WHY, not a dead-end "did not become ready": a timeout, or the
-          // deployment's own error PLUS which service(s) failed (so a
-          // "partial_failure" names the culprit instead of a bare status).
-          const mins = Math.round(VERIFY_TIMEOUT_MS / 60000);
-          const reason = !verified
-            ? `it was still deploying after ${mins} minutes`
-            : await this.describeDeployFailure(deploymentId, verified);
-          throw new Error(`The target deployment did not become ready — ${reason}.`);
         }
 
         // Carry the source's existing TLS certs onto the target (cross-server)
@@ -599,14 +727,29 @@ class MigrationOrchestratorImpl {
           serverId: sourceServerId,
           attach: attachChosen,
           serviceRows: await repos.service.listByProject(projectId),
+          renames: adopt.renames,
         });
       }
 
       // Publish the chosen domains/routes SERVER-SIDE now the target is verified
       // (was client-only → lost when the wizard unmounted or a run was opened
       // from the list; same-server included). Best-effort — domains never fail a
-      // migration.
-      await this.publishRoutes(ctx, projectId, input.routesByServiceName, log);
+      // migration. Route keys are DISCOVERED names → translate onto the adopted
+      // ROW names so a renamed service still gets its routes.
+      await this.publishRoutes(
+        ctx,
+        projectId,
+        remapKeys(input.routesByServiceName, adopt.renames),
+        log,
+      );
+
+      // Read back what the migration actually produced: one line per service
+      // naming the container it resolves to on the host, how it was identified,
+      // and any leftover duplicate. Without this, a service whose container was
+      // adopted (foreign labels) or replaced looks identical in the run log to
+      // one that landed cleanly — the operator only found out from the panel.
+      // Log-only: never changes the run's outcome.
+      await this.logLiveState(projectId, targetServerId, organizationId, log);
 
       // ── partial / cutover / awaiting_cutover ──
       // Some paths didn't move → PARK as `partial` (target UP, source
@@ -635,7 +778,11 @@ class MigrationOrchestratorImpl {
         }
       } else {
         await this.transition(id, "succeeded");
-        log(`migration succeeded (attach-live, no cutover)`);
+        log(
+          hasNewRepoServices
+            ? `migration succeeded (attached running service(s); built/pulled + routed the new repo service(s))`
+            : `migration succeeded (attach-live, no cutover)`,
+        );
       }
     } catch (err) {
       // A cancelled run rolls back like any pre-cutover failure, but with a
@@ -718,6 +865,7 @@ class MigrationOrchestratorImpl {
           log,
           onProgress,
           runId,
+          scannedContainerIds,
         );
       }
 
@@ -963,6 +1111,7 @@ class MigrationOrchestratorImpl {
     log: (message: string) => void,
     onProgress?: (u: ProgressUpdate) => void,
     runId?: string,
+    scannedContainerIds: Record<string, string> = {},
   ): Promise<MoveResult> {
     const [source, target] = await Promise.all([
       createServerCommandExecutor(sourceServerId, organizationId),
@@ -1014,7 +1163,7 @@ class MigrationOrchestratorImpl {
           image: svc.image ?? null,
           env: {},
           volumes: svc.volumes ?? [],
-          containerId: null,
+          containerId: resolveScannedContainerId(svc.name, scannedContainerIds),
           projectSlug,
           namespaceVolumes: svc.namespaceVolumes,
         };
@@ -1218,13 +1367,72 @@ class MigrationOrchestratorImpl {
    *  Mirrors the wizard's old client-side applyRoutes, but server-driven so it
    *  survives the client leaving the flow. Reuses `updateService` (which
    *  reconciles the edge routes). Best-effort per service. */
+  /**
+   * Read the migrated project's REAL runtime state off the host and write it to
+   * the run log — one line per service: which container it resolves to, by which
+   * identity key, its live state, and any duplicate that also claims it.
+   *
+   * This is the migration's own read-back. A same-server "reuse" run adopts
+   * containers whose `openship.*` labels still name the PREVIOUS project (labels
+   * are immutable in place), so "did every service actually land?" can't be
+   * answered from the DB — only by matching the host. Best-effort, log-only.
+   */
+  private async logLiveState(
+    projectId: string,
+    serverId: string,
+    organizationId: string,
+    log: (m: string) => void,
+  ): Promise<void> {
+    try {
+      const project = await repos.project.findById(projectId);
+      const services = await repos.service.listByProject(projectId);
+      if (!project || services.length === 0) return;
+      const dep = project.activeDeploymentId
+        ? await repos.deployment.findById(project.activeDeploymentId)
+        : null;
+      const trackedIds = Object.fromEntries(
+        (dep ? await repos.service.listByDeployment(dep.id) : []).map((r) => [
+          r.serviceId,
+          r.containerId,
+        ]),
+      );
+      const rt = await createServerDockerRuntime(serverId, organizationId);
+      try {
+        const containers = await rt.listAllContainers();
+        const targets = services.map((s) => ({ id: s.id, name: s.name }));
+        const matches = resolveLiveServiceState({
+          services: targets,
+          live: containers,
+          projectId,
+          slug: project.slug,
+          trackedIds,
+        });
+        log(`live state after migration:`);
+        for (const line of describeLiveState(targets, containers, matches)) log(`  ${line}`);
+      } finally {
+        await rt.dispose().catch(() => {});
+      }
+    } catch (err) {
+      log(`live-state read-back skipped: ${safeErrorMessage(err)}`);
+    }
+  }
+
   private async publishRoutes(
     ctx: RequestContext,
     projectId: string,
     routes: StartMigrationInput["routesByServiceName"],
     log: (m: string) => void,
   ): Promise<void> {
-    if (!routes || Object.keys(routes).length === 0) return;
+    // Snapshot the hostnames the project's edge serves NOW, BEFORE publishing —
+    // so the symmetric reconcile at the end can TEAR DOWN any hostname this
+    // migration drops (a service set to "None", or a domain reassigned). Without
+    // this, publishRoutes was publish-only: a dropped domain's legacy <slug>.conf
+    // kept proxying the hostname to its OLD upstream port (stale exposure — a
+    // security gap). This runs even when `routes` is empty (everything → None).
+    const project = await repos.project.findById(projectId).catch(() => null);
+    const before = project ? await resolveProjectRouteState(project).catch(() => null) : null;
+    const previousHostnames = before?.projectDomains.map((d) => d.hostname) ?? [];
+
     const services = await repos.service.listByProject(projectId).catch(() => []);
     const byName = new Map(services.map((s) => [s.name, s]));
 
@@ -1233,7 +1441,7 @@ class MigrationOrchestratorImpl {
     // globally unique, so exactly one service can own its row.
     type Entry = { name: string; svcId: string; spec: MigrationRouteSpec; domain: string };
     const byDomain = new Map<string, Entry[]>();
-    for (const [name, spec] of Object.entries(routes)) {
+    for (const [name, spec] of Object.entries(routes ?? {})) {
       const svc = byName.get(name);
       const domain = (spec.domainType === "custom" ? spec.customDomain : spec.domain)
         ?.trim()
@@ -1304,6 +1512,20 @@ class MigrationOrchestratorImpl {
         log(`path-routing apply skipped: ${safeErrorMessage(err)}`);
       }
     }
+
+    // SYMMETRIC RECONCILE (the security fix): re-apply the CURRENT live routes and
+    // REMOVE every hostname that was served before but is NOT published now — via
+    // the same atomic path the interactive edits use (reconcileProjectRoutes →
+    // NginxProvider.removeRoute deletes <slug>.conf + <slug>.route.json + validates
+    // and reloads, plus deregisters dropped free *.opsh.io slugs). This makes a
+    // migrated route set to "None" actually take the domain DOWN on the edge
+    // instead of leaving a legacy vhost pointed at the old port.
+    const refreshed = await repos.project.findById(projectId).catch(() => null);
+    if (refreshed) {
+      await reapplyProjectLiveRoutes(refreshed, previousHostnames).catch((err) =>
+        log(`edge reconcile skipped: ${safeErrorMessage(err)}`),
+      );
+    }
   }
 
   private async carrySourceCerts(
@@ -1311,37 +1533,54 @@ class MigrationOrchestratorImpl {
     targetServerId: string,
     organizationId: string,
     chosen: Array<{
-      existingRoute?: Array<{ domains: string[]; ssl: { certPath?: string; keyPath?: string } }>;
+      existingRoute?: Array<{ domains: string[]; ssl: { enabled?: boolean } }>;
     }>,
   ): Promise<void> {
-    // domain → source cert/key file paths, from the proxy scan attached to each
-    // discovered service (one entry per proxied path). First writer wins per domain.
-    const domainCerts = new Map<string, { certPath: string; keyPath: string }>();
+    // Every TLS-served domain among the kept services. The cert MATERIAL comes from
+    // the source proxy's own reader, not from cert paths on the discovered route:
+    // caddy and traefik declare no paths (their certs live in a data dir and in
+    // acme.json), so a path-driven carry silently moved nothing from those boxes and
+    // every migrated domain re-issued through ACME on the target.
+    const domains = new Set<string>();
     for (const s of chosen) {
       for (const r of s.existingRoute ?? []) {
-        if (!r.ssl?.certPath || !r.ssl.keyPath) continue;
+        if (r.ssl?.enabled === false) continue;
         for (const domain of r.domains) {
           // Hostname-only guard — the domain becomes a filesystem path segment.
           if (!/^[a-z0-9.-]+$/i.test(domain) || domain.includes("..")) continue;
-          if (!domainCerts.has(domain)) {
-            domainCerts.set(domain, { certPath: r.ssl.certPath, keyPath: r.ssl.keyPath });
-          }
+          domains.add(domain);
         }
       }
     }
-    if (domainCerts.size === 0) return;
+    if (domains.size === 0) return;
 
     const source = await createServerCommandExecutor(sourceServerId, organizationId);
     const target = await createServerCommandExecutor(targetServerId, organizationId);
-    for (const [domain, paths] of domainCerts) {
+    const proxy = await edgeProxy(source.executor).catch(() => null);
+    if (!proxy) return;
+
+    for (const domain of domains) {
       try {
-        const certPem = await source.executor.readFile(paths.certPath);
-        const keyPem = await source.executor.readFile(paths.keyPath);
-        if (!certPem?.includes("BEGIN CERTIFICATE") || !keyPem?.includes("PRIVATE KEY")) continue;
+        // certFor validates that the cert covers THIS domain and hasn't expired
+        // before we plant it at the target's certbot path. That gate matters here
+        // more than anywhere: whatever lands at that path is what the target's
+        // `verifyExistingCert` will later accept as this domain's cert, so an
+        // unchecked carry writes a mismatched cert straight into the trusted spot.
+        const candidate = await proxy.certCandidateFor(domain);
+        if (!candidate.cert) {
+          console.log(`[migration] no cert carried for ${domain}: ${candidate.reason}`);
+          continue;
+        }
+        // writeEdgeFile, not plain writeFile: the target may run a containerized
+        // edge whose cert dir the HOST can't see, where a plain write lands
+        // somewhere the edge never reads.
         const dir = `/etc/letsencrypt/live/${domain}`;
-        await target.executor.writeFile(`${dir}/fullchain.pem`, certPem);
-        await target.executor.writeFile(`${dir}/privkey.pem`, keyPem);
-        console.log(`[migration] carried TLS cert for ${domain} → target ${dir}`);
+        await writeEdgeFile(target.executor, `${dir}/fullchain.pem`, candidate.cert.certPem);
+        await writeEdgeFile(target.executor, `${dir}/privkey.pem`, candidate.cert.keyPem);
+        console.log(
+          `[migration] carried TLS cert for ${domain} → target ${dir} ` +
+            `(from ${candidate.cert.source}, expires ${candidate.cert.expiresAt})`,
+        );
       } catch (err) {
         console.warn(`[migration] cert carry failed for ${domain}: ${safeErrorMessage(err)}`);
       }
@@ -1620,17 +1859,16 @@ class MigrationOrchestratorImpl {
       }
       try {
         for (const item of toRetry) {
-          const src = overrides[item.key] ?? item.source;
+          const plan = planResumeTransfer(item, overrides);
+          const src = plan.source;
           try {
-            if (item.kind === "volume") {
-              await link.transferVolume(item.source, () => {});
-            } else if (item.kind === "bind") {
-              // An override reads from a NEW source path but still writes to the
-              // ORIGINAL bind path (where the target container mounts it).
-              if (src !== item.source) await link.transferPath(src, item.source, () => {});
-              else await link.transferBind(item.source, () => {});
+            if (plan.kind === "volume") {
+              await link.transferVolume(plan.source, () => {});
+            } else if (plan.kind === "bind") {
+              if (plan.asPath) await link.transferPath(plan.source, plan.dest, () => {});
+              else await link.transferBind(plan.source, () => {});
             } else {
-              await link.transferPath(src, item.dest ?? item.source, () => {});
+              await link.transferPath(plan.source, plan.dest, () => {});
             }
             if (item.serviceName) resolvedServices.add(item.serviceName);
             log(`resolved ${item.key}`);

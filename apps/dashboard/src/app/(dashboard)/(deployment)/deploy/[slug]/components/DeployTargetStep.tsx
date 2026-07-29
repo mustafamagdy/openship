@@ -515,6 +515,79 @@ export const lastPickStore = createPersistedValue<LastPick>(
   },
 );
 
+// ─── Silent target seeding (used on the config view) ─────────────────────────
+
+/**
+ * Resolve the deploy target and write it to config ONCE, as soon as the target
+ * list is ready — no UI. Priority mirrors the interactive step: explicit
+ * settings-API default > soft localStorage last-pick > a server (prefer the
+ * local host) > cloud.
+ *
+ * The config wizard calls this so it can land DIRECTLY on the config step with
+ * the right target already in the DeployTargetSummary bar, instead of mounting
+ * the full DeployTargetStep just to auto-pick a default and bounce back — that
+ * async "spin then advance" was the visible flash on entry. The summary bar is
+ * the affordance to change the pick (onEdit → the full step).
+ *
+ * `enabled` is false for existing projects: their saved target hydrates from
+ * initializeFromProject and must never be overwritten by the global default.
+ */
+export function useSeedDeployTarget(targets: ResolvedTargets, enabled: boolean): void {
+  const { updateConfig } = useDeployment();
+  const appliedRef = useRef(false);
+  useEffect(() => {
+    if (!enabled || !targets.ready || appliedRef.current) return;
+    let cancelled = false;
+    const seed = (
+      def?: { defaultDeployTarget?: DeployTarget | null; defaultServerId?: string | null } | null,
+    ) => {
+      if (cancelled || appliedRef.current) return;
+      appliedRef.current = true;
+      const target = def?.defaultDeployTarget ?? null;
+      const savedServerId = def?.defaultServerId ?? null;
+      // 1. Explicit settings-API default.
+      if (target === "server" && savedServerId && targets.servers.some((s) => s.id === savedServerId)) {
+        updateConfig({ deployTarget: "server", serverId: savedServerId });
+        return;
+      }
+      if (target === "cloud") {
+        updateConfig({ deployTarget: "cloud", serverId: undefined, buildStrategy: "server" });
+        return;
+      }
+      if (target === "local") {
+        updateConfig({ deployTarget: "local", serverId: undefined });
+        return;
+      }
+      // 2. Soft last-pick, validated against the current target list.
+      const last = lastPickStore.read();
+      if (last?.target === "server" && last.serverId && targets.servers.some((s) => s.id === last.serverId)) {
+        updateConfig({ deployTarget: "server", serverId: last.serverId });
+        return;
+      }
+      if (last?.target === "cloud") {
+        updateConfig({ deployTarget: "cloud", serverId: undefined, buildStrategy: "server" });
+        return;
+      }
+      if (last?.target === "local") {
+        updateConfig({ deployTarget: "local", serverId: undefined });
+        return;
+      }
+      // 3. A server exists → deploy to it (prefer the local host); else cloud.
+      if (targets.servers.length > 0) {
+        const preferred = targets.servers.find((s) => s.isLocal) ?? targets.servers[0];
+        updateConfig({ deployTarget: "server", serverId: preferred.id });
+        return;
+      }
+      updateConfig({ deployTarget: "cloud", serverId: undefined, buildStrategy: "server" });
+    };
+    settingsApi.get().then((res) => seed(res)).catch(() => seed(null));
+    return () => { cancelled = true; };
+    // One-shot seed keyed off readiness; tight dep array on purpose (matches the
+    // interactive step's seed effect below).
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [enabled, targets.ready]);
+}
+
 // ─── Main step ───────────────────────────────────────────────────────────────
 
 interface DeployTargetStepProps {
@@ -947,6 +1020,16 @@ const DeployTargetStep: React.FC<DeployTargetStepProps> = ({ targets, onContinue
   const appliedDefaultRef = useRef(false);
   useEffect(() => {
     if (!ready) return;
+    // Existing project: its saved target is authoritative (hydrated from
+    // initializeFromProject). Don't seed a default over it — just mark the
+    // fetch "done" so the picker renders the current config instead of a
+    // perpetual spinner. (The parent seeds NEW deploys via useSeedDeployTarget;
+    // this step now only mounts when the user opens the picker via the summary
+    // bar, so seeding here would fight the user's own reason for opening it.)
+    if (config.projectId) {
+      setDefaultsLoaded(true);
+      return;
+    }
 
     let cancelled = false;
     settingsApi.get()
@@ -1239,42 +1322,15 @@ const DeployTargetStep: React.FC<DeployTargetStepProps> = ({ targets, onContinue
     },
   ];
 
-  // Whether the credential-forwarding relay can run for this target. The relay
-  // is desktop-only and needs a real SSH reverse tunnel — which every remote
-  // server has (key, password, OR agent), and only a local/no-SSH target lacks.
-  // So any server with a configured SSH auth method is relay-capable; the
-  // backend re-checks the true capability (executor.reverseForward) + a local gh
-  // before actually forwarding, and degrades to an api-host clone otherwise.
-  const selectedServerAuth = servers.find((s) => s.id === config.serverId)?.sshAuthMethod ?? null;
-  const relayCapable = selectedServerAuth != null;
-  // Single source of truth for "forward the git credential for a server clone":
-  // desktop + an SSH-reachable server. Both the default effect and the manual
-  // clone-card pick read this, so they can never drift.
-  const canForwardServerClone = isDesktop && relayCapable;
-
-  // Default the clone location to "on the server" and, for a capable desktop
-  // server clone, default forwarding ON — the secure + atomic path (clone on the
-  // build host, nothing persisted). Only for a brand-new deploy, and only when
-  // the choice is UNSET: never override an explicit user pick, so an opt-out
-  // (unchecking → forwardGitCredentials=false) sticks.
+  // Default the clone location to "on the server" for a brand-new deploy when
+  // the choice is UNSET. Git-identity forwarding is no longer a per-deploy
+  // choice — it's the operator-wide "Forward my git identity to build servers"
+  // setting (Settings → Clone credentials), resolved server-side at build time.
   useEffect(() => {
     if (config.projectId) return;
     if (!showCloneStrategy) return;
-    const clone: CloneStrategy = config.cloneStrategy ?? "server";
-    const patch: { cloneStrategy?: CloneStrategy; forwardGitCredentials?: boolean } = {};
-    if (config.cloneStrategy == null) patch.cloneStrategy = clone;
-    if (config.forwardGitCredentials == null && clone === "server" && canForwardServerClone) {
-      patch.forwardGitCredentials = true;
-    }
-    if (Object.keys(patch).length > 0) updateConfig(patch);
-  }, [
-    config.projectId,
-    showCloneStrategy,
-    config.cloneStrategy,
-    config.forwardGitCredentials,
-    canForwardServerClone,
-    updateConfig,
-  ]);
+    if (config.cloneStrategy == null) updateConfig({ cloneStrategy: "server" });
+  }, [config.projectId, showCloneStrategy, config.cloneStrategy, updateConfig]);
 
   // Advanced-panel summary line (build location). Clone location has its own
   // right-panel picker, so it isn't summarized here.
@@ -1764,18 +1820,7 @@ const DeployTargetStep: React.FC<DeployTargetStepProps> = ({ targets, onContinue
                             key={opt.value}
                             value={opt.value}
                             selected={cloneStrategy === opt.value}
-                            onSelect={() =>
-                              updateConfig({
-                                cloneStrategy: opt.value,
-                                // "Clone on the server" forwards the git identity
-                                // (desktop + SSH-reachable server); "api-host" is
-                                // the explicit opt-out (false → clone here +
-                                // transfer). The backend re-checks the real relay
-                                // capability + a local gh before forwarding.
-                                forwardGitCredentials:
-                                  opt.value === "server" && canForwardServerClone,
-                              })
-                            }
+                            onSelect={() => updateConfig({ cloneStrategy: opt.value })}
                             icon={opt.icon}
                             label={opt.label}
                             description={opt.description}
@@ -1784,29 +1829,6 @@ const DeployTargetStep: React.FC<DeployTargetStepProps> = ({ targets, onContinue
                         ))}
                       </div>
                     </div>
-                  )}
-
-                  {/* Git credential forwarding — Direct (bare) app, desktop-only. */}
-                  {isDesktop && config.runtimeMode === "bare" && !isServiceDeployment && config.buildStrategy === "server" && (
-                    <label className="flex items-start gap-2.5 cursor-pointer select-none rounded-xl border border-border/50 bg-card/40 px-4 py-3">
-                      <input
-                        type="checkbox"
-                        checked={config.forwardGitCredentials === true}
-                        onChange={(e) => updateConfig({ forwardGitCredentials: e.target.checked })}
-                        className="mt-0.5 size-4 shrink-0 rounded border-border/60 bg-card text-primary focus:ring-2 focus:ring-primary/30 focus:ring-offset-0 cursor-pointer"
-                      />
-                      <span className="min-w-0">
-                        <span className="flex items-center gap-1.5 text-sm font-medium text-foreground">
-                          <GitBranch className="size-3.5 text-muted-foreground" />
-                          {ts.gitForwardLabel}
-                        </span>
-                        <span className="mt-0.5 block text-xs text-muted-foreground leading-snug">
-                          {ts.gitForwardDescPre}
-                          <span className="font-mono text-foreground/80">gh</span>
-                          {ts.gitForwardDescPost}
-                        </span>
-                      </span>
-                    </label>
                   )}
                   </div>
                 </div>

@@ -28,6 +28,7 @@ import { randomUUID } from "node:crypto";
 
 import type {
   BuildConfig,
+  CommandExecutor,
   DeployConfig,
   BuildResult,
   DeploymentResult,
@@ -86,11 +87,13 @@ import type {
   DockerNetworkInfo,
 } from "./types";
 import { BuildLogger, parseLogLevel, sq, assembleGitClone } from "./build-pipeline";
+import { materializeGitSsh, shellGitSshWriter, type GitSshMaterial } from "./git-ssh-material";
 import { githubTarballUrl, downloadTarballOnRemote } from "./source-tarball";
 import { scopeVolumeBinds, isHostPathSource } from "./volume-namespace";
 import { createDockerBuildContext, prepareSourceTree, resolveServiceDockerfile } from "./docker-build-context";
+import { startExecStream, daemonConnectionFrom } from "./docker-exec-stream";
 import { resolveDockerfileCandidates } from "./docker-paths";
-import { generateDockerfile } from "./docker-build-plan";
+import { generateDockerfile, staticBuilderOutputPath } from "./docker-build-plan";
 import { transferLocalDirectory } from "./transfer";
 import { safeErrorMessage, type ComposeAdvanced, type ComposeHealthcheck } from "@repo/core";
 import {
@@ -367,6 +370,15 @@ function parseTimestampedLine(line: string): { timestamp: string; message: strin
 }
 
 /** Extract first host port and first container IP from an inspected container */
+/** First non-empty IPAddress across a container's networks — the `docker ps`
+ *  list view carries the same network map as inspect, so both paths agree. */
+function firstNetworkIp(networks: unknown): string | undefined {
+  for (const net of Object.values((networks ?? {}) as Record<string, { IPAddress?: string }>)) {
+    if (net?.IPAddress) return net.IPAddress;
+  }
+  return undefined;
+}
+
 function extractNetworkInfo(data: { NetworkSettings: any }): {
   ip?: string;
   hostPort?: number;
@@ -418,6 +430,7 @@ export class DockerRuntime implements RuntimeAdapter {
     "serviceShell",
     "projectContainerSweep",
     "deploymentContainerQuery",
+    "hostContainerQuery",
   ]);
 
   /** Docker honors every extended compose key we currently support. */
@@ -487,11 +500,12 @@ export class DockerRuntime implements RuntimeAdapter {
   }
 
   /**
-   * Assert the Docker daemon is reachable, RETHROWING the transport's detailed
-   * diagnostic instead of collapsing it to false. For the SSH transport,
-   * `preflight()` (verifyDockerSshBridge) builds a rich message — socket path,
-   * streamlocal/permission hints, and remote diagnostics — which `ping()`
-   * otherwise swallows. Use on user-facing paths (e.g. the migration scan) so
+   * Assert the Docker daemon is reachable, RETHROWING the underlying error
+   * instead of collapsing it to false. For the SSH transport, `preflight()`
+   * decides the upstream transport (SSH socket forwarding where it works, else
+   * `docker system dial-stdio` over an exec channel — the streamlocal-free path
+   * the Bun-compiled desktop needs), then `ping()` is the real end-to-end check
+   * over that transport. Use on user-facing paths (e.g. the migration scan) so
    * the real cause reaches the user instead of a generic "not reachable".
    */
   async assertReachable(): Promise<void> {
@@ -820,9 +834,11 @@ export class DockerRuntime implements RuntimeAdapter {
 
     // Prefer a direct GitHub tarball download on the server (no git, no history,
     // no context transfer) when we can authenticate without the relay. HTTPS-
-    // only — skipped for the relay AND for SSH key auth. Falls through to git
-    // clone on ANY failure.
-    if (!useHelper && !config.gitSsh) {
+    // only — skipped for the relay AND for SSH key auth. Ambient auth is also
+    // skipped: the credential lives in the host's git config, which curl can't
+    // consult, so a private repo would 404 (a public one succeeds via the clone
+    // path just as cheaply). Falls through to git clone on ANY failure.
+    if (!useHelper && !config.gitSsh && !config.gitAmbient) {
       const ref = config.commitSha || config.branch;
       const tarUrl = githubTarballUrl(config.repoUrl, ref);
       if (tarUrl) {
@@ -849,34 +865,37 @@ export class DockerRuntime implements RuntimeAdapter {
     // SSH mode (per-server key / deploy key): write the 0600 key + known_hosts
     // on the remote out of band (executor.writeFile — never echoed) and clone
     // over git@github.com. Cleaned up in the finally below.
-    let sshFiles: { keyFile: string; knownHostsFile: string } | undefined;
-    let sshCleanup: string | null = null;
+    let sshMaterial: GitSshMaterial | undefined;
     if (config.gitSsh) {
-      const sshDir = `${remoteContextDir}.gitssh`;
-      const keyFile = `${sshDir}/id`;
-      const knownHostsFile = `${sshDir}/known_hosts`;
-      await executor.exec(`mkdir -p ${sq(sshDir)} && chmod 700 ${sq(sshDir)}`);
-      await executor.writeFile(keyFile, config.gitSsh.privateKey);
-      await executor.writeFile(knownHostsFile, config.gitSsh.knownHosts);
-      await executor.exec(`chmod 600 ${sq(keyFile)}`);
-      sshFiles = { keyFile, knownHostsFile };
-      sshCleanup = `rm -rf ${sq(sshDir)}`;
+      sshMaterial = await materializeGitSsh(
+        shellGitSshWriter({
+          exec: (cmd) => executor.exec(cmd),
+          writeSecret: (path, content) => executor.writeFile(path, content),
+        }),
+        `${remoteContextDir}.gitssh`,
+        config.gitSsh,
+      );
     }
 
-    // Centralized clone assembly (token / relay / ssh) — see git-clone.ts.
+    // Centralized clone assembly (token / relay / ssh / ambient) — see git-clone.ts.
     const { cloneUrl, gitEnv: GIT_ENV, credFlag: CRED } = assembleGitClone({
       repoUrl: config.repoUrl,
       gitToken: config.gitToken,
       gitUsername: config.gitUsername,
       gitCredentialHelperPath: config.gitCredentialHelperPath,
-      ssh: sshFiles,
+      ssh: sshMaterial,
+      ambient: config.gitAmbient,
     });
     const dir = sq(remoteContextDir);
 
-    log.log(
-      `Cloning ${config.repoUrl} on the server → ${remoteContextDir} ` +
-        `(${config.gitSsh ? "ssh key" : useHelper ? "forwarded credentials" : "token"})...\n`,
-    );
+    const authLabel = config.gitSsh
+      ? "ssh key"
+      : useHelper
+        ? "forwarded credentials"
+        : config.gitAmbient
+          ? `the server's own git credentials (${config.gitAmbient.via})`
+          : "token";
+    log.log(`Cloning ${config.repoUrl} on the server → ${remoteContextDir} (${authLabel})...\n`);
     await executor.exec(`rm -rf ${dir} && mkdir -p ${dir}`);
 
     const run = async (cmd: string) => {
@@ -908,7 +927,7 @@ export class DockerRuntime implements RuntimeAdapter {
       // Never ship .git into the build image.
       await executor.exec(`rm -rf ${sq(`${remoteContextDir}/.git`)}`).catch(() => {});
     } finally {
-      if (sshCleanup) await executor.exec(sshCleanup).catch(() => {});
+      await sshMaterial?.cleanup();
     }
   }
 
@@ -1239,11 +1258,52 @@ export class DockerRuntime implements RuntimeAdapter {
   }
 
   /**
-   * Build a STATIC app in a Docker sandbox, then extract its doc-root onto a
-   * host directory the edge serves via nginx `root`. Reuses `build()` — so
-   * Docker is auto-ensured (ensureDockerFeature) and the static nginx image is
-   * produced (`generateStaticDockerfile` COPYs the output to the fixed
-   * `/usr/share/nginx/html`) — then extracts those files and discards the image.
+   * Move an extract-only static build's files out of its builder image onto
+   * `hostOutDir`, then delete the image.
+   *
+   * The ONE place this happens, shared by the single-app path
+   * ({@link buildStaticToHost}) and the compose batch path ({@link buildImages}) —
+   * they used to be destined to diverge, and the source path is subtle enough
+   * (see `staticBuilderOutputPath`) that two copies would drift into extracting an
+   * empty directory.
+   */
+  private async moveStaticBuildToHost(
+    tag: string,
+    config: BuildConfig,
+    hostOutDir: string,
+    log: BuildLogger,
+  ): Promise<void> {
+    // The builder's own output dir, resolved by the SAME helper the recipe used, so
+    // the extractor can never read a different path than the build wrote.
+    const docRoot = staticBuilderOutputPath(config);
+    const sshExecutor =
+      this.transport.kind === "ssh" ? this.connectionOptions?.executor : null;
+    log.log("Moving built files out of the build container...\n");
+    try {
+      if (sshExecutor) {
+        await this.extractDocRootOverSsh(sshExecutor, tag, docRoot, hostOutDir);
+      } else {
+        await this.extractDocRootViaDaemon(tag, docRoot, hostOutDir);
+      }
+      log.log(`Static files ready at ${hostOutDir}\n`);
+    } finally {
+      // Files are on the host now; the builder image is dead weight. Best-effort —
+      // a lingering image is harmless, a failed deploy over it is not.
+      await this.removeImage(tag).catch(() => { /* best effort */ });
+    }
+  }
+
+  /**
+   * Build a STATIC app in a Docker sandbox, then move the built files onto a host
+   * directory the edge serves via nginx `root`. Reuses `build()` so Docker is
+   * auto-ensured (ensureDockerFeature).
+   *
+   * NO RUNTIME IMAGE. `staticExtractOnly` stops the recipe at the builder stage and
+   * the files are copied straight out of it. This used to build a full
+   * `nginx:alpine` runtime stage — pulling that image, running six more steps, and
+   * writing an nginx config nothing reads — only to `docker cp` the doc-root out
+   * and delete the whole thing moments later. The edge already serves these files;
+   * a second web server was never going to run.
    * Returns the host dir as `imageRef`, matching BareRuntime.build's host-dir
    * contract so the existing file-backed serve path (deployStatic /
    * resolveStaticRoot) consumes it unchanged. Never leaves a long-lived
@@ -1255,7 +1315,10 @@ export class DockerRuntime implements RuntimeAdapter {
     logger?: BuildLogger,
   ): Promise<BuildResult> {
     const log = logger ?? new BuildLogger();
-    const buildResult = await this.build({ ...config, isStatic: true }, log);
+    const buildResult = await this.build(
+      { ...config, isStatic: true, staticExtractOnly: true },
+      log,
+    );
     // Failure / cancel bubbles up unchanged — the pipeline's existing status
     // checks handle it.
     if (buildResult.status !== "deploying" || !buildResult.imageRef) {
@@ -1264,55 +1327,8 @@ export class DockerRuntime implements RuntimeAdapter {
 
     const tag = buildResult.imageRef;
     const extractStart = Date.now();
-    const DOC_ROOT = "/usr/share/nginx/html";
     try {
-      const sshExecutor =
-        this.transport.kind === "ssh" ? this.connectionOptions?.executor : null;
-      log.log("Extracting static files from the build sandbox...\n");
-
-      if (sshExecutor) {
-        // Disk-to-disk on the remote host via native docker — avoids streaming a
-        // large tar over the flaky SSH dockerode bridge (same rationale as
-        // saveImage/pullImage). The trailing `/.` copies CONTENTS into hostOutDir
-        // (no leading `html/` dir), so no strip step is needed here.
-        const cid = (await sshExecutor.exec(`docker create ${sq(tag)}`)).trim();
-        try {
-          await sshExecutor.exec(`mkdir -p ${sq(hostOutDir)}`);
-          await sshExecutor.exec(`docker cp ${sq(`${cid}:${DOC_ROOT}/.`)} ${sq(hostOutDir)}`);
-        } finally {
-          await sshExecutor.exec(`docker rm ${sq(cid)}`).catch(() => { /* best effort */ });
-        }
-      } else {
-        // Local socket / TCP: pull the tar via dockerode (portable across a
-        // remote TCP daemon where the local `docker` CLI wouldn't apply) and
-        // extract onto the API process's own FS — which in docker-edge mode is
-        // the shared openship_static volume mounted into this container. The
-        // archive is rooted at `html/`, so strip that one leading component.
-        const { mkdir } = await import("node:fs/promises");
-        const { spawn } = await import("node:child_process");
-        await mkdir(hostOutDir, { recursive: true });
-        const container = await this.docker.createContainer({ Image: tag });
-        try {
-          const tarStream = (await container.getArchive({ path: DOC_ROOT })) as unknown as Readable;
-          await new Promise<void>((resolve, reject) => {
-            const extract = spawn("tar", ["-x", "--strip-components=1", "-C", hostOutDir]);
-            let errBuf = "";
-            extract.stderr.on("data", (d) => (errBuf += d.toString()));
-            extract.on("error", reject);
-            tarStream.on("error", reject);
-            tarStream.pipe(extract.stdin);
-            extract.on("close", (code) =>
-              code === 0
-                ? resolve()
-                : reject(new Error(`static extract failed (tar ${code}): ${errBuf.trim().slice(-500)}`)),
-            );
-          });
-        } finally {
-          await container.remove({ force: true }).catch(() => { /* best effort */ });
-        }
-      }
-
-      log.log(`Static files ready at ${hostOutDir}\n`);
+      await this.moveStaticBuildToHost(tag, config, hostOutDir, log);
       return {
         sessionId: config.sessionId,
         status: "deploying",
@@ -1328,12 +1344,75 @@ export class DockerRuntime implements RuntimeAdapter {
         durationMs: (buildResult.durationMs ?? 0) + (Date.now() - extractStart),
         errorMessage: `Static extract failed: ${msg}`,
       };
-    } finally {
-      // The files now live on the host dir; the transient nginx image is dead
-      // weight. Best-effort cleanup (a lingering image is harmless).
-      await this.removeImage(tag).catch(() => { /* best effort */ });
     }
   }
+
+  /**
+   * THE CONTRACT both extractors satisfy: after either one returns, `hostOutDir`
+   * holds the doc-root's CONTENTS directly — `index.html` at the top, no wrapping
+   * `html/` directory. OpenResty's `root` points straight at it, so a stray extra
+   * level is a silent 404 for the whole site.
+   *
+   * The two paths reach that same shape differently, which is why the rule is
+   * stated here once instead of in each branch:
+   *   - `docker cp <cid>:<root>/.` — the trailing `/.` means "contents of", so
+   *     there is nothing to strip.
+   *   - `getArchive({path: <root>})` — the tar IS rooted at `html/`, so exactly
+   *     one leading component must be stripped.
+   */
+
+  /** Remote host: disk-to-disk via the host's own docker CLI — never stream a
+   *  large tar over the SSH dockerode bridge (same rationale as saveImage/pullImage). */
+  private async extractDocRootOverSsh(
+    sshExecutor: CommandExecutor,
+    tag: string,
+    docRoot: string,
+    hostOutDir: string,
+  ): Promise<void> {
+    const cid = (await sshExecutor.exec(`docker create ${sq(tag)}`)).trim();
+    try {
+      await sshExecutor.exec(`mkdir -p ${sq(hostOutDir)}`);
+      // `/.` → contents, so no strip step (see the contract above).
+      await sshExecutor.exec(`docker cp ${sq(`${cid}:${docRoot}/.`)} ${sq(hostOutDir)}`);
+    } finally {
+      await sshExecutor.exec(`docker rm ${sq(cid)}`).catch(() => { /* best effort */ });
+    }
+  }
+
+  /** Local socket / remote TCP: pull the tar through dockerode (portable to a TCP
+   *  daemon where a local `docker` CLI wouldn't apply) and extract onto THIS
+   *  process's filesystem — in docker-edge mode that's /opt/openship/static,
+   *  bind-mounted into both the api and the edge at the same path. */
+  private async extractDocRootViaDaemon(
+    tag: string,
+    docRoot: string,
+    hostOutDir: string,
+  ): Promise<void> {
+    const { mkdir } = await import("node:fs/promises");
+    const { spawn } = await import("node:child_process");
+    await mkdir(hostOutDir, { recursive: true });
+    const container = await this.docker.createContainer({ Image: tag });
+    try {
+      const tarStream = (await container.getArchive({ path: docRoot })) as unknown as Readable;
+      await new Promise<void>((resolve, reject) => {
+        // The archive is rooted at `html/` → strip that ONE component (contract above).
+        const extract = spawn("tar", ["-x", "--strip-components=1", "-C", hostOutDir]);
+        let errBuf = "";
+        extract.stderr.on("data", (d) => (errBuf += d.toString()));
+        extract.on("error", reject);
+        tarStream.on("error", reject);
+        tarStream.pipe(extract.stdin);
+        extract.on("close", (code) =>
+          code === 0
+            ? resolve()
+            : reject(new Error(`static extract failed (tar ${code}): ${errBuf.trim().slice(-500)}`)),
+        );
+      });
+    } finally {
+      await container.remove({ force: true }).catch(() => { /* best effort */ });
+    }
+  }
+
 
   /**
    * Batch build: clone + prune the shared source ONCE, then build every image
@@ -1499,6 +1578,28 @@ export class DockerRuntime implements RuntimeAdapter {
           }
 
           await this.verifyImageBuilt(tag);
+
+          // Extract-only static service: the edge serves these files from the host,
+          // so lift them out of the builder and hand back the DIRECTORY as imageRef.
+          // Done inside the batch so the shared clone/transfer is still paid once —
+          // routing it through buildStaticToHost would re-clone per service.
+          if (spec.config.staticExtractOnly && spec.config.staticOutDir) {
+            await this.moveStaticBuildToHost(
+              tag,
+              spec.config,
+              spec.config.staticOutDir,
+              spec.logger,
+            );
+            const result: BuildResult = {
+              sessionId: spec.config.sessionId,
+              status: "deploying",
+              imageRef: spec.config.staticOutDir,
+              durationMs: Date.now() - startedAt,
+            };
+            spec.onResult?.(result);
+            results.push({ serviceName: spec.serviceName, result });
+            continue;
+          }
 
           spec.logger.log(`Image ${tag} is ready.\n`);
           const result: BuildResult = {
@@ -1939,6 +2040,9 @@ export class DockerRuntime implements RuntimeAdapter {
     const containers = await this.docker.listContainers({ all: true });
     return containers.map((c) => {
       const labels = c.Labels ?? {};
+      // The list view already carries the network map, so the live-state read
+      // gets each container's internal IP without an inspect round-trip.
+      const ip = firstNetworkIp(c.NetworkSettings?.Networks);
       return {
         id: c.Id,
         names: (c.Names ?? []).map((n) => n.replace(/^\//, "")),
@@ -1954,6 +2058,7 @@ export class DockerRuntime implements RuntimeAdapter {
           ...(p.IP ? { ip: p.IP } : {}),
         })),
         mounts: (c.Mounts ?? []).map(normalizeDockerMount),
+        ...(ip ? { ip } : {}),
         composeProject: labels["com.docker.compose.project"] || undefined,
         composeService: labels["com.docker.compose.service"] || undefined,
       };
@@ -2446,14 +2551,20 @@ export class DockerRuntime implements RuntimeAdapter {
       Env: [`TERM=${term}`],
     });
 
-    // `hijack: true` lifts the underlying TCP connection out of HTTP
-    // and gives us a raw Duplex. With Tty:true the stream carries the
-    // PTY bytes without dockerode's multiplexing frame header.
-    const duplex = (await exec.start({
-      hijack: true,
-      stdin: true,
-      Tty: true,
-    })) as import("node:stream").Duplex;
+    // We need the raw bidirectional socket (with Tty:true it carries PTY bytes
+    // with no multiplexing header), which dockerode gets via `{hijack: true}`.
+    // We do NOT use that: under Bun the hijacked start never settles — the daemon
+    // sends `101 UPGRADED` and Bun's node:http doesn't surface the upgrade to
+    // docker-modem, so the promise hangs forever and the service terminal
+    // connected and then sat silent on every Bun-based api (the Docker image and
+    // the compiled desktop binary). Measured: Node 22 round-trips, Bun 1.3.1
+    // hangs. `startExecStream` performs the same upgrade on a plain socket, so it
+    // behaves identically on both — see docker-exec-stream.ts.
+    const duplex = await startExecStream(
+      daemonConnectionFrom(this.docker),
+      (exec as unknown as { id: string }).id,
+      { tty: true, stdin: true },
+    );
 
     // Set the initial window. Dockerode's resize() POSTs
     // /exec/{id}/resize?h={rows}&w={cols}. Safe to call before any
@@ -2467,6 +2578,9 @@ export class DockerRuntime implements RuntimeAdapter {
     const stdout = new PassThrough();
     const stderr = new PassThrough();
     duplex.on("data", (chunk: Buffer) => stdout.write(chunk));
+    // startExecStream hands back a PAUSED stream (it may hold the shell's first
+    // prompt); flow it now that the sink is attached.
+    duplex.resume();
     duplex.on("end", () => {
       stdout.end();
       stderr.end();
@@ -2661,6 +2775,42 @@ export class DockerRuntime implements RuntimeAdapter {
     // makes membership independent of that.
     await this.reconcileNetworkMembership(networkId, config.projectId);
     return { id: networkId };
+  }
+
+  /**
+   * Join already-running containers (migration attach-live reuse) to a project's
+   * `openship-<slug>` network with a DNS alias each — so a natively-deployed
+   * service in the SAME project resolves them by name (e.g. a freshly-built `web`
+   * reaching the reused `postgres:5432`). These containers keep their ORIGINAL
+   * openship labels, so the label-scoped reconcileNetworkMembership never joins
+   * them; this is the explicit, additive join (a network connect does NOT restart
+   * the container or touch its volumes). Idempotent + best-effort per member.
+   */
+  async joinServiceGroupContainers(
+    slug: string,
+    members: Array<{ containerId: string; alias: string }>,
+  ): Promise<void> {
+    if (members.length === 0) return;
+    const networkId = await this.ensureNetwork(slug);
+    const network = this.docker.getNetwork(networkId);
+    for (const m of members) {
+      if (!m.containerId) continue;
+      try {
+        await network.connect({
+          Container: m.containerId,
+          EndpointConfig: m.alias ? { Aliases: [m.alias] } : {},
+        });
+      } catch (err) {
+        // Already-on-network races are fine; anything else is swallowed — this is
+        // best-effort and must never block the migration deploy.
+        const msg = (err as { message?: string })?.message ?? "";
+        if (!/already exists|already connected/i.test(msg)) {
+          console.warn(
+            `[docker] group join failed for ${m.containerId.slice(0, 12)} (${m.alias}): ${msg}`,
+          );
+        }
+      }
+    }
   }
 
   /**

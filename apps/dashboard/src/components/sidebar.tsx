@@ -38,6 +38,10 @@ import { useCloud } from "@/context/CloudContext";
 import { DismissiblePopover } from "@/components/ui/Popover";
 import { setActiveOrganizationId } from "@/lib/api/client";
 import { projectsApi } from "@/lib/api";
+import {
+  getSidebarNavCountsRevision,
+  subscribeSidebarNavCounts,
+} from "@/lib/sidebar-nav-counts";
 
 /**
  * Org list / member shapes from Better Auth's organization plugin.
@@ -162,12 +166,17 @@ export function Sidebar() {
   const [collapsed, setCollapsed] = useState(false);
   const [loggingOut, setLoggingOut] = useState(false);
   const [navCounts, setNavCounts] = useState<{ projects: number; apps: number } | null>(null);
+  const [navCountsRevision, setNavCountsRevision] = useState(getSidebarNavCountsRevision);
   const countFor = (key: string): number | null => {
     if (!navCounts) return null;
     if (key === "projects") return navCounts.projects;
     if (key === "apps") return navCounts.apps;
     return null;
   };
+
+  useEffect(() => subscribeSidebarNavCounts(() => {
+    setNavCountsRevision(getSidebarNavCountsRevision());
+  }), []);
 
   // Org switcher state. Lazy-loaded — `list()` and the active org fetch
   // only fire after the first popover open so the sidebar doesn't pay
@@ -266,7 +275,7 @@ export function Sidebar() {
     return () => {
       cancelled = true;
     };
-  }, [orgsLoaded, activeOrgId]);
+  }, [orgsLoaded, activeOrgId, navCountsRevision]);
 
   async function handleOrgSwitch(orgId: string) {
     if (orgId === activeOrgId) {
@@ -419,7 +428,12 @@ export function Sidebar() {
             transparent-WHITE — fine on light, but a light sheen on the mid-gray
             dim card and invisible on the near-black dark card. Use the solid
             card hue in dim AND dark so the ramp stays the card's own color. */}
-        <div className="pointer-events-none absolute inset-x-0 bottom-0 h-14 bg-gradient-to-t from-card to-card/0 dim:from-[var(--th-card-bg-solid)] dim:to-transparent dark:from-[var(--th-card-bg-solid)] dark:to-transparent" />
+        {/* Scroll fade. ONE gradient for every theme: --th-card-on-page is the
+            opaque composite of this card over the page, so the fade starts at
+            exactly the surface behind it. The per-theme variants this replaces
+            faded from --th-card-bg-solid (the MODAL surface) — #060606 in dark
+            against a real sidebar of #0d0d0d, i.e. a black band. */}
+        <div className="pointer-events-none absolute inset-x-0 bottom-0 h-14 bg-gradient-to-t from-[var(--th-card-on-page)] to-transparent" />
       </div>
 
       {/* ── New Project ─────────────────────────────────────── */}

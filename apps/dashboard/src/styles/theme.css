@@ -31,12 +31,17 @@
 [data-theme="light"] {
 
   /* Foreground scale - black on white */
+  --th-on-04: rgba(0,0,0,.04);
   --th-on-05: rgba(0,0,0,.05);
+  --th-on-06: rgba(0,0,0,.06);
   --th-on-08: rgba(0,0,0,.08);
   --th-on-10: rgba(0,0,0,.10);
   --th-on-12: rgba(0,0,0,.12);
+  --th-on-14: rgba(0,0,0,.14);
+  --th-on-15: rgba(0,0,0,.15);
   --th-on-16: rgba(0,0,0,.16);
   --th-on-20: rgba(0,0,0,.20);
+  --th-on-25: rgba(0,0,0,.25);
   --th-on-30: rgba(0,0,0,.30);
   --th-on-40: rgba(0,0,0,.40);
   --th-on-50: rgba(0,0,0,.50);
@@ -66,8 +71,15 @@
   --th-text-hint:      rgba(0,0,0,.46);
   --th-text-ghost:     rgba(0,0,0,.22);
 
-  /* ─ Page / layout ─ */
-  --th-bg-page:        #ffffff;
+  /* ─ Page / layout ─ The page is deliberately NOT #ffffff. Cards are white, so
+   * a white page left them with nothing to lift off and they needed a drawn
+   * border to exist at all. A few steps of grey here is what lets light use the
+   * same borderless lifted-surface language as dark and dim.
+   *
+   * This is the floor, not a free knob: 6 steps of lift off #ffffff, against 8
+   * for dim. Push it much closer to white and borderless cards stop reading —
+   * there is no border left to fall back on. */
+  --th-bg-page:        #f9f9f9;
   --th-bg-card:        #fafafa;
   --th-bg-subtle:      rgba(0,0,0,.02);
   --th-bg-hover:       rgba(0,0,0,.025);
@@ -99,10 +111,19 @@
   --th-btn-ghost-text-hover: rgba(0,0,0,.72);
   --th-btn-ghost-bg-hover:   rgba(0,0,0,.025);
 
-  /* ─ Card ─ */
+  /* ─ Card ─ White on the grey page above, so no resting border — same language
+   * as dark and dim. The lift comes from bg vs --th-bg-page; if you ever move
+   * the page back toward #ffffff these go invisible. */
   --th-card-bg:       #ffffff;
+  /* The OPAQUE equivalent of a card sitting on the page — card is already opaque here, so the composite IS the card colour.
+     Use this for a fade/scrim that has to blend INTO a card (e.g. the
+     sidebar's bottom scroll fade). NOT --th-card-bg-solid: that one is the
+     MODAL surface, tuned to read correctly over a dimmed backdrop, and in
+     dark it is darker than the real card (#ffffff vs #060606) — which
+     showed up as a black band under the sidebar list. */
+  --th-card-on-page:  #ffffff;
   --th-card-bg-solid: #ffffff;
-  --th-card-bd:       #efefef;
+  --th-card-bd:       transparent;
   --th-card-bd-hover: #e0e0e0;
   --th-card-shadow:   none;
 
@@ -141,12 +162,17 @@
 [data-theme="dark"] {
 
   /* Foreground scale - white on black */
+  --th-on-04: rgba(255,255,255,.04);
   --th-on-05: rgba(255,255,255,.05);
+  --th-on-06: rgba(255,255,255,.06);
   --th-on-08: rgba(255,255,255,.08);
   --th-on-10: rgba(255,255,255,.10);
   --th-on-12: rgba(255,255,255,.12);
+  --th-on-14: rgba(255,255,255,.14);
+  --th-on-15: rgba(255,255,255,.15);
   --th-on-16: rgba(255,255,255,.16);
   --th-on-20: rgba(255,255,255,.20);
+  --th-on-25: rgba(255,255,255,.25);
   --th-on-30: rgba(255,255,255,.30);
   --th-on-40: rgba(255,255,255,.40);
   --th-on-50: rgba(255,255,255,.50);
@@ -209,10 +235,21 @@
   --th-btn-ghost-text-hover: rgba(255,255,255,.72);
   --th-btn-ghost-bg-hover:   rgba(255,255,255,.04);
 
-  /* ─ Card ─ */
-  --th-card-bg:       rgba(255,255,255,.025);
+  /* ─ Card ─ The page here is pure #000, so a .025 fill landed on #060606 and
+   * the container was effectively invisible — all you saw was its hairline.
+   * With the fill lifted clear of the page the surface carries its own edge, so
+   * there is no resting border, same as dim. If you ever lower this fill, the
+   * container will start disappearing into the black before it looks borderless. */
+  --th-card-bg:       rgba(255,255,255,.05);
+  /* The OPAQUE equivalent of a card sitting on the page — #000000 page + 5% white.
+     Use this for a fade/scrim that has to blend INTO a card (e.g. the
+     sidebar's bottom scroll fade). NOT --th-card-bg-solid: that one is the
+     MODAL surface, tuned to read correctly over a dimmed backdrop, and in
+     dark it is darker than the real card (#0d0d0d vs #060606) — which
+     showed up as a black band under the sidebar list. */
+  --th-card-on-page:  #0d0d0d;
   --th-card-bg-solid: #060606;
-  --th-card-bd:       rgba(255,255,255,.06);
+  --th-card-bd:       transparent;
   --th-card-bd-hover: rgba(255,255,255,.12);
   --th-card-shadow:   none;
 
@@ -252,12 +289,17 @@
 [data-theme="dim"] {
 
   /* Foreground scale - white on slate */
+  --th-on-04: rgba(255,255,255,.04);
   --th-on-05: rgba(255,255,255,.05);
+  --th-on-06: rgba(255,255,255,.06);
   --th-on-08: rgba(255,255,255,.08);
   --th-on-10: rgba(255,255,255,.10);
   --th-on-12: rgba(255,255,255,.12);
+  --th-on-14: rgba(255,255,255,.14);
+  --th-on-15: rgba(255,255,255,.15);
   --th-on-16: rgba(255,255,255,.16);
   --th-on-20: rgba(255,255,255,.20);
+  --th-on-25: rgba(255,255,255,.25);
   --th-on-30: rgba(255,255,255,.30);
   --th-on-40: rgba(255,255,255,.40);
   --th-on-50: rgba(255,255,255,.50);
@@ -321,10 +363,20 @@
   --th-btn-ghost-text-hover: rgba(255,255,255,.88);
   --th-btn-ghost-bg-hover:   rgba(255,255,255,.05);
 
-  /* ─ Card ─ Elevated above the page. */
+  /* ─ Card ─ Elevated above the page. The #141414 page against a .03 fill
+   * already separates on its own, so there is no resting border: the hairline
+   * was the only thing making these read as boxed-in. Fill deliberately
+   * unchanged — this shade is the one we want. */
   --th-card-bg:       rgba(255,255,255,.03);
+  /* The OPAQUE equivalent of a card sitting on the page — #141414 page + 3% white.
+     Use this for a fade/scrim that has to blend INTO a card (e.g. the
+     sidebar's bottom scroll fade). NOT --th-card-bg-solid: that one is the
+     MODAL surface, tuned to read correctly over a dimmed backdrop, and in
+     dark it is darker than the real card (#1b1b1b vs #060606) — which
+     showed up as a black band under the sidebar list. */
+  --th-card-on-page:  #1b1b1b;
   --th-card-bg-solid: #1e1e1e;
-  --th-card-bd:       rgba(255,255,255,.08);
+  --th-card-bd:       transparent;
   --th-card-bd-hover: rgba(255,255,255,.14);
   --th-card-shadow:   none;
 

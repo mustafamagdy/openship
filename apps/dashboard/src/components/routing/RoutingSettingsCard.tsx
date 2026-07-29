@@ -222,17 +222,17 @@ export function RoutingSettingsCard({
     }
   };
 
-  // Exposed-port field with the label ABOVE — used when `portInline` places it
-  // to the right of the domain input. Matches the input height (h-11) so the
-  // two bottom-align.
+  // Exposed-port field placed to the RIGHT of the domain input. No label above
+  // (it used to float over empty space beside the label-less domain input); the
+  // placeholder + aria-label carry the meaning and both fields are a plain h-11
+  // so the row aligns cleanly with no dead whitespace.
   const portInlineField = showsPortTarget ? (
     <div className="shrink-0">
-      <label className="mb-1.5 block text-[13px] font-medium text-muted-foreground">
-        {w.exposedPort}
-      </label>
       <input
         type="text"
         inputMode="numeric"
+        aria-label={w.exposedPort}
+        title={w.exposedPort}
         value={saveMode === "explicit" ? draftPort : exposedPort}
         onChange={(event) => {
           if (saveMode === "explicit") setDraftPort(event.target.value);
@@ -241,10 +241,10 @@ export function RoutingSettingsCard({
         onBlur={() => {
           if (saveMode === "explicit" && draftPort !== (exposedPort ?? "")) commitPort();
         }}
-        placeholder="3000"
+        placeholder={w.exposedPort}
         disabled={disabled}
         list={hasPortOptions ? portListId : undefined}
-        className="w-24 h-11 rounded-2xl border border-border/50 bg-background/60 px-3.5 text-sm text-foreground outline-none"
+        className="w-24 h-11 rounded-2xl border border-border/50 bg-background/60 px-3.5 text-sm text-foreground outline-none placeholder:text-muted-foreground/40"
       />
       {hasPortOptions && (
         <datalist id={portListId}>
@@ -438,8 +438,9 @@ export function RoutingSettingsCard({
                 {portInline && actionSlot}
               </div>
 
-              {/* DNS hint — lazy: only shown once records are resolvable (or
-                  loading). No "enter a valid domain" nag; DNS isn't required up
+              {/* DNS hint — shown ONLY once records actually resolve. The
+                  "checking…" loading state was dropped: it flashed on every
+                  keystroke and jittered the card height. DNS isn't required up
                   front (verified later at preflight / in domain settings). */}
               {selectedRegisteredDomain ? (
                 <div className="flex items-center gap-2 rounded-lg border border-success/20 bg-success/5 px-3 py-2 text-sm text-muted-foreground">
@@ -447,20 +448,16 @@ export function RoutingSettingsCard({
                   This subdomain uses a verified domain registered to your workspace.
                 </div>
               ) : (
-                (loadingRecords || hasRecords) && (
+                hasRecords && (
                   <div className="rounded-lg border border-border/50 bg-muted/20 overflow-hidden">
                     <div className="flex items-center gap-2 px-3 py-2">
                       <Server className="size-3 text-muted-foreground shrink-0" />
-                      {loadingRecords ? (
-                        <p className="text-sm text-muted-foreground flex-1">{w.checkingDns}</p>
-                      ) : (
-                        <p className="text-sm text-muted-foreground flex-1">
-                          {interpolate(w.addRecordHint, {
-                            primary: dnsRecords.find((record) => record.type !== "TXT")?.type ?? "",
-                            txt: "TXT",
-                          })}
-                        </p>
-                      )}
+                      <p className="text-sm text-muted-foreground flex-1">
+                        {interpolate(w.addRecordHint, {
+                          primary: dnsRecords.find((record) => record.type !== "TXT")?.type ?? "",
+                          txt: "TXT",
+                        })}
+                      </p>
                       {hasRecords && (
                         <button
                           type="button"

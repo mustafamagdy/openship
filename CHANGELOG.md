@@ -3,6 +3,97 @@
 All notable changes to Openship. Versions follow [semver](https://semver.org);
 the in-app updater surfaces critical advisories from `release-advisories.json`.
 
+## 0.4.7
+
+The CLI self-hosting story is finalized, remote-Docker migrations are made
+reliable, and a batch of fixes lands across the control plane for a more stable
+release.
+
+### CLI
+- **A finished install opens the control panel, not the setup wizard** — bare
+  `openship` (and the from-source `openship-dev`) now recognizes a Docker Compose
+  install (the default on Linux). Re-running after setup manages the running
+  stack instead of walking you through name / email / domain from scratch again.
+- **Control-panel Start / Stop / Restart drive the actual stack** — on a compose
+  install these now run `docker compose up -d` / `restart` / `down` and read the
+  stack's real state, instead of targeting a systemd unit that was never
+  installed (which reported "stopped" for a healthy stack).
+
+### Migrations & remote Docker
+- **The SSH → Docker bridge no longer hangs or false-fails a healthy server** —
+  migrating from another platform (Coolify/Dokploy/Dokku) or adopting a running
+  Docker host could stall the reachability check — or drop the request outright —
+  under the Bun-hosted API, even against a perfectly healthy daemon. The bridge
+  now starts reading the request socket immediately and verifies each forwarded
+  channel actually carries data, falling back to `docker system dial-stdio` on a
+  fresh connection when a channel opens dead. Contributed by @jbermudez00 (#271).
+
+### Mail
+- **Mail-server setup works from the desktop app** — the iRedMail engine is now
+  shipped inside the packaged desktop app (and the CLI bundle) and located by an
+  explicit path, fixing the `Transfer iRedMail Engine … tar: could not chdir`
+  failure on install.
+
+### Fixes
+- **Self-hosted GitHub connect is token-first** — a remote (VPS) instance pastes
+  an access token inline in the Library, with no `gh auth login` hints; the gh
+  CLI path is now desktop-only, where it belongs.
+- **The deploy wizard lands on configuration directly** — the deploy-target
+  picker no longer flashes on entry. A sensible target is applied silently and
+  stays one click away in the summary bar at the top.
+- **The control plane stops listing a phantom service** — the self-managed
+  "Openship" project no longer shows a bogus public `openship` service (and its
+  stray `openship-openship.opsh.io` route) that matched no container and read
+  "Stopped" forever.
+
+## 0.4.0
+
+A security fix for the edge, migrations that behave like a native repo project,
+and a batch of routing/reliability fixes.
+
+### Security
+- **Unrouted HTTPS hosts are rejected, not cross-served** — the edge now owns a
+  `443` default server that refuses any hostname it doesn't route (one you
+  removed, never added, or merely pointed at the box's IP). Before this, such a
+  request fell through to the first-loaded vhost and was served **another app's
+  certificate and backend**. Applies automatically on the next deploy, on both the
+  bare and containerized edge. Critical — see the in-app advisory.
+
+### Migrations
+- **A migrated project is now a native repo project** — a migrated compose stack
+  redeploys like any repo project: it reclones and **rebuilds `build:` services**
+  and pulls `image:` ones, instead of failing on a frozen build tag (`404 no such
+  image`). The running image is reused only **once**, at cutover.
+- **The whole compose is the deployment plan** — the migrate screen lists every
+  repo compose service, not just running containers, so a service with no
+  container (e.g. `redis`, or an app that wasn't up) is built/pulled and routed
+  like the rest, with its env and route editable on the card.
+- **Reused databases stay reachable** — a reused container is joined to the new
+  project's network under its service-name alias, so a freshly-built app resolves
+  `postgres:5432` by name, exactly like a native deploy.
+- **A migrated service reports the container it really runs as** — service state
+  is read live from the host and matched by identity (label → `openship-<slug>-<svc>`
+  name → tracked id → compose labels), so a container Openship adopted **in place**
+  (its docker labels still name the previous project) no longer shows "Stopped"
+  while it serves traffic. Each run's log now ends with the container, state and
+  match for every service.
+
+### Fixes
+- **Service state is never guessed from the database** — Start/Stop/Restart, logs,
+  terminal, backup/restore and volume sizes resolve the container against the host
+  first, so a redeploy that replaced it no longer leaves them failing with
+  `no such container` — or, on Start, launching a **duplicate** container beside
+  the running one. A crash-looping container now reads **Restarting** instead of a
+  green "Running", and an unreachable host reads **Unknown** instead of echoing the
+  last deploy status.
+- **Removing a route never wrongly demands Openship Cloud** — the free-domain gate
+  classifies by hostname, so removing a custom-domain route (or any route) is no
+  longer blocked by an unrelated free subdomain still in the set.
+- **Deleting a service can't hang** — runtime teardown is time-bounded, so a slow
+  or unreachable server no longer strands the delete before the record is removed.
+
+<!-- editors: highlights only, trim/adjust before tagging — not rendered on the website -->
+
 ## 0.2.4
 
 Native Apple Silicon builds, drop-in compatibility with other platforms' deploy

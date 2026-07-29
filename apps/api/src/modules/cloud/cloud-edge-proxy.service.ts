@@ -7,6 +7,7 @@
  */
 
 import { SYSTEM } from "@repo/core";
+import { isCloudEdgeHost } from "../../lib/edge-target";
 import { getNamespaceClient } from "../../lib/openship-cloud";
 
 /** Canonicalize a slug the same way for sync and delete so both look up the
@@ -30,6 +31,22 @@ export async function syncCloudEdgeProxy(
 
   const baseDomain = SYSTEM.DOMAINS.CLOUD_DOMAIN;
   const hostname = `${slug}.${baseDomain}`;
+
+  // Last hop before Oblien, so it's also the last chance to catch a self-referential
+  // target: a `*.opsh.io` target makes the edge forward the request back into itself.
+  // The senders are guarded (resolveEdgeTargetHost), but this is the ONE place every
+  // self-hosted box funnels through — so an older, unpatched box gets caught here
+  // instead of silently registering a route that spins.
+  if (isCloudEdgeHost(input.target)) {
+    return {
+      ok: false,
+      status: 400,
+      error:
+        `"${input.target}" is an Openship Cloud edge address, so routing ${hostname} there ` +
+        `would loop back to the edge. Send the server's own public IP or hostname.`,
+    };
+  }
+
   const target =
     input.target.startsWith("http://") || input.target.startsWith("https://")
       ? input.target
@@ -48,6 +65,14 @@ export async function syncCloudEdgeProxy(
 
   if (!existing) {
     await client.edgeProxy.create({ name: hostname, slug, domain: baseDomain, target, namespace });
+    // A freshly created proxy is NOT assumed active. The update path below
+    // explicitly enables a `disabled` proxy, which means Oblien can hold one in
+    // that state — and a created-but-disabled proxy is indistinguishable from
+    // success here: we return ok, the slug reads as taken on the next attempt, and
+    // `<slug>.opsh.io` resolves to the zone wildcard with no origin (Cloudflare
+    // error 1000). Re-read and enable so "synced" means "serving".
+    const created = (await client.edgeProxy.list()).proxies.find((p) => p.slug === slug);
+    if (created?.status === "disabled") await client.edgeProxy.enable(created.id);
   } else {
     if (
       existing.name !== hostname ||

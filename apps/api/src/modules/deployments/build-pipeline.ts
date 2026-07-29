@@ -22,11 +22,12 @@ import {
   BuildLogger,
   CloudRuntime,
   DockerRuntime,
+  STATIC_RELEASE_BASE,
+  resolveStaticOutputPath,
   resolveStaticReleaseBase,
   DEFAULT_BUILD_RESOURCE_CONFIG,
   ensurePortAvailable,
   allocateHostPort,
-  createHostExecutor,
   runDeployPipeline,
   isMultiServiceRuntime,
   waitForReady,
@@ -40,6 +41,8 @@ import {
   resolveDeploymentPlatform,
   resolveEffectiveTarget,
 } from "../../lib/deployment-runtime";
+import { ensureRoutingReady } from "../../lib/edge-reconcile";
+import { sshManager } from "../../lib/ssh-manager";
 import {
   resolveBuildRuntimeModes,
   resolveDeployRouting,
@@ -60,7 +63,6 @@ import { normalizeTargetPath } from "../../lib/public-endpoints";
 import { withDefaults } from "../../lib/resources";
 import { resolveBuildGitToken } from "../github/clone-auth";
 import { openDeployRelay } from "../../lib/git-forwarding";
-import { sshManager } from "../../lib/ssh-manager";
 import { resolveOrgOwner } from "../../lib/org-actor";
 import {
   preCreateServiceDeployments,
@@ -73,6 +75,7 @@ import { buildBackgroundContext } from "../../lib/request-context";
 import * as sessionManager from "./session-manager";
 import { onFailure, onSuccess, onCancelled, setDeploymentStatus, type LifecycleContext } from "./deployment-lifecycle";
 import { auditPorts } from "./port-audit.service";
+import { auditStaticOutput, staticOutputTargets } from "./output-audit.service";
 import {
   createBuildConfig,
   resolveStaticRuntimeDirectory,
@@ -306,7 +309,7 @@ async function archivePreviousDeployment(
  * per-service GitHub Checks, then archive the previous deployment.
  * Mirrors the single-app finalize tail in executeServerDeploy.
  */
-async function finalizeComposeDeploy(opts: {
+export async function finalizeComposeDeploy(opts: {
   project: Project;
   dep: Deployment;
   logger: BuildLogger;
@@ -378,12 +381,10 @@ async function finalizeComposeDeploy(opts: {
     console.warn(`[build] rollup/Checks emission failed for ${dep.id}:`, err);
   }
 
-  // Don't archive the previous deployment while THIS one is still `reconciling`
-  // (connection lost, outcome unverified) — archiving now could prematurely
-  // retire a still-live predecessor before we know the new deploy succeeded.
-  // Reconciliation settles the status; archival waits for a confirmed ready.
+  // Archive the predecessor only after this deployment reaches a success state.
+  // Failed, cancelled, and reconciling deployments leave the live release intact.
   const settled = await repos.deployment.findById(dep.id).catch(() => null);
-  if (settled?.status !== "reconciling") {
+  if (settled?.status === "ready" || settled?.status === "partial_failure") {
     await archivePreviousDeployment(dep, project, logger);
   }
 }
@@ -641,26 +642,38 @@ async function executeBuildAndDeploy(project: Project, dep: Deployment, buildSes
           // gracefully (a LOCAL fallback credential, flagged apiHostFallback) instead
           // of hard-failing at token resolution after the server is provisioned.
           allowApiHostFallback: clonePlan.dockerClonesOnServer,
+          // Lets the chain ask the target server whether it already reaches this
+          // repo on its own — only consulted for a clone that runs THERE.
+          serverExecutor: clonePlan.runsOnServer ? targetExecutor : null,
+          repoUrl: snapshot.repoUrl,
+          onLog: (message) => logger.log(message),
         })
       : {};
 
-    // Clone-on-server needs a SHIPPABLE credential that can travel to the build
-    // host: the desktop relay (gitCred.relay) or an App/PAT token (gitCred.token
-    // WITHOUT apiHostFallback). An apiHostFallback token is a LOCAL credential for
-    // cloning on the orchestrator — NOT shippable — so it does not qualify. When
-    // no shippable credential exists, fall back to cloning on the API host and
-    // transferring the context — warn, never hard-fail. (The BARE runtime always
-    // clones on the target and is gated by preflight separately, so this fallback
-    // only changes DOCKER behavior.)
+    // Clone-on-server needs a credential the build host can actually AUTHENTICATE
+    // WITH. Four qualify: the server's own ambient git access (nothing moves), an
+    // ssh key or App/PAT token we ship it, the desktop relay, or a public repo
+    // (nothing needed). An apiHostFallback token is a LOCAL credential for cloning
+    // on the orchestrator — NOT usable there — so it does not qualify. When
+    // nothing qualifies, fall back to cloning on the API host and transferring the
+    // context — warn, never hard-fail. (The BARE runtime always clones on the
+    // target and is gated by preflight separately, so this only changes DOCKER.)
     const cloneCredentialAvailable =
+      !!gitCred.ambient ||
       gitCred.relay === true ||
       !!gitCred.ssh ||
+      gitCred.anonymous === true ||
       (!!gitCred.token && !gitCred.apiHostFallback);
     const effectiveCloneOnServer =
       cloneOnServer && (runtime.name === "bare" || cloneCredentialAvailable);
     if (cloneOnServer && runtime.name !== "bare" && !cloneCredentialAvailable) {
       logger.log(
-        "Clone-on-server was requested, but no git credential can reach the build host (no relay, no token). Falling back to cloning on the API host and transferring the build context.",
+        "Clone-on-server was requested, but nothing can authenticate the clone on the build host — " +
+          "the server has no GitHub identity of its own, no App/PAT token is available, and no git " +
+          "identity could be forwarded. Falling back to cloning on the API host and transferring the " +
+          "build context. To clone directly on the server, connect it under Servers → GitHub " +
+          "(a read-only per-repo deploy key is the narrowest option), or install the Openship App / " +
+          "add a per-project clone token.",
         "warn",
       );
     } else if (effectiveCloneOnServer && gitCred.relay) {
@@ -702,6 +715,10 @@ async function executeBuildAndDeploy(project: Project, dep: Deployment, buildSes
     // Per-server SSH clone credential (ssh-server-key / ssh-deploy-key mode).
     // Consumed by the adapter clone step (git@github.com + GIT_SSH_COMMAND).
     if (gitCred.ssh) buildConfig.gitSsh = gitCred.ssh;
+    // The server authenticates with its own credentials. Gated on the clone
+    // actually running there: on the api-host path this names an identity that
+    // isn't ours to use, and the adapter would find no credential at all.
+    if (gitCred.ambient && effectiveCloneOnServer) buildConfig.gitAmbient = gitCred.ambient;
 
     // Desktop git-credential relay opener, shared by the single-app and compose
     // paths. Opens the reverse tunnel + remote helper (nothing persisted on the
@@ -929,6 +946,7 @@ async function executeBuildAndDeploy(project: Project, dep: Deployment, buildSes
           gitUsername: gitCred.username,
           gitCredentialHelperPath: composeRelay?.scriptPath,
           gitSsh: gitCred.ssh,
+          gitAmbient: effectiveCloneOnServer ? gitCred.ambient : undefined,
           cloneOnServer: effectiveCloneOnServer,
         });
       } finally {
@@ -1327,7 +1345,11 @@ function buildDeployEnvironment(
                 // cancel) — the same session prompt flow used for port conflicts.
                 const edge = await ensureEdge(
                   targetExecutor,
-                  (p) => system.ensureFeature("routing", systemLog, { promptUser: p }),
+                  (p) =>
+                    ensureRoutingReady(targetExecutor, system, {
+                      onLog: systemLog,
+                      promptUser: p,
+                    }),
                   { promptUser, onLog: systemLog },
                 );
                 if (edge.migrated && !edge.ok) {
@@ -1402,7 +1424,7 @@ async function executeServerDeploy(phase: DeployPhaseInputs): Promise<void> {
   // the built dir into a release and hands the edge a `root`. Its executor is
   // the platform executor, which is exactly the FS the build wrote to (SSH for a
   // remote server; local for a local / docker-edge host where the extract landed
-  // on the shared openship_static volume).
+  // on the shared /opt/openship/static mount).
   const isStaticFileServe = phase.deployRouting.deployMode === "static-file-serve";
   const staticServeRuntime = isStaticFileServe
     ? new BareRuntime({
@@ -1436,7 +1458,7 @@ async function executeServerDeploy(phase: DeployPhaseInputs): Promise<void> {
         activate: (cfg) =>
           staticServeRuntime!.deployStatic({ ...cfg, outputDirectory: staticServeOutputDir }),
         resolveRoute: async (id) => ({
-          staticRoot: staticServeRuntime!.resolveStaticRoot(id, staticServeOutputDir),
+          staticRoot: resolveStaticOutputPath(id, staticServeOutputDir),
         }),
         healthCheck: undefined,
       }
@@ -1526,7 +1548,12 @@ async function executeServerDeploy(phase: DeployPhaseInputs): Promise<void> {
       )
         .filter((p) => p.id !== project.id && typeof p.hostPort === "number")
         .map((p) => p.hostPort as number);
-      pinnedHostPort = await allocateHostPort(phase.targetExecutor ?? createHostExecutor(), { avoid });
+      // The deploy's own executor when it has one; otherwise the POOLED host
+      // channel — never a bare `createHostExecutor()`, which builds a fresh
+      // SSH connection per call and leaked one sshd session each time (#291).
+      pinnedHostPort = phase.targetExecutor
+        ? await allocateHostPort(phase.targetExecutor, { avoid })
+        : await sshManager.withHostExecutor((exec) => allocateHostPort(exec, { avoid }));
       await repos.project
         .update(project.id, { hostPort: pinnedHostPort })
         .catch((err) => logger.log(`Couldn't persist host port ${pinnedHostPort}: ${safeErrorMessage(err)}\n`, "warn"));
@@ -1783,10 +1810,35 @@ async function executeServerDeploy(phase: DeployPhaseInputs): Promise<void> {
       ? []
       : await auditPorts(runtime, deployResult.containerId, auditedPorts, logger);
 
+  // The file-side twin, for the case that HAS no port: a static site 404s when the
+  // edge's `root` doesn't resolve to something servable, and until this ran the
+  // static branch above just returned [] with nothing in its place — so the one
+  // deploy shape whose only failure mode IS a 404 was the one shape we never
+  // checked. Probed through `routing`, so it answers from where OpenResty looks
+  // (a `root` present on the host but not bind-mounted into the edge container
+  // reads as missing here — exactly the 404 a host-side probe can't see).
+  const outputCheck =
+    isStaticFileServe && deployResult.containerId
+      ? await auditStaticOutput(
+          { routing, runtime: staticServeRuntime, containerId: deployResult.containerId },
+          staticOutputTargets(
+            resolveStaticOutputPath(deployResult.containerId, staticServeOutputDir),
+            routeState.publicEndpoints,
+          ),
+          logger,
+        )
+      : [];
+
   // `metaPatch` is spread into deployment.meta (persisted) and read back for the
   // SSE payload in onSuccess, so both live + refresh see the same result.
   const metaPatch: Record<string, unknown> = {};
   if (portCheck.length > 0) metaPatch.portCheck = portCheck;
+  if (outputCheck.length > 0) metaPatch.outputCheck = outputCheck;
+  // Persist WHERE this deploy serves from. It can't be recomputed later: the read
+  // path sees runtimeMode "bare" (the serve identity) and would answer
+  // `project.outputDirectory`, while a sandbox-built static actually serves the
+  // release root. See DeploymentMeta.staticServeOutputDir.
+  if (isStaticFileServe) metaPatch.staticServeOutputDir = staticServeOutputDir;
   // Surface a free-domain edge-sync failure so the deploy doesn't read as cleanly
   // green with a dead .opsh.io URL. `edgeUnsynced` is the structured signal the
   // project status reads to flag "Action Required" + offer Retry routing;

@@ -18,10 +18,11 @@ const osxSigning = APPLE_IDENTITY
       osxSign: {
         identity: APPLE_IDENTITY,
         // Hardened runtime + entitlements are REQUIRED for notarization, and the
-        // same entitlements must apply to every nested Mach-O (the compiled
-        // openship-api binary, any native .node addons in the dashboard bundle)
-        // via optionsForFile — the app spawns/loads them, so they all need
-        // allow-jit / disable-library-validation or the hardened app crashes.
+        // same entitlements must apply to every nested Mach-O (any native .node
+        // addons in the dashboard bundle) via optionsForFile — the app
+        // spawns/loads them, so they all need allow-jit / disable-library-
+        // validation or the hardened app crashes. (The API is now a JS bundle run
+        // by Electron's Node, so it is no longer a separate Mach-O to sign.)
         optionsForFile: () => ({
           hardenedRuntime: true,
           entitlements: path.join(__dirname, "entitlements.plist"),
@@ -56,21 +57,32 @@ module.exports = {
     // Bundled payload built by build/stage.ts. These are the ONLY things that
     // make the app self-contained; no source is copied.
     extraResource: [
-      path.join(RESOURCES, "bin"),
+      // The API as a Node bundle (Bun.build target:node) + its type:module
+      // marker — run under Electron's Node by services.ts, NOT a bun binary.
+      path.join(RESOURCES, "server"),
       path.join(RESOURCES, "dashboard"),
       path.join(RESOURCES, "migrations"),
       path.join(RESOURCES, "pglite"),
-      // ssh2 + dockerode (externalized from the --compile binary) — resolved at
-      // runtime via NODE_PATH=<Resources>/node_modules in services.ts.
+      // Vendored GeoLite2 DB → OPENSHIP_GEOIP_DB. This list is explicit, not a
+      // glob of resources/ — anything staged by build/stage.ts and NOT named here
+      // is silently absent from the packaged app.
+      path.join(RESOURCES, "geoip"),
+      // iRedMail engine tree → MAIL_SERVER_ENGINE_DIR (services.ts). The mail
+      // server install packs this and streams it to the target VPS; unstaged,
+      // "Transfer iRedMail Engine" fails with tar: could not chdir.
+      path.join(RESOURCES, "engine"),
+      // ssh2 + dockerode (external to the API bundle) — resolved at runtime via
+      // NODE_PATH=<Resources>/node_modules in services.ts.
       path.join(RESOURCES, "node_modules"),
     ],
     ...osxSigning,
   },
 
   hooks: {
-    // Build + stage the self-contained payload (API binary, dashboard
+    // Build + stage the self-contained payload (API Node bundle, dashboard
     // standalone, migrations, pglite assets) before packaging. Runs for both
-    // `package` and `make`. Requires bun on PATH.
+    // `package` and `make`. Requires bun on PATH (build-time only — the packaged
+    // app runs the API under Electron's Node, not bun).
     generateAssets: async (_forgeConfig, _platform, arch) => {
       // Forward the build arch so stage.ts compiles the API for the right
       // target (enables cross-compiling x64 on an arm64 runner).
@@ -88,8 +100,8 @@ module.exports = {
     postPackage: async (_forgeConfig, options) => {
       if (process.platform !== "linux") return;
       for (const out of options.outputPaths) {
-        const p = path.join(out, "resources/bin/openship-api");
-        if (existsSync(p)) chmodSync(p, 0o755);
+        // (The API ships as a Node bundle — resources/server/index.js — run by
+        // Electron's Node, so there's no executable bit to set here anymore.)
 
         // When unprivileged userns is blocked, Electron's sandbox falls back to
         // its SUID helper, which can't run from a nosuid AppImage mount, the
@@ -199,6 +211,7 @@ module.exports = {
           categories: ["Development", "Utilities"],
           maintainer: "Oblien",
           homepage: "https://openship.io",
+          license: "Apache-2.0",
         },
       },
       platforms: ["linux"],
@@ -213,6 +226,9 @@ module.exports = {
           icon: `${ICON_BASE}.png`,
           categories: ["Development", "Utilities"],
           homepage: "https://openship.io",
+          // Required by electron-installer-redhat (the RPM spec's `License:`).
+          // Also set on package.json; kept here so the maker never depends on it.
+          license: "Apache-2.0",
         },
       },
       platforms: ["linux"],

@@ -792,15 +792,10 @@ export function useDeploymentBuild(
           config.deploymentEngine === "kubernetes" ? config.serverId : undefined,
         kubernetesReplicas:
           config.deploymentEngine === "kubernetes"
-            ? Math.max(1, config.kubernetesReplicas ?? 1)
-            : undefined,
-        // Per-deploy git credential forwarding — only sent for a server target
-        // (the only build that clones on-host). The API re-checks desktop +
-        // server-build before honoring it.
-        forwardGitCredentials:
-          config.deployTarget === "server" && config.forwardGitCredentials === true
-            ? true
-            : undefined,
+             ? Math.max(1, config.kubernetesReplicas ?? 1)
+             : undefined,
+        // Git-credential forwarding is no longer a per-deploy choice — it's a
+        // generic per-operator setting the API reads directly.
         // Clone location — only meaningful for a server target. Clone-on-server
         // is now the DEFAULT (secure, atomic: credential forwarded over the SSH
         // relay for the clone, never stored). Only an explicit "api-host" pick
