@@ -12,6 +12,7 @@ const domainRepo = vi.hoisted(() => ({
   markVerified: vi.fn(),
   markVerifiedActive: vi.fn(),
   updateSsl: vi.fn(),
+  recordVerifyFailure: vi.fn(),
   listByProject: vi.fn().mockResolvedValue([]),
   setPrimary: vi.fn(),
 }));
@@ -27,6 +28,7 @@ const sslMocks = vi.hoisted(() => ({
 }));
 /** The adapter's proxy read api — swapped per test to stand in for a real proxy. */
 const edgeProxy = vi.hoisted(() => vi.fn());
+const probeReachable = vi.hoisted(() => vi.fn());
 // The host executor createHostExecutor() returns — swapped per test.
 const hostExec = vi.hoisted(() => ({ current: null as CommandExecutor | null }));
 
@@ -50,6 +52,7 @@ vi.mock("../../../src/lib/domain-ssl", () => sslMocks);
 // host's /etc/letsencrypt either way.
 vi.mock("../../../src/lib/ssh-manager", () => ({
   sshManager: {
+    probeReachable,
     withExecutor: vi.fn(async (_id: string, fn: (e: CommandExecutor) => unknown) => fn(hostExec.current!)),
     withHostExecutor: vi.fn(async (fn: (e: CommandExecutor) => unknown) => fn(hostExec.current!)),
   },
@@ -64,7 +67,10 @@ vi.mock("@repo/adapters", async (importOriginal) => {
 
 import { validateCertFor } from "@repo/adapters";
 import { makeTestCert } from "../../../../../packages/adapters/src/system/proxy/test-certs";
-import { reuseServerCertForDomain } from "../../../src/modules/domains/domain.service";
+import {
+  reuseServerCertForDomain,
+  verifyDomain,
+} from "../../../src/modules/domains/domain.service";
 
 /**
  * Fake executor: `exists` answers the container markers from `container` and file
@@ -142,7 +148,10 @@ beforeEach(() => {
   domainRepo.findById.mockResolvedValue({ ...domainRow });
   domainRepo.listByProject.mockResolvedValue([]);
   projectRepo.findById.mockResolvedValue({ ...project });
-  deploymentRepo.findById.mockResolvedValue({ id: "dep_1", meta: { serverId: "srv_1" } });
+  deploymentRepo.findById.mockResolvedValue({
+    id: "dep_1",
+    meta: { deployTarget: "server", serverId: "srv_1" },
+  });
   serverRepo.getInOrganization.mockResolvedValue({ id: "srv_1", isLocal: true });
   sslMocks.verifyExistingCert.mockResolvedValue({ verified: false });
   sslMocks.installDomainCert.mockResolvedValue({ expiresAt: "2027-01-01T00:00:00.000Z", verified: true });
@@ -152,6 +161,36 @@ beforeEach(() => {
 
 /** The single ssl patch `markVerifiedActive` was called with. */
 const sslPatch = () => domainRepo.markVerifiedActive.mock.calls.at(-1)?.[1] ?? {};
+
+describe("verifyDomain Kubernetes edge resolution", () => {
+  it("ignores a stale serverId when Kubernetes routing is owned by the local edge", async () => {
+    deploymentRepo.findById.mockResolvedValue({
+      id: "dep_1",
+      organizationId: "org_1",
+      meta: {
+        deployTarget: "local",
+        serverId: "srv_stale",
+        kubernetesServerId: "srv_k3s",
+        deploymentEngine: "kubernetes",
+      },
+    });
+    sslMocks.provisionDomainCertForVerify.mockResolvedValue({
+      domain: HOST,
+      verified: true,
+      expiresAt: "2027-01-01T00:00:00.000Z",
+      issuer: "certbot",
+    });
+
+    const result = await verifyDomain(ctx, "dom_1");
+
+    expect(result.verified).toBe(true);
+    expect(sslMocks.provisionDomainCertForVerify).toHaveBeenCalledWith(
+      HOST,
+      expect.objectContaining({ projectId: "proj_1" }),
+    );
+    expect(probeReachable).not.toHaveBeenCalled();
+  });
+});
 
 afterEach(() => {
   delete process.env.OPENSHIP_EDGE_MODE;

@@ -386,7 +386,14 @@ async function markDomainVerifiedActive(
 async function resolveServerIdForProject(project: Project): Promise<string | null> {
   if (!project.activeDeploymentId) return null;
   const dep = await repos.deployment.findById(project.activeDeploymentId).catch(() => null);
-  return (dep?.meta as DeploymentMeta | undefined)?.serverId ?? null;
+  const meta = dep?.meta as DeploymentMeta | undefined;
+  // `serverId` identifies the box that owns this project's edge only when the
+  // deployment target is actually "server". Kubernetes snapshot redeploys can
+  // carry a historical build-target serverId alongside deployTarget:"local"
+  // and kubernetesServerId. Treating that stale value as the edge host makes
+  // domain verification probe the cluster node and return before Certbot ever
+  // runs on the local OpenResty edge.
+  return meta?.deployTarget === "server" ? (meta.serverId ?? null) : null;
 }
 
 /**
