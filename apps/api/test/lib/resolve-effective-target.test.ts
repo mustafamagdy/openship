@@ -25,6 +25,18 @@ describe("resolveEffectiveTarget", () => {
     expect(resolveEffectiveTarget("desktop", meta({ deployTarget: "local" }))).toBe("local");
   });
 
+  it("an explicit local edge wins over a stale build serverId", () => {
+    const kubernetesMeta = meta({
+      deployTarget: "local",
+      serverId: "srv_stale_build_target",
+      kubernetesServerId: "srv_k3s",
+      deploymentEngine: "kubernetes",
+    });
+
+    expect(resolveEffectiveTarget("desktop", kubernetesMeta)).toBe("local");
+    expect(resolveEffectiveTarget("selfhosted", kubernetesMeta)).toBe("local");
+  });
+
   it("selfhosted server/local/cloud resolution is unchanged", () => {
     expect(resolveEffectiveTarget("selfhosted", meta({ deployTarget: "server" }))).toBe("server");
     expect(resolveEffectiveTarget("selfhosted", meta({}))).toBe("local");
