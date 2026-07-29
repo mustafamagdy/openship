@@ -1,6 +1,7 @@
 import type { CommandExecutor, ResourceConfig } from "@repo/adapters";
 
 const DNS_LABEL_MAX = 63;
+const DEFAULT_STACK_ROLLOUT_TIMEOUT_SECONDS = 900;
 
 export interface KubernetesDeployInput {
   projectId: string;
@@ -346,7 +347,10 @@ export function buildKubernetesStackObjects(input: KubernetesStackDeployInput): 
       spec: {
         replicas,
         revisionHistoryLimit: 5,
-        progressDeadlineSeconds: positiveInt(input.rolloutTimeoutSeconds, 300),
+        progressDeadlineSeconds: positiveInt(
+          input.rolloutTimeoutSeconds,
+          DEFAULT_STACK_ROLLOUT_TIMEOUT_SECONDS,
+        ),
         strategy: {
           type: "RollingUpdate",
           rollingUpdate: { maxSurge: 1, maxUnavailable: 0 },
@@ -524,7 +528,10 @@ export async function deployStackToKubernetes(
   const remoteDir = `/tmp/openship-kubernetes/${dnsLabel(input.deploymentId, "deployment")}`;
   const manifestPath = `${remoteDir}/stack.json`;
   const kubectl = input.kubectlCommand ?? "sudo -n kubectl";
-  const timeout = positiveInt(input.rolloutTimeoutSeconds, 300);
+  const timeout = positiveInt(
+    input.rolloutTimeoutSeconds,
+    DEFAULT_STACK_ROLLOUT_TIMEOUT_SECONDS,
+  );
 
   await executor.mkdir(remoteDir);
   try {
