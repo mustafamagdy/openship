@@ -875,6 +875,10 @@ async function executeBuildAndDeploy(project: Project, dep: Deployment, buildSes
           // OpenShip host's local OpenResty. Keep runtime routing local; the
           // cluster binding remains in kubernetesServerId.
           deployTarget: "local",
+          // Snapshot redeploys merge metadata. Explicitly clear an earlier
+          // build-target server so TLS/domain actions do not mistake a cluster
+          // node for the host that owns the local OpenResty edge.
+          serverId: undefined,
           deploymentEngine: "kubernetes",
           kubernetesNamespace: deployed.namespace,
           kubernetesDeployments: deployed.deployments,
@@ -1114,6 +1118,7 @@ async function executeBuildAndDeploy(project: Project, dep: Deployment, buildSes
         durationMs: buildResult.durationMs ?? 0,
         metaPatch: {
           deployTarget: "local",
+          serverId: undefined,
           deploymentEngine: "kubernetes",
           kubernetesNamespace: deployed.namespace,
           kubernetesDeployment: deployed.deploymentName,
