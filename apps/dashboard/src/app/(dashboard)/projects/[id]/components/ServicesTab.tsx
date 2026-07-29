@@ -529,7 +529,13 @@ export const ServicesTab = () => {
       <div className="bg-card rounded-2xl border border-border/50 divide-y divide-border/30 overflow-hidden">
         {services.map((svc) => {
           const ct = containerFor(svc.id);
-          const status = ct?.status ?? (svc.enabled ? "stopped" : "disabled");
+          const status =
+            ct?.status ??
+            (projectData.deploymentEngine === "kubernetes" && svc.enabled
+              ? "kubernetes"
+              : svc.enabled
+                ? "stopped"
+                : "disabled");
           const resolvedUrl = resolveServiceUrl(svc);
           const isMonorepo = serviceKind(svc) === "monorepo";
 
@@ -690,6 +696,14 @@ function StatusBadge({ status, t }: { status: string; t: Dictionary }) {
       label: t.projects.serviceStatus.unknown,
     },
   };
+  if (status === "kubernetes") {
+    return (
+      <span className="inline-flex items-center gap-1.5 rounded-full bg-primary/10 px-2.5 py-1 text-[11px] font-medium text-primary">
+        <span className="size-1.5 rounded-full bg-primary" />
+        Kubernetes
+      </span>
+    );
+  }
   const s = map[status] ?? map.stopped;
   return (
     <span

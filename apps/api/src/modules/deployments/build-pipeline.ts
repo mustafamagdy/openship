@@ -54,6 +54,7 @@ import { syncManagedEdgeRoutes, edgeUnsyncedWarning } from "../../lib/managed-ed
 import { decryptEnvMap } from "../../lib/encryption";
 import {
   buildProjectRouteDomains,
+  buildServiceRouteDomains,
   createTrackedSslProvider,
   ensureRouteDomainRecord,
   toRoutedDomainInputs,
@@ -836,33 +837,63 @@ async function executeBuildAndDeploy(project: Project, dep: Deployment, buildSes
           "Kubernetes stack is ready but has no exposed service. Mark one service as exposed.",
         );
       }
-      const plannedDomains = buildProjectRouteDomains({
-        project,
-        projectDomains: routeState.projectDomains,
-        managedSlug: routeState.primarySlug,
-        publicEndpoints: routeState.publicEndpoints,
-        runtimeName: "docker",
-        usesManagedRouting: true,
-      });
-      const upstream = `http://${clusterServer.sshHost}:${publicService.nodePort}`;
-      for (const domain of plannedDomains) {
-        await routing.registerRoute({
-          domain: domain.hostname,
-          targetUrl: upstream,
-          tls: domain.tls,
-          webhookProxy: webhookProxyTarget,
+      // A service stack owns service-scoped domains, not project-level routes.
+      // Using buildProjectRouteDomains here silently produced an empty plan for
+      // Compose/Kubernetes stacks, leaving healthy workloads unreachable.
+      const projectDomainRows = await repos.domain.listByProject(project.id);
+      const routeServices = await repos.service.listByProject(project.id);
+      const domainByHostname = new Map(
+        projectDomainRows.map((domain) => [domain.hostname.toLowerCase(), domain]),
+      );
+      const trackedSsl = createTrackedSslProvider(ssl, domainByHostname);
+      const appliedDomains: ReturnType<typeof buildServiceRouteDomains> = [];
+      for (const deployedService of deployed.services) {
+        if (!deployedService.nodePort) continue;
+        const service = routeServices.find((candidate) => candidate.name === deployedService.name);
+        if (!service) continue;
+        const routes = buildServiceRouteDomains({
+          project,
+          service,
+          runtimeName: "docker",
+          usesManagedRouting: true,
+          domainByHostname,
         });
-        if (domain.provisionSsl) await ssl.provisionCert(domain.hostname);
+        const upstream = `http://${clusterServer.sshHost}:${deployedService.nodePort}`;
+        for (const domain of routes) {
+          if (domain.createIfMissing) {
+            await ensureRouteDomainRecord({
+              projectId: project.id,
+              route: domain,
+              domainByHostname,
+            });
+          }
+          await routing.registerRoute({
+            domain: domain.hostname,
+            targetUrl: upstream,
+            tls: domain.tls,
+            webhookProxy: webhookProxyTarget,
+          });
+          if (domain.provisionSsl) await trackedSsl.provisionCert(domain.hostname);
+          appliedDomains.push(domain);
+          logger.log(`Kubernetes route ${domain.hostname} → ${upstream} applied.\n`);
+        }
       }
 
-      const primary = plannedDomains.find((domain) => domain.isPrimary) ?? plannedDomains[0];
+      const fallbackUpstream = `http://${clusterServer.sshHost}:${publicService.nodePort}`;
+      const primary =
+        appliedDomains.find((domain) => domain.isPrimary) ?? appliedDomains[0];
       await onSuccess(ctx, {
         containerId: deployed.workloadId,
         url: primary
           ? `${primary.tls ? "https" : "http"}://${primary.hostname}`
-          : upstream,
+          : fallbackUpstream,
         durationMs: 0,
         metaPatch: {
+          // Kubernetes is activated remotely, but its public edge is the
+          // OpenShip host's local OpenResty. Keep runtime routing local; the
+          // cluster binding remains in kubernetesServerId.
+          deployTarget: "local",
+          deploymentEngine: "kubernetes",
           kubernetesNamespace: deployed.namespace,
           kubernetesDeployments: deployed.deployments,
           kubernetesServices: deployed.services,
@@ -1101,10 +1132,13 @@ async function executeBuildAndDeploy(project: Project, dep: Deployment, buildSes
           : upstream,
         durationMs: buildResult.durationMs ?? 0,
         metaPatch: {
+          deployTarget: "local",
+          deploymentEngine: "kubernetes",
           kubernetesNamespace: deployed.namespace,
           kubernetesDeployment: deployed.deploymentName,
           kubernetesService: deployed.serviceName,
           kubernetesNodePort: deployed.nodePort,
+          kubernetesServerId: snapshot.kubernetesServerId,
         },
       });
       await archivePreviousDeployment(dep, project, logger);

@@ -24,7 +24,7 @@ import {
 } from "@repo/adapters";
 import { getRequestContext } from "../../lib/request-context";
 import { permission } from "../../lib/permission";
-import { param } from "../../lib/controller-helpers";
+import { param, platform } from "../../lib/controller-helpers";
 import { streamSSE } from "../../lib/sse";
 import { sshManager } from "../../lib/ssh-manager";
 import { withPinnedEdgeImage } from "../../lib/edge-image";
@@ -107,6 +107,41 @@ export async function edgeStatus(c: Context) {
   // Cloud manages its own ingress — always "ready", nothing to set up.
   if (project.cloudWorkspaceId) {
     return c.json({ ready: true, managed: "cloud" as const });
+  }
+
+  // Kubernetes workloads are reached through the OpenShip host's edge, which
+  // proxies to the cluster NodePort. kubernetesServerId identifies the control
+  // plane for workload actions; it is deliberately not the edge server.
+  if (project.activeDeploymentId) {
+    const deployment = await repos.deployment.findById(project.activeDeploymentId);
+    const meta = deployment?.meta as { kubernetesServerId?: string } | null;
+    if (meta?.kubernetesServerId) {
+      const executor = platform().executor;
+      if (!executor) {
+        return c.json({
+          ready: false,
+          reachable: null,
+          reason: "The local OpenShip edge is unavailable",
+        });
+      }
+      try {
+        const status = await probeEdge(executor);
+        return c.json({
+          ready: status.classification === "ours",
+          reachable: true,
+          classification: status.classification,
+          canProceedClean: status.canProceedClean,
+          occupants: status.occupants.map((occupant) => ({
+            port: occupant.port,
+            proxy: occupant.proxy ?? null,
+            label: occupant.command ?? null,
+          })),
+          managed: "kubernetes" as const,
+        });
+      } catch (err) {
+        return c.json({ ready: false, reachable: true, error: safeErrorMessage(err) });
+      }
+    }
   }
 
   const resolved = await resolveProjectServer(id, ctx.organizationId);

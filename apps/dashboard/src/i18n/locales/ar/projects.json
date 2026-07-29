@@ -121,6 +121,7 @@
     "tabs": {
       "appSettings": "الإعدادات",
       "overview": "نظرة عامة",
+      "monitoring": "المراقبة",
       "services": "التطبيقات والخدمات",
       "domains": "النطاقات والمسارات",
       "deployments": "عمليات النشر",

@@ -121,6 +121,7 @@
     "tabs": {
       "appSettings": "Definições",
       "overview": "Visão geral",
+      "monitoring": "Monitoramento",
       "services": "Serviços",
       "domains": "Domínios e rotas",
       "deployments": "Implementações",

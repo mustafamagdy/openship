@@ -121,6 +121,7 @@
     "tabs": {
       "appSettings": "Einstellungen",
       "overview": "Übersicht",
+      "monitoring": "Monitoring",
       "services": "Dienste",
       "domains": "Domains & Routen",
       "deployments": "Bereitstellungen",

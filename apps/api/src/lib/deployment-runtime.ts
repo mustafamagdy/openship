@@ -47,6 +47,8 @@ export interface DeploymentMeta {
     nodePort?: number;
   }>;
   kubernetesNodePort?: number;
+  /** Runtime activation engine used by this release. */
+  deploymentEngine?: "native" | "kubernetes";
   /**
    * Adopt an already-running, externally-supervised process instead of building
    * + starting one. Set for the self-deployed control plane (the "openship"

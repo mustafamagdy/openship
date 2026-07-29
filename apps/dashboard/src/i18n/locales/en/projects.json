@@ -159,6 +159,7 @@
     "tabs": {
       "appSettings": "Settings",
       "overview": "Overview",
+      "monitoring": "Monitoring",
       "services": "Apps & Services",
       "domains": "Domains & Routes",
       "deployments": "Deployments",
