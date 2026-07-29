@@ -1614,7 +1614,9 @@ const DeployTargetStep: React.FC<DeployTargetStepProps> = ({ targets, onContinue
             ))}
             {config.deployTarget === "server" &&
               !!config.serverId &&
-              config.options.hasServer && (
+              (config.options.hasServer ||
+                config.projectType === "services" ||
+                config.serviceDeploymentMode === "services") && (
                 <div className="rounded-xl border border-border/60 bg-card px-4 py-4 space-y-3">
                   <label className="flex items-start gap-3 cursor-pointer">
                     <input
