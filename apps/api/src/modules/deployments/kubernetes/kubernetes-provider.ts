@@ -468,6 +468,19 @@ function safeKubectlName(value: string): string {
   return value;
 }
 
+function kubernetesObjectName(object: KubernetesObject): string {
+  const metadata = object.metadata;
+  if (
+    typeof metadata !== "object" ||
+    metadata === null ||
+    !("name" in metadata) ||
+    typeof metadata.name !== "string"
+  ) {
+    throw new Error(`Kubernetes ${String(object.kind ?? "resource")} is missing metadata.name`);
+  }
+  return safeKubectlName(metadata.name);
+}
+
 export async function deployToKubernetes(
   executor: CommandExecutor,
   input: KubernetesDeployInput,
@@ -526,27 +539,46 @@ export async function deployStackToKubernetes(
   const built = buildKubernetesStackObjects(input);
   const namespace = safeKubectlName(built.namespace);
   const remoteDir = `/tmp/openship-kubernetes/${dnsLabel(input.deploymentId, "deployment")}`;
-  const manifestPath = `${remoteDir}/stack.json`;
+  const foundationManifestPath = `${remoteDir}/foundation.json`;
   const kubectl = input.kubectlCommand ?? "sudo -n kubectl";
   const timeout = positiveInt(
     input.rolloutTimeoutSeconds,
     DEFAULT_STACK_ROLLOUT_TIMEOUT_SECONDS,
   );
+  const deploymentObjects = new Map(
+    built.objects
+      .filter((object) => object.kind === "Deployment")
+      .map((object) => [kubernetesObjectName(object), object]),
+  );
+  const foundationObjects = built.objects.filter((object) => object.kind !== "Deployment");
 
   await executor.mkdir(remoteDir);
   try {
     await executor.writeFile(
-      manifestPath,
-      JSON.stringify({ apiVersion: "v1", kind: "List", items: built.objects }),
+      foundationManifestPath,
+      JSON.stringify({ apiVersion: "v1", kind: "List", items: foundationObjects }),
     );
-    onLog?.(`Applying ${built.deployments.length}-service Kubernetes stack in ${namespace}...`);
+    onLog?.(`Applying Kubernetes stack foundation in ${namespace}...`);
     await executor.exec(
-      `${kubectl} apply --server-side --field-manager=openship -f ${manifestPath}`,
+      `${kubectl} apply --server-side --field-manager=openship -f ${foundationManifestPath}`,
       { timeout: 120_000 },
     );
-    for (const deployment of built.deployments) {
+    for (const [index, deployment] of built.deployments.entries()) {
       const safeDeployment = safeKubectlName(deployment);
-      onLog?.(`Waiting for deployment/${safeDeployment}...`);
+      const deploymentObject = deploymentObjects.get(safeDeployment);
+      if (!deploymentObject) {
+        throw new Error(`Missing Kubernetes Deployment manifest for ${safeDeployment}`);
+      }
+      const deploymentManifestPath = `${remoteDir}/deployment-${safeDeployment}.json`;
+      await executor.writeFile(deploymentManifestPath, JSON.stringify(deploymentObject));
+      onLog?.(
+        `Deploying service ${index + 1}/${built.deployments.length}: deployment/${safeDeployment}...`,
+      );
+      await executor.exec(
+        `${kubectl} apply --server-side --field-manager=openship -f ${deploymentManifestPath}`,
+        { timeout: 120_000 },
+      );
+      onLog?.(`Waiting for deployment/${safeDeployment} before starting the next service...`);
       await executor.exec(
         `${kubectl} -n ${namespace} rollout status deployment/${safeDeployment} --timeout=${timeout}s`,
         { timeout: (timeout + 15) * 1_000 },
