@@ -30,6 +30,10 @@ import { parseVolumeSpec, type VolumeKind } from "./volume-spec";
 import { sq } from "../migration/direct-transfer";
 import { bounded, duBytes, volumeBytes } from "../migration/migration-size";
 import { deployComposeServices } from "../deployments/compose/deploy.service";
+import {
+  inventory as kubernetesInventory,
+} from "../deployments/kubernetes/kubernetes-control.service";
+import { kubernetesServiceContainers } from "./kubernetes-service-state";
 import { deriveProjectRouteState } from "../domains/project-route.service";
 import { registerStartupHook } from "../../lib/startup";
 import { buildServiceRouteDomains, serviceCustomHostnames } from "../../lib/routing-domains";
@@ -873,6 +877,23 @@ export async function getActiveServiceContainers(
 
   if (!dep) return flat("stopped"); // nothing deployed yet → nothing can be live
 
+  const deploymentMeta = (dep.meta ?? {}) as {
+    deploymentEngine?: string;
+    kubernetesServerId?: string;
+    kubernetesNamespace?: string;
+  };
+  if (
+    deploymentMeta.deploymentEngine === "kubernetes" ||
+    (deploymentMeta.kubernetesServerId && deploymentMeta.kubernetesNamespace)
+  ) {
+    const inventory = await withLiveQueryTimeout(
+      kubernetesInventory(dep.id, ctx.organizationId).catch(() => null),
+    );
+    return inventory
+      ? kubernetesServiceContainers(services, inventory, hints)
+      : flat("unknown");
+  }
+
   // ONE budget for the WHOLE live path — platform resolution included. That
   // resolution opens the pooled SSH connection (resolveServerExecutor →
   // sshManager.acquire), and it used to sit OUTSIDE the timeout: an unreachable
@@ -1439,4 +1460,3 @@ export async function streamServiceRuntimeLogs(
   };
   return { cleanup, serverId };
 }
-
