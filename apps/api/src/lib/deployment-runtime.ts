@@ -19,6 +19,7 @@ import { resolveOrgCloudUserId } from "./cloud/transport";
 import { platform } from "./controller-helpers";
 import { buildSshConfig, sshManager } from "./ssh-manager";
 import { createProvisionLock } from "./provision-lock";
+import { localNginxOptions } from "./certbot-state";
 
 /**
  * The shape of `deployment.meta` JSONB. Snapshotted per-deploy —
@@ -453,11 +454,6 @@ export async function resolveTargetPlatform(
       : undefined,
     provisionLock: createProvisionLock("provision:local"),
   });
-}
-
-function localNginxOptions(): PlatformConfig["nginx"] {
-  const certbotStateDir = process.env.OPENSHIP_CERTBOT_STATE_DIR?.trim();
-  return certbotStateDir ? { certbotStateDir } : undefined;
 }
 
 /**
