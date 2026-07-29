@@ -358,7 +358,20 @@ export class SshConnectionManager {
     fn: (executor: CommandExecutor) => Promise<T>,
   ): Promise<T> {
     const startedAt = Date.now();
+    let retained = false;
+    const retain = () => {
+      if (retained) return;
+      this.retain(serverId);
+      retained = true;
+    };
+    const release = () => {
+      if (!retained) return;
+      this.release(serverId);
+      retained = false;
+    };
+
     const executor = await this.acquire(serverId);
+    retain();
     try {
       const result = await fn(executor);
       this.recordSuccess(serverId);
@@ -368,8 +381,10 @@ export class SshConnectionManager {
       if (isRetryableRemoteConnectionError(err)) {
         const msg = safeErrorMessage(err);
         debugSsh(`withExecutor:retry-after-connection-error server=${serverId} ${msg}`);
+        release();
         this.dropServer(serverId);
         const freshExecutor = await this.acquire(serverId);
+        retain();
         const result = await fn(freshExecutor);
         this.recordSuccess(serverId);
         debugSsh(`withExecutor:retry-done server=${serverId} (${formatDuration(startedAt)})`);
@@ -383,6 +398,8 @@ export class SshConnectionManager {
       }
       debugSsh(`withExecutor:failed server=${serverId} (${formatDuration(startedAt)}) ${msg}`);
       throw err;
+    } finally {
+      release();
     }
   }
 
