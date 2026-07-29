@@ -113,6 +113,7 @@
     "tabs": {
       "appSettings": "設定",
       "overview": "概要",
+      "monitoring": "モニタリング",
       "services": "サービス",
       "domains": "ドメインとルート",
       "deployments": "デプロイ",

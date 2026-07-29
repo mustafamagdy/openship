@@ -113,6 +113,7 @@
     "tabs": {
       "appSettings": "设置",
       "overview": "概览",
+      "monitoring": "监控",
       "services": "服务",
       "domains": "域名与路由",
       "deployments": "部署",
