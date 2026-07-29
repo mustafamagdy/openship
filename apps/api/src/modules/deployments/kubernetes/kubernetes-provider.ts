@@ -213,10 +213,7 @@ export function buildKubernetesObjects(input: KubernetesDeployInput): {
       spec: {
         replicas: positiveInt(input.replicas, 1),
         revisionHistoryLimit: 5,
-        progressDeadlineSeconds: positiveInt(
-          input.rolloutTimeoutSeconds,
-          DEFAULT_STACK_ROLLOUT_TIMEOUT_SECONDS,
-        ),
+        progressDeadlineSeconds: positiveInt(input.rolloutTimeoutSeconds, 300),
         strategy: {
           type: "RollingUpdate",
           rollingUpdate: { maxSurge: 1, maxUnavailable: 0 },
@@ -350,7 +347,10 @@ export function buildKubernetesStackObjects(input: KubernetesStackDeployInput): 
       spec: {
         replicas,
         revisionHistoryLimit: 5,
-        progressDeadlineSeconds: positiveInt(input.rolloutTimeoutSeconds, 300),
+        progressDeadlineSeconds: positiveInt(
+          input.rolloutTimeoutSeconds,
+          DEFAULT_STACK_ROLLOUT_TIMEOUT_SECONDS,
+        ),
         strategy: {
           type: "RollingUpdate",
           rollingUpdate: { maxSurge: 1, maxUnavailable: 0 },
