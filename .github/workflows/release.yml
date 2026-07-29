@@ -578,10 +578,6 @@ jobs:
 
   publish-npm:
     name: Publish CLI to npm
-    if: >-
-      github.repository == 'oblien/openship' &&
-      github.event_name == 'push' &&
-      startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-24.04
     # npm is the ONE immutable artifact — a published version can never be
     # replaced. So it must publish LAST, only after every other job in the
@@ -595,7 +591,15 @@ jobs:
     needs: [publish]
     if: >-
       always() &&
-      (github.event_name == 'workflow_dispatch' || needs.publish.result == 'success')
+      github.repository == 'oblien/openship' &&
+      (
+        github.event_name == 'workflow_dispatch' ||
+        (
+          github.event_name == 'push' &&
+          startsWith(github.ref, 'refs/tags/v') &&
+          needs.publish.result == 'success'
+        )
+      )
     # OIDC trusted publishing: npm verifies this workflow's identity instead of
     # a long-lived token. id-token:write lets the runner mint the OIDC token.
     permissions:
