@@ -99,11 +99,20 @@ type EnsureProjectBody = TCreateProjectBody & { projectId?: string };
 function readDeployMeta(dep: Deployment | null | undefined): {
   deployTarget: string | null;
   serverId: string | null;
+  deploymentEngine: string | null;
 } {
-  const meta = (dep?.meta ?? null) as { deployTarget?: string; serverId?: string } | null;
+  const meta = (dep?.meta ?? null) as {
+    deployTarget?: string;
+    serverId?: string;
+    kubernetesServerId?: string;
+    deploymentEngine?: string;
+  } | null;
   return {
-    deployTarget: meta?.deployTarget ?? null,
-    serverId: meta?.serverId ?? null,
+    // Reader-facing topology: Kubernetes is a server workload even though its
+    // edge-routing runtime deliberately remains local to the OpenShip host.
+    deployTarget: meta?.kubernetesServerId ? "server" : (meta?.deployTarget ?? null),
+    serverId: meta?.serverId ?? meta?.kubernetesServerId ?? null,
+    deploymentEngine: meta?.deploymentEngine ?? (meta?.kubernetesServerId ? "kubernetes" : null),
   };
 }
 
@@ -145,10 +154,11 @@ export async function enrichProject(p: Project) {
   let deployTarget: string | null = null;
   let serverId: string | null = null;
   let serverName: string | null = null;
+  let deploymentEngine: string | null = null;
   let activeDep: Deployment | null = null;
   if (p.activeDeploymentId) {
     activeDep = (await repos.deployment.findById(p.activeDeploymentId)) ?? null;
-    ({ deployTarget, serverId } = readDeployMeta(activeDep));
+    ({ deployTarget, serverId, deploymentEngine } = readDeployMeta(activeDep));
     if (serverId) {
       const server = await repos.server.get(serverId);
       serverName = server?.name || server?.sshHost || null;
@@ -160,6 +170,7 @@ export async function enrichProject(p: Project) {
     deployTarget,
     serverId,
     serverName,
+    deploymentEngine,
     ...readActiveDeploymentSummary(activeDep),
     resources: encodeResources(production, build, p.sleepMode ?? "auto_sleep", p.port ?? 3000),
   };
@@ -187,8 +198,8 @@ export async function enrichProjectsBatch(
 
   const serverIds = new Set<string>();
   for (const d of deployments.values()) {
-    const meta = d.meta as { serverId?: string } | null;
-    if (meta?.serverId) serverIds.add(meta.serverId);
+    const { serverId } = readDeployMeta(d);
+    if (serverId) serverIds.add(serverId);
   }
   const servers = await repos.server
     .getMany(Array.from(serverIds))
@@ -201,10 +212,11 @@ export async function enrichProjectsBatch(
     let deployTarget: string | null = null;
     let serverId: string | null = null;
     let serverName: string | null = null;
+    let deploymentEngine: string | null = null;
     let activeDep: Deployment | null = null;
     if (p.activeDeploymentId) {
       activeDep = deployments.get(p.activeDeploymentId) ?? null;
-      ({ deployTarget, serverId } = readDeployMeta(activeDep));
+      ({ deployTarget, serverId, deploymentEngine } = readDeployMeta(activeDep));
       if (serverId) {
         const server = servers.get(serverId);
         serverName = server?.name || server?.sshHost || null;
@@ -216,6 +228,7 @@ export async function enrichProjectsBatch(
       deployTarget,
       serverId,
       serverName,
+      deploymentEngine,
       ...readActiveDeploymentSummary(activeDep),
       resources: encodeResources(production, build, p.sleepMode ?? "auto_sleep", p.port ?? 3000),
     };
