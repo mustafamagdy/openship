@@ -3,6 +3,10 @@ import { endpoints } from "./endpoints";
 import type { StackId, ComposeAdvanced, RoutingConfig } from "@repo/core";
 import type { CloudResourceTier, CloudResourceCustom, PublicEndpoint, PortCheckUI, OutputCheckUI } from "@/context/deployment/types";
 
+// Kubernetes mutations wait for rollout readiness server-side (up to 300s).
+// Leave enough client headroom for SSH setup and the final inventory refresh.
+export const KUBERNETES_ACTION_TIMEOUT = 330_000;
+
 export type PrepareProjectSource =
   | { source?: "github"; owner: string; repo: string; branch?: string; force?: string | boolean }
   | { source: "azure-devops"; owner: string; repo: string; branch?: string; force?: string | boolean }
@@ -300,14 +304,22 @@ export const deployApi = {
     api.get<any>(`deployments/${deploymentId}/kubernetes`),
 
   scaleKubernetesWorkload: (deploymentId: string, workload: string, replicas: number) =>
-    api.post<any>(`deployments/${deploymentId}/kubernetes/scale`, { workload, replicas }),
+    api.post<any>(
+      `deployments/${deploymentId}/kubernetes/scale`,
+      { workload, replicas },
+      { timeout: KUBERNETES_ACTION_TIMEOUT },
+    ),
 
   restartKubernetesWorkload: (deploymentId: string, workload: string) =>
-    api.post<any>(`deployments/${deploymentId}/kubernetes/restart`, { workload }),
+    api.post<any>(
+      `deployments/${deploymentId}/kubernetes/restart`,
+      { workload },
+      { timeout: KUBERNETES_ACTION_TIMEOUT },
+    ),
 
   replaceKubernetesPod: (deploymentId: string, pod: string) =>
     api.post<any>(`deployments/${deploymentId}/kubernetes/replace-pod`, {
       pod,
       confirmation: "REPLACE POD",
-    }),
+    }, { timeout: KUBERNETES_ACTION_TIMEOUT }),
 };
