@@ -10,11 +10,28 @@ import { fileURLToPath } from "node:url";
 
 import { ensureDashboard } from "../lib/dashboard";
 import { installAndStart, preview } from "../lib/service";
-import { composeUp, composeIsViableDefault, composeInternalToken, hasDockerCompose } from "../lib/compose";
-import { resolvePorts } from "../lib/ports";
+import {
+  composeUp,
+  composePrefetch,
+  composeIsViableDefault,
+  ensureDocker,
+  composeInternalToken,
+  hasDockerCompose,
+  sourceBuildDir,
+} from "../lib/compose";
+import { readInstanceUrl, resolvePorts } from "../lib/ports";
 import { prepareFromSource, type FromSourceRun } from "../lib/from-source";
+import {
+  markStoppedProxyImported,
+  planAndApplyHostEdge,
+  rollbackHostEdge,
+  completeHostEdge,
+  type EdgeAction,
+} from "../lib/edge-preflight";
+import { importMigratedSites } from "../lib/edge-import";
+import { edgeIsBroken, edgeCrashReason } from "@repo/adapters/proxy";
+import { LocalExecutor } from "@repo/adapters";
 import { loadUpdateSource } from "../lib/update-source";
-import { planAndApplyHostEdge, type EdgeAction } from "../lib/edge-preflight";
 import {
   resolveInstallInputs,
   headlessProvision,
@@ -56,6 +73,8 @@ interface UpOpts {
   bare?: boolean;
   /** Non-interactive answer for the compose edge preflight when a foreign proxy holds :80/:443. */
   edge?: string;
+  /** Withhold the api's channel to the HOST OS (hardening; see --no-host-control). */
+  hostControl?: boolean;
   /** Headless install: after the service is up, create the admin + register the
    *  domain from flags instead of prompting. Requires --admin-email + password. */
   nonInteractive?: boolean;
@@ -79,6 +98,27 @@ export function normalizeUrl(raw: string): string | null {
   } catch {
     return null;
   }
+}
+
+/**
+ * The public URL this run serves on: the flag, else the one this install is
+ * ALREADY configured with (`~/.openship/instance.json`).
+ *
+ * A plain `openship up` — the natural thing to do after `openship update` — used
+ * to drop it, and `OPENSHIP_PUBLIC_URL` is what puts the operator's domain in the
+ * API's `trustedOrigins`. Losing it leaves an install that still serves reads and
+ * 403s every mutation with `ORIGIN_REJECTED`, naming neither cause nor fix.
+ *
+ * A saved LOOPBACK url is deliberately not carried: that's the "no domain" value
+ * the wizard records, and handing it to OPENSHIP_PUBLIC_URL would tell the API it
+ * is publicly served when it isn't (which changes auth-mode and cookie gates).
+ * To clear a real one, edit `.env` and re-run — the edit is now preserved.
+ */
+function effectivePublicUrl(flag?: string): string | undefined {
+  if (flag) return normalizePublicUrl(flag);
+  const saved = readInstanceUrl();
+  if (!saved || /^https?:\/\/(localhost|127\.|\[?::1\]?)([:/]|$)/i.test(saved)) return undefined;
+  return normalizePublicUrl(saved);
 }
 
 /** Normalize a --public-url value, or exit with a hint if it's malformed. */
@@ -150,6 +190,10 @@ export const upCommand = new Command("up")
   .option("--repo <url>", "Git remote to clone for --from-source (default: oblien/openship)")
   .option("--compose", "Install via Docker Compose using the published images (postgres + redis + api + dashboard + edge on :80/:443). Default when Docker is available on Linux.")
   .option("--bare", "Install as the bare process service (embedded DB, no Docker) instead of Compose")
+  .option(
+    "--no-host-control",
+    "Harden: don't give the control plane a channel to this machine's OS. No host SSH key is generated or mounted, host operations refuse, and this box stops being offered as a deploy target. Recommended when this box only manages REMOTE servers — it loses :80/:443 takeover, the host terminal and host port scans. The Docker socket is still mounted (deployments need it), so this is defense in depth, not isolation.",
+  )
   .option("--edge <action>", "Compose mode: how to handle an existing proxy on :80/:443 — 'migrate' (import its sites into Openship's edge), 'takeover' (stop it; its sites stop serving), or 'cancel'. Default: prompt when interactive, else cancel.")
   .option("--non-interactive", "Headless install: after the service starts, create the admin + register the domain from the flags below (no prompts). Alias: --yes.")
   .option("--yes", "Alias for --non-interactive.")
@@ -164,9 +208,37 @@ export const upCommand = new Command("up")
     if (opts.fromSource || opts.source) return runFromSource(opts);
     if (opts.foreground) return runForeground(opts);
     const headless = !!(opts.nonInteractive || opts.yes);
-    // Install method: Compose is the default when it can actually work (Docker
-    // present on Linux — the edge container needs host networking); else bare.
-    const method = opts.bare ? "bare" : opts.compose ? "compose" : composeIsViableDefault() ? "compose" : "bare";
+    // Install method: Compose is the default when it can actually work (Docker on
+    // Linux — the edge container needs host networking); else bare.
+    //
+    // Docker is INSTALLED if missing, the same way the interactive wizard does it
+    // (ensureDocker → systemCatalog.installs.docker → get.docker.com). Without
+    // this, `openship up` on a fresh Linux box silently degraded to the bare
+    // install — a different topology than the docs promise — and `--compose` died
+    // on a raw "docker: not found" instead of just installing it.
+    let method: "bare" | "compose";
+    if (opts.bare) {
+      method = "bare";
+    } else if (opts.compose) {
+      // Explicitly asked for compose: install Docker or fail loudly. Falling back
+      // to bare here would quietly ignore the flag.
+      if (!(await ensureDocker())) {
+        console.error(
+          chalk.red("\n  --compose needs Docker + docker compose, and they couldn't be installed automatically.") +
+            chalk.dim(
+              "\n  Install Docker (https://docs.docker.com/engine/install/) and re-run, or use --bare.\n",
+            ),
+        );
+        process.exit(1);
+      }
+      method = "compose";
+    } else if (process.platform === "linux") {
+      method = (await ensureDocker()) ? "compose" : "bare";
+    } else {
+      // macOS/Windows: Docker Desktop can't be installed unattended and its edge
+      // container has no host networking.
+      method = composeIsViableDefault() ? "compose" : "bare";
+    }
     if (method === "compose") {
       const started = await runCompose(opts);
       if (headless && !opts.dryRun) {
@@ -271,6 +343,33 @@ async function runCompose(opts: UpOpts & { yes?: boolean }): Promise<{ apiPort: 
   // if a foreign proxy holds them we detect + (on consent) migrate/stop it on the
   // HOST first, reusing the native pipe (lib/edge-preflight.ts). The core delegates
   // this to `openship up` in docker-edge mode (apps/api/.../self-edge.ts).
+  // Resolved here rather than after the preflight: the prefetch below writes the
+  // same `.env` `composeUp` will, and both need the effective public URL.
+  const publicUrl = effectivePublicUrl(opts.publicUrl);
+
+  // Fetch the images BEFORE the preflight can stop anyone's proxy. A takeover that
+  // pulls afterwards keeps the box dark for the whole download, and a pull that
+  // fails takes their sites down for a problem we could have hit while they were
+  // still serving. See composePrefetch.
+  const prefetch = ora(
+    sourceBuildDir() ? "Building images before touching :80/:443…" : "Pulling images before touching :80/:443…",
+  ).start();
+  const fetched = composePrefetch({
+    apiPort: opts.port,
+    dashboardPort: opts.dashboardPort,
+    publicUrl,
+    trustProxy: opts.trustProxy,
+    noHostControl: opts.hostControl === false ? true : undefined,
+  });
+  if (!fetched) {
+    prefetch.fail("Couldn't fetch the stack's images — nothing was changed on this box.");
+    console.error(
+      chalk.dim("\n  Your current proxy is untouched and still serving. Fix the pull/build error above and re-run.\n"),
+    );
+    process.exit(1);
+  }
+  prefetch.succeed("Images ready — nothing on :80/:443 has changed yet.");
+
   let edgePlan;
   try {
     edgePlan = await planAndApplyHostEdge({ edge: opts.edge as EdgeAction | undefined });
@@ -289,33 +388,91 @@ async function runCompose(opts: UpOpts & { yes?: boolean }): Promise<{ apiPort: 
     process.exit(1);
   }
 
-  const publicUrl = opts.publicUrl ? normalizePublicUrl(opts.publicUrl) : undefined;
-  const spinner = ora("Starting Openship via Docker Compose…").start();
-  const res = composeUp({
+  const fromSource = sourceBuildDir();
+  const spinner = ora(
+    fromSource
+      ? `Building Openship from ${fromSource} and starting the stack…`
+      : "Starting Openship via Docker Compose…",
+  ).start();
+  const res = await composeUp({
+    // Prefetched above, before the preflight stopped anything.
+    alreadyFetched: true,
     apiPort: opts.port,
     dashboardPort: opts.dashboardPort,
     publicUrl,
     trustProxy: opts.trustProxy,
+    // commander maps `--no-host-control` to hostControl === false. `undefined` when
+    // the flag is absent, so a plain re-run keeps the install's original choice
+    // instead of silently re-granting host control (see resolveEnvConfig).
+    noHostControl: opts.hostControl === false ? true : undefined,
   });
   if (!res.ok) {
     spinner.fail("docker compose failed to start the stack");
+    // The preflight stopped AND disabled the operator's proxy to free 80/443. The
+    // stack isn't coming up, so put it back — never leave the box dark.
+    const restored = edgePlan.action ? await rollbackHostEdge() : false;
     console.error(
       chalk.dim("\n  Check `docker compose -f ~/.openship/compose/docker-compose.yml logs`.\n") +
-        (edgePlan.action
-          ? chalk.yellow("  Note: the previous proxy on :80/:443 was stopped during preflight — restart it manually if you're aborting.\n")
+        (restored
+          ? chalk.yellow("  Restored the previous proxy on :80/:443 — your sites are serving again.\n")
           : chalk.dim("  If ports 80/443 are held by another proxy, re-run — the preflight will offer to migrate or take over.\n")),
     );
     process.exit(1);
   }
   spinner.succeed("Openship is running via Docker Compose.");
 
+  // If we stopped the operator's proxy to free :80/:443, OUR edge now owes them a
+  // working one. `compose up -d` succeeds as soon as the container is CREATED, so a
+  // crash-looping edge gets this far reading as success — with their proxy stopped
+  // and every hostname on the box dark.
+  //
+  // Asks `edgeIsBroken`, not "is it serving": this branch STOPS our edge and restores
+  // theirs, so it must only fire on an unambiguous failure. An earlier version probed
+  // HTTP inside the container, got a false negative on a box serving live traffic, and
+  // reported it as dark — the guard became the outage.
+  //
+  // The takeover journal is deliberately left open: it is the record of what to
+  // restart, and `completeHostEdge()` below (not reached) is what discards it.
+  if (edgePlan.action && (await edgeIsBroken(new LocalExecutor()))) {
+    const reason = await edgeCrashReason(new LocalExecutor());
+    console.error(
+      chalk.red(`\n  Openship's edge container is not running${reason ? ` — ${reason}` : "."}`),
+    );
+    const restored = await rollbackHostEdge();
+    console.error(
+      restored
+        ? chalk.yellow(
+            `  Your previous proxy has been restarted — the box is serving again, on it.\n` +
+              `  Nothing was migrated. Fix the cause above, then re-run \`openship up\`.\n`,
+          )
+        : chalk.red(
+            `  AND your previous proxy could NOT be restarted automatically — the box is\n` +
+              `  serving nothing right now. Start it by hand:\n` +
+              `    docker stop openship-edge && sudo systemctl enable --now nginx\n`,
+          ),
+    );
+    process.exit(1);
+  }
+
   // Migrate: the container edge is up now, so re-register the foreign proxy's
   // sites into it. The api drives the DockerEdgeExecutor (the host CLI can't), so
-  // we hand it the parsed sites + host-read cert PEMs. Best-effort — the stack is
-  // already live; a failed import only affects those migrated sites.
+  // we hand it the parsed sites + host-read cert PEMs.
+  //
+  // NOT best-effort: we already stopped the operator's proxy, so an import that
+  // registers nothing means their hostnames are dark. Keep the takeover journal
+  // OPEN in that case — it is the only record of how to restart their proxy
+  // (unit + wasEnabled), and completing it throws that away. `importMigratedSites`
+  // has already printed the failure and the restore command.
+  let importedOk = true;
   if (edgePlan.action === "migrate" && edgePlan.sites?.length) {
-    await importMigratedSites(res.apiPort, edgePlan.sites, edgePlan.certPems);
+    const outcome = await importMigratedSites(res.apiPort, edgePlan.sites, edgePlan.certPems);
+    importedOk = outcome.registered.length > 0;
+    // Don't re-offer a stopped proxy's sites on the next run once they're in.
+    if (importedOk) markStoppedProxyImported();
   }
+  // Edge is serving — close the takeover journal so the next run's recovery
+  // doesn't mistake it for an interrupted one and restart the old proxy.
+  if (edgePlan.action && importedOk) await completeHostEdge();
 
   const dashboardUrl = publicUrl ?? `http://localhost:${res.dashPort}`;
   console.log(
@@ -326,60 +483,6 @@ async function runCompose(opts: UpOpts & { yes?: boolean }): Promise<{ apiPort: 
       (headless ? "" : chalk.dim("  Create an admin: open the dashboard and register the first account.\n")),
   );
   return { apiPort: res.apiPort, dashPort: res.dashPort };
-}
-
-/** Wait for the compose api container to answer its health stub. */
-async function waitForApiHealth(port: string, tries: number): Promise<boolean> {
-  for (let i = 0; i < tries; i++) {
-    try {
-      const r = await fetch(`http://127.0.0.1:${port}/api/health`, { signal: AbortSignal.timeout(2000) });
-      if (r.ok) return true;
-    } catch {
-      /* not up yet */
-    }
-    await new Promise((r) => setTimeout(r, 1000));
-  }
-  return false;
-}
-
-/**
- * Post the sites migrated off a foreign proxy to the api's internal edge-import
- * endpoint (the api registers them into the container edge). Uses the compose
- * stack's INTERNAL_TOKEN (from compose/.env — NOT the bare-mode token file).
- */
-async function importMigratedSites(
-  apiPort: string,
-  sites: ImportedSite[],
-  certPems?: Record<string, { certPem: string; keyPem: string }>,
-): Promise<void> {
-  const token = composeInternalToken();
-  if (!token) {
-    console.log(chalk.yellow("  Couldn't read the stack's internal token — skipping site import. Re-run to retry.\n"));
-    return;
-  }
-  const spinner = ora(`Importing ${sites.length} migrated site${sites.length === 1 ? "" : "s"} into the edge…`).start();
-  if (!(await waitForApiHealth(apiPort, 60))) {
-    spinner.warn("API didn't become healthy in time — migrated sites not imported. Re-run `openship up` to retry.");
-    return;
-  }
-  try {
-    const r = await fetch(`http://127.0.0.1:${apiPort}/api/system/edge/import-sites`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json", "X-Internal-Token": token },
-      body: JSON.stringify({ sites, certPems }),
-      signal: AbortSignal.timeout(120000),
-    });
-    const data = (await r.json().catch(() => ({}))) as { registered?: string[]; warnings?: string[]; error?: string };
-    if (!r.ok) {
-      spinner.warn(`Site import failed: ${data.error ?? `HTTP ${r.status}`}. Re-run to retry.`);
-      return;
-    }
-    const registered = data.registered ?? [];
-    spinner.succeed(`Migrated ${registered.length} site${registered.length === 1 ? "" : "s"} into Openship's edge.`);
-    for (const w of (data.warnings ?? []).slice(0, 8)) console.log(chalk.dim(`    • ${w}`));
-  } catch (e) {
-    spinner.warn(`Site import failed: ${(e as Error).message}. Re-run to retry.`);
-  }
 }
 
 /**
@@ -415,7 +518,7 @@ export async function startService(
   opts: UpOpts,
   runOpts: { quiet?: boolean } = {},
 ): Promise<{ port: string; dashPort: string; publicUrl?: string }> {
-  const publicUrl = opts.publicUrl ? normalizePublicUrl(opts.publicUrl) : undefined;
+  const publicUrl = effectivePublicUrl(opts.publicUrl);
 
   // Dry-run only previews the unit file — don't probe or persist ports.
   if (opts.dryRun) {
@@ -528,7 +631,7 @@ async function runForeground(opts: UpOpts, source?: FromSourceRun): Promise<void
     });
     const port = String(resolved.api);
     const dashPort = String(resolved.dashboard);
-    const publicUrl = opts.publicUrl ? normalizePublicUrl(opts.publicUrl) : undefined;
+    const publicUrl = effectivePublicUrl(opts.publicUrl);
     const managedEdge = Boolean(opts.managedEdge && publicUrl);
     const dataDir: string = opts.dataDir || join(OS_DIR, "data");
     mkdirSync(dataDir, { recursive: true });
@@ -566,12 +669,25 @@ async function runForeground(opts: UpOpts, source?: FromSourceRun): Promise<void
     if (!source) {
       env.OPENSHIP_MIGRATIONS_DIR = join(SERVER_DIR, "migrations");
       env.OPENSHIP_PGLITE_ASSETS_DIR = join(SERVER_DIR, "pglite");
+      // Pin the mail-server install source to the staged engine tree. The
+      // bundled server has no monorepo, so mail.service.ts's cwd-relative
+      // default (../../apps/email/engine) would miss and "Transfer iRedMail
+      // Engine" would fail with tar: could not chdir. from-source runs from the
+      // clone (apiCwd=apiDir), where the default resolves — so leave it unset.
+      const engineDir = join(SERVER_DIR, "engine");
+      if (existsSync(engineDir)) env.MAIL_SERVER_ENGINE_DIR = engineDir;
     }
     // CLI-managed instances ALWAYS require login (zero-auth is desktop-only).
     // The admin is created by `openship` setup via the internal-token-gated
     // bootstrap endpoint; both processes share this token file.
     env.OPENSHIP_REQUIRE_AUTH = "true";
     env.INTERNAL_TOKEN = ensureInternalToken();
+    // DEPLOY_MODE is "desktop" here (in-process job runner), and the server no
+    // longer INFERS the auth mode from it — it exits at boot unless the launcher
+    // DECLARES OPENSHIP_AUTH_MODE (see apps/api/src/config/env.ts). Declare
+    // "local": a CLI-managed box logs in with the bootstrap-created admin, never
+    // zero-auth (that is desktop-app-only). Honor an explicit operator override.
+    if (!env.OPENSHIP_AUTH_MODE) env.OPENSHIP_AUTH_MODE = "local";
     // The API ALWAYS binds loopback under the CLI — reachable only by the setup
     // wizard and the dashboard proxy on this same box, never exposed on
     // 0.0.0.0. Only the dashboard is ever public, and only in --public-url mode.

@@ -35,6 +35,7 @@
   <a href="docs/i18n/README.pt.md"><img src="https://img.shields.io/badge/lang-Português-555" alt="Português" /></a>
   <a href="docs/i18n/README.de.md"><img src="https://img.shields.io/badge/lang-Deutsch-555" alt="Deutsch" /></a>
   <a href="docs/i18n/README.tr.md"><img src="https://img.shields.io/badge/lang-Türkçe-555" alt="Türkçe" /></a>
+  <a href="docs/i18n/README.ko.md"><img src="https://img.shields.io/badge/lang-한국어-555" alt="한국어" /></a>
 </p>
 
 <p align="center">
@@ -97,7 +98,8 @@ A self-hosted instance **always requires login** (the admin you create in setup)
 > **Preview an unreleased build (dev).** To run the CLI built straight from source — a branch, tag, or `main` ahead of the next release — install the from-source build:
 >
 > ```bash
-> curl -fsSL https://get.openship.io/dev | sh     # or: OPENSHIP_REF=my-branch curl ... | sh
+> curl -fsSL https://get.openship.io/dev | sh                  # main (default)
+> curl -fsSL https://get.openship.io/dev | OPENSHIP_REF=dev sh  # a branch/tag (var goes on sh, not curl)
 > openship-dev                                     # same CLI, built from source
 > openship-dev update                              # pull latest source + rebuild (no release needed)
 > ```
@@ -216,32 +218,6 @@ See [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ---
 
-## Releasing
-
-Cut a release with the version script — it syncs every package's version,
-commits the bump, tags `vX.Y.Z`, and pushes:
-
-```bash
-bun scripts/release.ts 0.2.0        # explicit version
-# or a bump keyword: patch | minor | major | rc   (minor from 0.1.x → 0.2.0)
-```
-
-Pushing the tag triggers [`.github/workflows/release.yml`](.github/workflows/release.yml), which:
-
-- builds the **macOS / Windows / Linux installers** and the server tarballs (with SHA-256 sidecars),
-- **publishes the `openship` CLI to npm** — via npm [OIDC trusted publishing](https://docs.npmjs.com/trusted-publishers) (no token), and
-- creates the **GitHub Release** with the built assets (notes come from the tag).
-
-Official Docker images (`ghcr.io/oblien/openship-{api,dashboard,edge}`) publish from
-[`.github/workflows/docker-images.yml`](.github/workflows/docker-images.yml) — on a version tag, or on demand with `bun scripts/release.ts docker`.
-
-To flag a release as **critical** (or add recommended/info advisories) in the
-in-app updater, add an entry to [`release-advisories.json`](release-advisories.json)
-**before** tagging — clients pull it pinned to the release tag. High-level notes
-live in [`CHANGELOG.md`](CHANGELOG.md).
-
----
-
 ## Security
 
 Found a vulnerability? We welcome your report — please disclose it **privately**,
@@ -254,29 +230,6 @@ Good-faith security research is **authorized** under our
 [safe-harbor policy](SECURITY.md#safe-harbor), and we're happy to credit valid
 first reports.
 
----
-## ⭐ Star History
-
-<p align="center">
-  <a href="https://star-history.com/#oblien/openship&Date">
-    <picture>
-      <source
-        media="(prefers-color-scheme: dark)"
-        srcset="https://api.star-history.com/svg?repos=oblien/openship&type=Date&theme=dark"
-      />
-      <source
-        media="(prefers-color-scheme: light)"
-        srcset="https://api.star-history.com/svg?repos=oblien/openship&type=Date"
-      />
-      <img
-        alt="Star History Chart"
-        src="https://api.star-history.com/svg?repos=oblien/openship&type=Date"
-      />
-    </picture>
-  </a>
-</p>
-
----
 ## License
 
 Openship is **open-source** software, licensed under the [Apache License 2.0](LICENSE).

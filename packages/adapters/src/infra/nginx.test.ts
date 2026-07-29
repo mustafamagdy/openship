@@ -1,7 +1,7 @@
 import { describe, expect, test } from "vitest";
 import { NginxProvider, renderProxyOptions } from "./nginx";
 import { PROXY_GZIP_TYPES } from "@repo/core";
-import { OPENRESTY_DEFAULT_PATHS, luaSourceAvailable, RULES_GUARD_PATH, ACME_HTTP01_PORT } from "./openresty-lua";
+import { OPENRESTY_DEFAULT_PATHS, luaSourceAvailable, RULES_GUARD_PATH, ACME_HTTP01_PORT, ensureOpenRestyConfig } from "./openresty-lua";
 import type { CommandExecutor, ProvisionLock, RouteConfig } from "../types";
 
 // L1 — config GENERATION. Proves NginxProvider emits the right nginx directives
@@ -112,9 +112,13 @@ describe("NginxProvider config generation", () => {
 
   test("static route → root + try_files, app is not proxied", async () => {
     const { nginx, conf } = setup();
-    await nginx.registerRoute({ domain: "site.example.com", tls: false, staticRoot: "/var/www/site" });
+    await nginx.registerRoute({
+      domain: "site.example.com",
+      tls: false,
+      staticRoot: "/opt/openship/static/site/dist",
+    });
     const c = conf("site-example-com")!;
-    expect(c).toContain("root /var/www/site;");
+    expect(c).toContain("root /opt/openship/static/site/dist;");
     expect(c).toContain("try_files $uri $uri/ /index.html;");
     // The ONLY proxy_pass allowed on a static vhost is the ACME-challenge
     // location (→ certbot's standalone server); the app itself is served, not
@@ -280,5 +284,80 @@ describe("registerRoute renders proxy directives at server scope", () => {
     const { nginx, conf } = setup({ certDomains: ["app.example.com"] });
     await nginx.registerRoute(PROXY);
     expect(conf("app-example-com")!).not.toContain("client_max_body_size");
+  });
+});
+
+// Security: an HTTPS request whose SNI matches no vhost must NOT fall through to
+// the first-loaded 443 server block (cross-serving another app's cert+backend).
+// The default catch-all owns `443 ssl default_server` and rejects unknown SNI.
+describe("default catch-all rejects unmatched HTTPS hosts", () => {
+  test("ensureOpenRestyConfig writes a 443 default_server that rejects unknown SNI", async () => {
+    const files = new Map<string, string>();
+    const calls: string[] = [];
+    // nginx.conf already present → exercises the steady-state path (not bootstrap).
+    files.set(PATHS.confPath, `http {\n    include ${SITES}/*.conf;\n}\n`);
+    await ensureOpenRestyConfig(makeExecutor(files, {}, calls), PATHS);
+    const def = files.get(`${SITES}/_default.conf`);
+    expect(def).toBeDefined();
+    expect(def).toContain("listen 443 ssl default_server;");
+    expect(def).toContain("ssl_reject_handshake on;");
+    // and the HTTP catch-all stays a default_server too (no fallthrough on :80).
+    expect(def).toContain("listen 80 default_server;");
+  });
+
+  test("catch-all is re-written on every ensure (self-heals a stale 80-only copy)", async () => {
+    const files = new Map<string, string>();
+    files.set(PATHS.confPath, `http {\n    include ${SITES}/*.conf;\n}\n`);
+    // Simulate an already-deployed box whose _default.conf predates the 443 reject.
+    files.set(`${SITES}/_default.conf`, "server {\n    listen 80 default_server;\n}\n");
+    await ensureOpenRestyConfig(makeExecutor(files, {}, []), PATHS);
+    expect(files.get(`${SITES}/_default.conf`)).toContain("ssl_reject_handshake on;");
+  });
+});
+
+describe("static root confinement", () => {
+  test("refuses a managed root outside /opt/openship", async () => {
+    const { nginx } = setup();
+    // The whole point: a route we generate must not be able to publish an arbitrary
+    // host directory. Fails closed rather than serving it.
+    await expect(
+      nginx.registerRoute({ domain: "evil.example.com", tls: false, staticRoot: "/etc" }),
+    ).rejects.toThrow(/Refusing to serve static root outside/);
+  });
+
+  test("prefix alone is not enough — a sibling dir cannot pose as a child", async () => {
+    const { nginx } = setup();
+    await expect(
+      nginx.registerRoute({
+        domain: "evil.example.com",
+        tls: false,
+        staticRoot: "/opt/openship-evil/dist",
+      }),
+    ).rejects.toThrow(/Refusing to serve static root outside/);
+  });
+
+  test("allows an ADOPTED root outside the base (proxy migration)", async () => {
+    const { nginx, conf } = setup();
+    // An imported vhost's root is already public on the operator's own nginx;
+    // refusing it would break taking that proxy over.
+    await nginx.registerRoute({
+      domain: "legacy.example.com",
+      tls: false,
+      staticRoot: "/var/www/legacy",
+      staticRootAdopted: true,
+    });
+    expect(conf("legacy-example-com")).toContain("root /var/www/legacy;");
+  });
+
+  test("still refuses traversal and injection even when adopted", async () => {
+    const { nginx } = setup();
+    await expect(
+      nginx.registerRoute({
+        domain: "x.example.com",
+        tls: false,
+        staticRoot: "/var/www/../../etc",
+        staticRootAdopted: true,
+      }),
+    ).rejects.toThrow(/must be an absolute path, no traversal/);
   });
 });

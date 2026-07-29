@@ -1,4 +1,4 @@
-import { eq, and, lt, inArray } from "drizzle-orm";
+import { eq, and, ne, lt, inArray } from "drizzle-orm";
 import { generateId } from "@repo/core";
 import type { Database } from "../client";
 import { domain, project } from "../schema";
@@ -11,6 +11,30 @@ export type NewDomain = typeof domain.$inferInsert;
 // ─── Repository ──────────────────────────────────────────────────────────────
 
 export function createDomainRepo(db: Database) {
+  /**
+   * A project has exactly ONE primary domain: promoting one demotes the rest.
+   *
+   * The single implementation behind both `setPrimary` (explicit switch) and
+   * `findOrCreate` (a write that asks for `isPrimary`). `findOrCreate` used to
+   * only SET the flag, so adding a second primary — the CLI attaching a real
+   * custom domain after a free `*.opsh.io` had been registered — left two rows
+   * flagged, and readers took whichever came back first: the Domains tab showed a
+   * stale, never-verified subdomain as the project's address while the box was
+   * served on the custom one.
+   */
+  async function promotePrimary(projectId: string, domainId: string) {
+    await db
+      .update(domain)
+      .set({ isPrimary: false, updatedAt: new Date() })
+      .where(
+        and(eq(domain.projectId, projectId), eq(domain.isPrimary, true), ne(domain.id, domainId)),
+      );
+    await db
+      .update(domain)
+      .set({ isPrimary: true, updatedAt: new Date() })
+      .where(eq(domain.id, domainId));
+  }
+
   return {
     async findById(id: string) {
       return db.query.domain.findFirst({
@@ -131,9 +155,14 @@ export function createDomainRepo(db: Database) {
       if (existing) {
         // Promote to primary if caller wants it and it isn't already
         if (data.isPrimary && !existing.isPrimary) {
-          await db.update(domain)
-            .set({ isPrimary: true, updatedAt: new Date() })
-            .where(eq(domain.id, existing.id));
+          // projectId is nullable (webhook-owned rows have no project) — those
+          // just get the flag, there are no siblings to demote.
+          if (existing.projectId) await promotePrimary(existing.projectId, existing.id);
+          else {
+            await db.update(domain)
+              .set({ isPrimary: true, updatedAt: new Date() })
+              .where(eq(domain.id, existing.id));
+          }
           return { ...existing, isPrimary: true };
         }
         return existing;
@@ -148,6 +177,7 @@ export function createDomainRepo(db: Database) {
       };
       try {
         await db.insert(domain).values(row);
+        if (row.isPrimary && row.projectId) await promotePrimary(row.projectId, id);
         return { ...row, createdAt: new Date(), updatedAt: new Date() } as Domain;
       } catch (err: any) {
         // Handle race: another deploy inserted between our check and insert
@@ -178,6 +208,62 @@ export function createDomainRepo(db: Database) {
     },
 
     /**
+     * Flip a row to verified + SSL active (+ promote to primary) in ONE
+     * transaction.
+     *
+     * These three writes describe a single outcome — "this domain is live on TLS" —
+     * and the callers ran them as separate awaits, so a failure between them left a
+     * row that read `verified` with no active SSL, or verified-and-active but not
+     * primary. The infra work (the cert on disk) has already succeeded by the time
+     * this runs, so a half-applied row is pure drift: the box serves the domain
+     * while Openship shows it pending.
+     *
+     * `promote` demotes the project's other primaries first, and is skipped when
+     * the caller has decided this row shouldn't take primary.
+     */
+    async markVerifiedActive(
+      id: string,
+      data: {
+        sslStatus: string;
+        sslIssuer?: string;
+        sslExpiresAt?: Date;
+        manualSsl?: boolean;
+        promote?: { projectId: string };
+      },
+    ) {
+      const { promote, ...ssl } = data;
+      await db.transaction(async (tx) => {
+        const now = new Date();
+        await tx
+          .update(domain)
+          .set({
+            verified: true,
+            verifiedAt: now,
+            status: "active",
+            verifyAttempts: 0,
+            lastVerifyError: null,
+            lastCheckedAt: now,
+            ...ssl,
+            updatedAt: now,
+          })
+          .where(eq(domain.id, id));
+        if (promote) {
+          await tx
+            .update(domain)
+            .set({ isPrimary: false, updatedAt: now })
+            .where(
+              and(
+                eq(domain.projectId, promote.projectId),
+                eq(domain.isPrimary, true),
+                ne(domain.id, id),
+              ),
+            );
+          await tx.update(domain).set({ isPrimary: true, updatedAt: now }).where(eq(domain.id, id));
+        }
+      });
+    },
+
+    /**
      * Record a failed verification attempt: bump the counter, stamp the time +
      * reason, and flip status to `failed` only once attempts cross `failAfter`
      * (so a still-propagating domain stays `pending`, a misconfigured one
@@ -203,9 +289,12 @@ export function createDomainRepo(db: Database) {
       return attempts;
     },
 
+    /** `manualSsl` is declared because callers pass it (via spread, which slips
+     *  past excess-property checking) — the flag decides whether the SSL scheduler
+     *  will renew this row, so it must be visible in the type. */
     async updateSsl(
       id: string,
-      data: { sslStatus: string; sslIssuer?: string; sslExpiresAt?: Date },
+      data: { sslStatus: string; sslIssuer?: string; sslExpiresAt?: Date; manualSsl?: boolean },
     ) {
       await this.update(id, data);
     },
@@ -249,6 +338,37 @@ export function createDomainRepo(db: Database) {
      * immediate Verify click. Free-managed rows are excluded; they
      * don't go through DNS verification (we own the suffix).
      */
+    /**
+     * Custom domains that are DNS-VERIFIED but still have no usable certificate.
+     *
+     * The gap this closes: `findPendingVerification` only returns `verified: false`
+     * rows, and the renewal sweep only looks at certs that already exist (it needs an
+     * expiry to compare). A domain whose first issuance failed is verified with
+     * `sslStatus: "provisioning"` — too verified for one job, no cert for the other —
+     * so nothing retried it and the operator had to click Verify + Redeploy by hand.
+     */
+    async findPendingSsl(limit = 50, organizationId?: string): Promise<Domain[]> {
+      const conds = [
+        eq(domain.verified, true),
+        eq(domain.domainType, "custom"),
+        inArray(domain.sslStatus, ["provisioning", "none", "pending"]),
+        // Externally-terminated TLS is not ours to issue; certbot never will.
+        eq(domain.externalIngress, false),
+      ];
+      if (organizationId) {
+        conds.push(
+          inArray(
+            domain.projectId,
+            db
+              .select({ id: project.id })
+              .from(project)
+              .where(eq(project.organizationId, organizationId)),
+          ),
+        );
+      }
+      return db.select().from(domain).where(and(...conds)).limit(limit);
+    },
+
     async findPendingVerification(
       beforeDate: Date,
       limit = 100,
@@ -280,18 +400,9 @@ export function createDomainRepo(db: Database) {
       return rows.slice(0, limit);
     },
 
-    /** Set primary domain for a project (unsets previous primary) */
+    /** Set primary domain for a project (unsets previous primary). */
     async setPrimary(projectId: string, domainId: string) {
-      // Unset current primary
-      await db
-        .update(domain)
-        .set({ isPrimary: false, updatedAt: new Date() })
-        .where(and(eq(domain.projectId, projectId), eq(domain.isPrimary, true)));
-      // Set new primary
-      await db
-        .update(domain)
-        .set({ isPrimary: true, updatedAt: new Date() })
-        .where(eq(domain.id, domainId));
+      await promotePrimary(projectId, domainId);
     },
   };
 }

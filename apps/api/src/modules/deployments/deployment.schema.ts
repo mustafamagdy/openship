@@ -143,6 +143,12 @@ export const BuildAccessBody = Type.Object({
       description: "Subset of serviceIds to recreate WITHOUT rebuilding (env-only refresh).",
     }),
   ),
+  handoverImages: Type.Optional(
+    Type.Record(Type.String(), Type.String(), {
+      description:
+        "ONE-TIME migration image handover: serviceName → an already-present image ref. Those services deploy from that image with no build/pull; used only on a migration's first deploy.",
+    }),
+  ),
   cloudResourceTier: Type.Optional(
     Type.Union([
       Type.Literal("micro"),
@@ -158,7 +164,6 @@ export const BuildAccessBody = Type.Object({
       { description: "CPU/RAM/disk when cloudResourceTier='custom'." },
     ),
   ),
-  forwardGitCredentials: Type.Optional(Type.Boolean()),
   cloneStrategy: Type.Optional(Type.Union([Type.Literal("api-host"), Type.Literal("server")])),
 });
 

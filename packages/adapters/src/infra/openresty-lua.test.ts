@@ -12,6 +12,7 @@ describe("OpenResty managed-edge integration", () => {
     const calls: string[] = [];
     const executor = {
       mkdir: async () => {},
+      writeFile: async () => {},
       exists: async () => true,
       exec: async (command: string) => {
         calls.push(command);

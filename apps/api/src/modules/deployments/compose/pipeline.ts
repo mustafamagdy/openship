@@ -15,6 +15,7 @@
 import { repos } from "@repo/db";
 import type { Deployment, Project } from "@repo/db";
 import type {
+  AmbientGitVia,
   CommandExecutor,
   ResourceConfig,
   MultiServiceRuntimeAdapter,
@@ -72,6 +73,8 @@ export interface ComposePipelineOpts {
   gitCredentialHelperPath?: string;
   /** Per-server SSH clone credential (ssh-server-key / deploy-key mode). */
   gitSsh?: { privateKey: string; knownHosts: string };
+  /** The build host clones with its OWN verified git credentials (nothing shipped). */
+  gitAmbient?: { via: AmbientGitVia };
   /** Clone each service's source on the remote build host instead of cloning on
    *  the orchestrator and transferring the context. */
   cloneOnServer?: boolean;
@@ -104,6 +107,7 @@ export async function executeComposePipeline(opts: ComposePipelineOpts): Promise
     gitUsername,
     gitCredentialHelperPath,
     gitSsh,
+    gitAmbient,
     cloneOnServer,
   } = opts;
 
@@ -132,6 +136,7 @@ export async function executeComposePipeline(opts: ComposePipelineOpts): Promise
     gitUsername,
     gitCredentialHelperPath,
     gitSsh,
+    gitAmbient,
     cloneOnServer,
     targetServiceIds,
     refreshServiceIds,

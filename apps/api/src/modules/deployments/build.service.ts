@@ -217,6 +217,11 @@ export interface DeploymentConfigSnapshot {
    * same pipeline, discriminated by `kind`. See `DeployableService`.
    */
   composeServices?: DeployableService[];
+  /** ONE-TIME migration image handover: serviceName → an already-present image
+   *  ref. Set only on the migration's first deploy so mapped services deploy from
+   *  their transferred/running image (no build, no pull); a later Redeploy has no
+   *  handover and rebuilds/pulls natively. Consumed by buildComposeImages. */
+  handoverImages?: Record<string, string>;
   /** Summary of a compose deployment fan-out, when applicable. */
   composeDeployment?: {
     totalServices: number;
@@ -864,9 +869,9 @@ export async function requestBuildAccess(ctx: RequestContext, input: BuildAccess
     services,
     serviceIds,
     refreshServiceIds,
+    handoverImages,
     cloudResourceTier,
     cloudResourceCustom,
-    forwardGitCredentials,
     cloneStrategy,
   } = input;
 
@@ -890,6 +895,18 @@ export async function requestBuildAccess(ctx: RequestContext, input: BuildAccess
   await checkNoActiveBuild(project.id);
 
   const resolvedBranch = await resolveProjectBranch(ctx, project, branch);
+
+  // Reconcile the repo's compose BEFORE resolving the service set — the third
+  // deploy entry point (alongside redeployBuildSession + triggerDeployment) that
+  // must do this. Without it a deploy only ever sees the CURRENT service rows, so
+  // a repo compose service that isn't in the collection yet (e.g. a migrated
+  // stack whose repo adds `redis`) is never created or deployed. reconcileFromCompose
+  // CREATES the missing ones (native) and, for freshly-adopted rows (importedSpec
+  // null), bootstraps their baseline while KEEPING the adopted image — so mapped
+  // services reuse their running image (no rebuild) and everything else in the
+  // compose is taken from the repo. Best-effort; self-guards to compose+git projects.
+  await reconcileComposeDrift(ctx, project, resolvedBranch);
+
   const projectDomains = await listProjectRouteRows(project.id);
   let routeState = await resolveProjectRouteState(project, { projectDomains });
   const snapshot = buildConfigSnapshot(project, resolvedBranch);
@@ -939,6 +956,12 @@ export async function requestBuildAccess(ctx: RequestContext, input: BuildAccess
 
   if (requestedServiceMode) {
     snapshot.serviceDeploymentMode = requestedServiceMode;
+  }
+  // Migration image handover (one-time): mapped services deploy from their
+  // transferred/running image with no build/pull. Only ever set by the migration
+  // orchestrator's first deploy; a normal deploy leaves it unset → native build/pull.
+  if (handoverImages && Object.keys(handoverImages).length > 0) {
+    snapshot.handoverImages = handoverImages;
   }
   if (requestedServiceMode === "services" && services?.length) {
     snapshot.composeServices = services;
@@ -1054,12 +1077,13 @@ export async function requestBuildAccess(ctx: RequestContext, input: BuildAccess
       : buildStrategy ?? snapshot.buildStrategy,
     { deployTarget: snapshot.deployTarget },
   );
-  // Per-deploy git credential forwarding choice (desktop-only; default off).
-  // We carry the raw choice; the build pipeline enforces desktop + server-build
-  // gating before opening the relay, so a forged flag elsewhere is inert.
-  if (forwardGitCredentials === true) {
-    snapshot.forwardGitCredentials = true;
-  }
+  // Git-credential forwarding is now a GENERIC per-operator preference (Settings →
+  // Clone credentials), not a per-deploy toggle. Source it from the deploying
+  // user's setting as an EXPLICIT boolean: clone-plan treats `!== false` as
+  // eligible, so leaving it undefined when the setting is off would silently
+  // re-enable the relay on desktop. The build pipeline still enforces desktop +
+  // server-build + SSH gating before opening the relay.
+  snapshot.forwardGitCredentials = await settingsService.getForwardGitToServer(ctx.userId);
   // Per-deploy clone location. "server" makes a docker deploy clone on the build
   // host (relay on desktop, token otherwise); the pipeline gates it. Default
   // "api-host" (clone on the orchestrator + transfer) when unset.
@@ -1162,7 +1186,19 @@ export async function requestBuildAccess(ctx: RequestContext, input: BuildAccess
 }
 
 
-export async function cancelBuildSession(deploymentId: string) {
+/**
+ * Cancel an in-flight deployment.
+ *
+ * `keepProvisioned` aborts the build and marks the row cancelled but SKIPS the
+ * runtime teardown — the record-only ("remove from Openship only") delete needs
+ * to quiesce an in-flight deploy while honoring its "nothing on the server is
+ * touched" guarantee, so it must never destroy the containers/images the deploy
+ * had already provisioned.
+ */
+export async function cancelBuildSession(
+  deploymentId: string,
+  opts: { keepProvisioned?: boolean } = {},
+) {
   const { dep, project } = await loadDeployment(deploymentId);
 
   if (!["queued", "building", "deploying"].includes(dep.status)) {
@@ -1183,16 +1219,20 @@ export async function cancelBuildSession(deploymentId: string) {
   //    service) and ALL images (deployment + each service's built image),
   //    deduplicated. Volumes are deliberately NOT cleaned - cancel !=
   //    delete, and the user may retry.
-  const manifest = await collectDeploymentManifest(dep, project).catch(
-    (): CleanupManifest => ({ projectId: dep.projectId, resources: [] }),
-  );
-  if (manifest.resources.length > 0) {
-    await executeCleanup(manifest).catch((err) => {
-      // Per-item failures are already isolated inside executeCleanup, so we
-      // only land here on an unexpected crash. Log and continue - cancel
-      // still has to mark the deployment cancelled, leak or no leak.
-      console.error(`[CANCEL] Cleanup crashed for ${dep.id}:`, err);
-    });
+  if (opts.keepProvisioned) {
+    console.log(`[CANCEL] ${dep.id}: keeping provisioned resources (record-only delete)`);
+  } else {
+    const manifest = await collectDeploymentManifest(dep, project).catch(
+      (): CleanupManifest => ({ projectId: dep.projectId, resources: [] }),
+    );
+    if (manifest.resources.length > 0) {
+      await executeCleanup(manifest).catch((err) => {
+        // Per-item failures are already isolated inside executeCleanup, so we
+        // only land here on an unexpected crash. Log and continue - cancel
+        // still has to mark the deployment cancelled, leak or no leak.
+        console.error(`[CANCEL] Cleanup crashed for ${dep.id}:`, err);
+      });
+    }
   }
 
   // 3. Surface service-level cancellation in the SSE stream so the UI stops
@@ -1238,7 +1278,7 @@ export async function redeployBuildSession(
   // and fakes success while the running control plane is untouched.
   if (project.appTemplateId === "openship") {
     throw new ForbiddenError(
-      "The Openship control plane updates itself — run the CLI upgrade, not a redeploy.",
+      "The Openship control plane updates itself — run `openship update` on the host, not a redeploy.",
     );
   }
   // GitHub access gate (default-deny): a member can redeploy a
@@ -1317,8 +1357,15 @@ export async function redeployBuildSession(
   const currentComposeServices = projectServicesToDeployableServices(
     currentComposeRows.filter((s) => s.enabled),
   );
+  // Strip the migration image handover: it is a ONE-TIME cutover input on the
+  // migration's first deploy. Carrying it forward on a Redeploy would keep
+  // reusing the transferred/stale image and never reclone+rebuild (and 404 if
+  // that tag was pruned) — the migrated project must behave like a native repo
+  // project from the second deploy on. `meta.handoverImages` is intentionally
+  // dropped here (a real rollback restores its own artifact via its own meta).
+  const { handoverImages: _handoverImages, ...forwardedMeta } = meta;
   const refreshedMeta: DeploymentConfigSnapshot = {
-    ...meta,
+    ...forwardedMeta,
     composeServices: currentComposeServices.length > 0 ? currentComposeServices : undefined,
   };
 
@@ -1487,7 +1534,7 @@ export async function triggerDeployment(
   // the git/localPath 403 below would NOT catch it; guard it explicitly.
   if (project.appTemplateId === "openship") {
     throw new ForbiddenError(
-      "The Openship control plane updates itself — run the CLI upgrade, not a redeploy.",
+      "The Openship control plane updates itself — run `openship update` on the host, not a redeploy.",
     );
   }
   // Org-membership verified at the route boundary. No userId equality

@@ -16,6 +16,7 @@ import { LibrarySidebar } from "./components/LibrarySidebar";
 import { UrlImport } from "./components/UrlImport";
 import { TemplateGrid } from "./components/TemplateGrid";
 import { PageContainer } from "@/components/ui/PageContainer";
+import { HelpMenu } from "@/components/HelpMenu";
 import { ServerMigrationWizard } from "@/components/migration/ServerMigrationWizard";
 import { AzureReposList } from "./components/AzureReposList";
 import { useI18n } from "@/components/i18n-provider";
@@ -75,9 +76,14 @@ export default function LibraryPage() {
     localStorage.setItem(GH_CLI_CONSENT_KEY, "1");
     setGhCliConsent(true);
   }, []);
-  // Gate only the gh-CLI source; the Openship App (OAuth) is already an explicit
-  // connection and needs no extra prompt.
-  const needsGhCliConsent = state.primary === "gh-cli" && !ghCliConsent;
+  // Gate ONLY a credential we found on the host by ourselves. A device sign-in or
+  // a pasted token was handed over by the operator inside Openship — asking them
+  // to consent again to the thing they just did is a dead end that made a fresh
+  // token look broken until the prompt was noticed and accepted.
+  const needsGhCliConsent =
+    state.primary === "gh-cli" &&
+    (state.sources.ghCli.method ?? "host-cli") === "host-cli" &&
+    !ghCliConsent;
 
   // One "Folder" tab, environment-dependent behavior:
   //   - self-hosted / desktop → deploy straight from a path on the box (native
@@ -98,11 +104,17 @@ export default function LibraryPage() {
   return (
     <PageContainer>
       {/* ── Header ───────────────────────────────────────────── */}
-      <div className="mb-6">
-        <h1 className="text-2xl font-medium text-foreground/80" style={{ letterSpacing: "-0.2px" }}>
-          {t.library.page.title}
-        </h1>
-        <p className="text-sm text-muted-foreground/70 mt-1">{t.library.page.subtitle}</p>
+      {/* No primary action here (the tabs below are the action), so the shared ⋮
+          help menu sits alone at the title's trailing edge — level with the
+          heading, matching the Projects / Apps headers. */}
+      <div className="mb-6 flex items-start justify-between gap-4">
+        <div className="min-w-0">
+          <h1 className="text-2xl font-medium text-foreground/80" style={{ letterSpacing: "-0.2px" }}>
+            {t.library.page.title}
+          </h1>
+          <p className="text-sm text-muted-foreground/70 mt-1">{t.library.page.subtitle}</p>
+        </div>
+        <HelpMenu className="shrink-0" />
       </div>
 
       {/* ── Tabs ─────────────────────────────────────────────── */}
@@ -178,8 +190,6 @@ export default function LibraryPage() {
               cliAction={cliAction}
               onRefresh={refresh}
               selfHosted={selfHosted}
-              cloudConnected={cloudConnected}
-              onConnectCloud={startCloudConnect}
             />
           ) : needsGhCliConsent ? (
             <GhCliConsent login={state.sources.ghCli.login} onAllow={allowGhCli} />

@@ -203,6 +203,7 @@ export const endpoints = {
     connectRedirect: "github/connect/redirect",
     connectPoll: "github/connect/poll",
     disconnect: "github/disconnect",
+    instanceToken: "github/instance-token",
   },
 
   azureDevops: {
@@ -410,6 +411,7 @@ export const endpoints = {
     deployDefaults: "settings/deploy-defaults",
     cloneCredentials: "settings/clone-credentials",
     cloneStrategyPreference: "settings/clone-strategy-preference",
+    forwardGit: "settings/forward-git",
   },
 
   /* ---------------------------------------------------------------- */
