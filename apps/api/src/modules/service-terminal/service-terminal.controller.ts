@@ -36,6 +36,7 @@ import { getRequestContext } from "../../lib/request-context";
 import { resolveActiveOrganizationId } from "../../middleware/active-organization";
 import { checkPermission } from "../../lib/permission";
 import { containerIdForService, liveContainerIdWithRuntime } from "../services/service-container";
+import { openServiceShell as openKubernetesServiceShell } from "../deployments/kubernetes/kubernetes-control.service";
 import {
   attachServiceWs,
   consumeServiceTerminalTicket,
@@ -116,7 +117,7 @@ async function resolveServiceForOrg(
   organizationId: string,
   userId: string,
 ): Promise<
-  | { ok: true; containerId: string; runtime: import("@repo/adapters").RuntimeAdapter }
+  | { ok: true; openShell: (opts: import("@repo/adapters").ShellOptions) => Promise<ShellSession> }
   | { ok: false; code: ErrorCode; message: string }
 > {
   const service = await repos.service.findById(serviceId);
@@ -160,6 +161,27 @@ async function resolveServiceForOrg(
       ok: false,
       code: "not_deployed",
       message: "Active deployment not found",
+    };
+  }
+
+  const deploymentMeta = (dep.meta ?? {}) as {
+    deploymentEngine?: string;
+    kubernetesServerId?: string;
+    kubernetesNamespace?: string;
+  };
+  if (
+    deploymentMeta.deploymentEngine === "kubernetes" ||
+    (deploymentMeta.kubernetesServerId && deploymentMeta.kubernetesNamespace)
+  ) {
+    return {
+      ok: true,
+      openShell: (opts) =>
+        openKubernetesServiceShell(
+          dep.id,
+          organizationId,
+          service.name,
+          opts,
+        ),
     };
   }
 
@@ -211,7 +233,10 @@ async function resolveServiceForOrg(
     };
   }
 
-  return { ok: true, containerId, runtime };
+  return {
+    ok: true,
+    openShell: (opts) => runtime.openServiceShell!(containerId, opts),
+  };
 }
 
 // ─── Ticket endpoint ────────────────────────────────────────────────────────
@@ -338,8 +363,7 @@ export const serviceTerminalWsHandler = upgradeWebSocket(async (c) => {
   const ctx: HandshakeCtx = {
     userId,
     serviceId: pathServiceId,
-    containerId: resolved.containerId,
-    runtime: resolved.runtime,
+    openShell: resolved.openShell,
     clientIp,
     userAgent,
     subprotocol: tokenProto,
@@ -354,8 +378,7 @@ export const serviceTerminalWsHandler = upgradeWebSocket(async (c) => {
 interface HandshakeCtx {
   userId: string;
   serviceId: string;
-  containerId: string;
-  runtime: import("@repo/adapters").RuntimeAdapter;
+  openShell: (opts: import("@repo/adapters").ShellOptions) => Promise<ShellSession>;
   clientIp: string | null;
   userAgent: string | null;
   subprotocol: string | undefined;
@@ -441,10 +464,7 @@ function buildHandlers(ctx: HandshakeCtx) {
       let shell: ShellSession;
       let auditId: string | null = null;
       try {
-        if (!ctx.runtime.openServiceShell) {
-          throw new Error("Runtime does not implement openServiceShell");
-        }
-        shell = await ctx.runtime.openServiceShell(ctx.containerId, {
+        shell = await ctx.openShell({
           cols: 80,
           rows: 24,
           term: "xterm-256color",
