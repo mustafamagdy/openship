@@ -1,6 +1,7 @@
 import { ForbiddenError } from "@repo/core";
 import { sshManager } from "../../../lib/ssh-manager";
 import type { DeploymentMeta } from "../../../lib/deployment-runtime";
+import type { ShellOptions, ShellSession } from "@repo/adapters";
 import { getDeployment } from "../deployment.service";
 import { ownedResourceQuery } from "./kubernetes-command";
 
@@ -197,6 +198,66 @@ export async function inventory(
       })),
     };
   });
+}
+
+/**
+ * Open an interactive shell in one ready pod for a project service.
+ *
+ * The SSH PTY immediately `exec`s kubectl, so leaving the pod shell closes the
+ * channel instead of dropping the user onto the Kubernetes node's host shell.
+ */
+export async function openServiceShell(
+  deploymentId: string,
+  organizationId: string,
+  serviceName: string,
+  opts?: ShellOptions,
+): Promise<ShellSession> {
+  const target = await binding(deploymentId, organizationId);
+  const safeServiceName = safeSelectorValue(serviceName);
+  const executor = await sshManager.acquire(target.serverId);
+  sshManager.retain(target.serverId);
+  let released = false;
+  const release = () => {
+    if (released) return;
+    released = true;
+    sshManager.release(target.serverId);
+  };
+
+  try {
+    if (!executor.openShell) {
+      throw new ForbiddenError("Interactive shell is not supported by this Kubernetes server.");
+    }
+    const selector = `${target.selector},openship.io/service-name=${safeServiceName}`;
+    const raw = await executor.exec(
+      `sudo -n kubectl -n ${target.namespace} get pods -l ${selector} -o json`,
+      { timeout: 30_000 },
+    );
+    const pods = parseList<PodItem>(raw);
+    const pod =
+      pods.find((item) =>
+        item.status?.phase === "Running" &&
+        (item.status.containerStatuses ?? []).every((status) => status.ready),
+      ) ?? pods.find((item) => item.status?.phase === "Running");
+    const podName = safeName(pod?.metadata?.name ?? "", "pod");
+    const shell = await executor.openShell(opts);
+    shell.onClose(() => release());
+    shell.stdin.write(
+      `exec sudo -n kubectl -n ${target.namespace} exec -it ${podName} -- /bin/sh -lc 'exec $(command -v bash || echo /bin/sh)'\n`,
+    );
+    return {
+      ...shell,
+      close(signal?: string) {
+        try {
+          shell.close(signal);
+        } finally {
+          release();
+        }
+      },
+    };
+  } catch (error) {
+    release();
+    throw error;
+  }
 }
 
 export async function scale(
