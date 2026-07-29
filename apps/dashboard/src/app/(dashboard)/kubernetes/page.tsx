@@ -13,6 +13,7 @@ import {
   Loader2,
   Plus,
   RefreshCw,
+  Rocket,
   Server,
 } from "lucide-react";
 import { PageContainer } from "@/components/ui/PageContainer";
@@ -49,6 +50,7 @@ function SummaryCard({
 }
 
 function ClusterCard({ cluster }: { cluster: KubernetesClusterOverview }) {
+  const [activeTab, setActiveTab] = useState<"status" | "deployments">("status");
   const readyNodes = cluster.nodes.filter((node) => node.ready).length;
   const projects = groupWorkloadsByProject(cluster.workloads);
   const readyProjects = projects.filter((project) => project.ready).length;
@@ -90,8 +92,58 @@ function ClusterCard({ cluster }: { cluster: KubernetesClusterOverview }) {
         </Link>
       </header>
 
-      <div className="grid gap-6 p-5 xl:grid-cols-2">
-        <div>
+      <div
+        role="tablist"
+        aria-label={`${cluster.name} cluster views`}
+        className="flex gap-1 border-b border-border/50 px-5 pt-3"
+      >
+        <button
+          type="button"
+          role="tab"
+          id={`${cluster.serverId}-status-tab`}
+          aria-selected={activeTab === "status"}
+          aria-controls={`${cluster.serverId}-status-panel`}
+          onClick={() => setActiveTab("status")}
+          className={`inline-flex items-center gap-2 border-b-2 px-3 py-2.5 text-sm font-medium transition-colors ${
+            activeTab === "status"
+              ? "border-primary text-foreground"
+              : "border-transparent text-muted-foreground hover:text-foreground"
+          }`}
+        >
+          <Server className="size-4" />
+          Cluster status
+          <span className="rounded-full bg-muted px-1.5 py-0.5 text-[10px] tabular-nums">
+            {readyNodes}/{cluster.nodes.length}
+          </span>
+        </button>
+        <button
+          type="button"
+          role="tab"
+          id={`${cluster.serverId}-deployments-tab`}
+          aria-selected={activeTab === "deployments"}
+          aria-controls={`${cluster.serverId}-deployments-panel`}
+          onClick={() => setActiveTab("deployments")}
+          className={`inline-flex items-center gap-2 border-b-2 px-3 py-2.5 text-sm font-medium transition-colors ${
+            activeTab === "deployments"
+              ? "border-primary text-foreground"
+              : "border-transparent text-muted-foreground hover:text-foreground"
+          }`}
+        >
+          <Rocket className="size-4" />
+          Deployments
+          <span className="rounded-full bg-muted px-1.5 py-0.5 text-[10px] tabular-nums">
+            {projects.length}
+          </span>
+        </button>
+      </div>
+
+      {activeTab === "status" && (
+        <div
+          role="tabpanel"
+          id={`${cluster.serverId}-status-panel`}
+          aria-labelledby={`${cluster.serverId}-status-tab`}
+          className="p-5"
+        >
           <div className="mb-3 flex items-center justify-between">
             <h3 className="text-sm font-medium">Nodes</h3>
             <span className="text-xs text-muted-foreground">
@@ -123,10 +175,22 @@ function ClusterCard({ cluster }: { cluster: KubernetesClusterOverview }) {
             ))}
           </div>
         </div>
+      )}
 
-        <div>
+      {activeTab === "deployments" && (
+        <div
+          role="tabpanel"
+          id={`${cluster.serverId}-deployments-panel`}
+          aria-labelledby={`${cluster.serverId}-deployments-tab`}
+          className="p-5"
+        >
           <div className="mb-3 flex items-center justify-between">
-            <h3 className="text-sm font-medium">OpenShip projects</h3>
+            <div>
+              <h3 className="text-sm font-medium">OpenShip projects</h3>
+              <p className="mt-0.5 text-xs text-muted-foreground">
+                Projects deployed through this Kubernetes cluster
+              </p>
+            </div>
             <span className="text-xs text-muted-foreground">
               {readyProjects}/{projects.length} ready
             </span>
@@ -179,7 +243,7 @@ function ClusterCard({ cluster }: { cluster: KubernetesClusterOverview }) {
             </div>
           )}
         </div>
-      </div>
+      )}
     </section>
   );
 }
