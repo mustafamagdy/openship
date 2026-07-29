@@ -561,6 +561,13 @@
       "when": 1785359298651,
       "tag": "0076_provider_webhook_delivery_dedup",
       "breakpoints": true
+    },
+    {
+      "idx": 80,
+      "version": "7",
+      "when": 1785360198651,
+      "tag": "0077_ensure_upstream_git_settings",
+      "breakpoints": true
     }
   ]
 }
