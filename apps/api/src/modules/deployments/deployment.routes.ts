@@ -125,5 +125,47 @@ r.post("/:id/restart", { tag: "deployment:write", mcp: { description: "Restart t
 r.post("/:id/build/respond", { tag: "deployment:write", mcp: { description: "Respond to a build gate/prompt for this deployment (e.g. approve a step)." } }, cloudDeploymentProxy, ctrl.buildRespond);
 r.get("/:id/info", { tag: "deployment:read", mcp: { description: "Get container info for this deployment." } }, cloudDeploymentProxy, ctrl.containerInfo);
 r.get("/:id/usage", { tag: "deployment:read", mcp: { description: "Get container CPU/memory usage for this deployment." } }, cloudDeploymentProxy, ctrl.containerUsage);
+r.get(
+  "/:id/kubernetes",
+  {
+    tag: "deployment:read",
+    mcp: {
+      description:
+        "Get OpenShip-managed Kubernetes workload, pod, service, and disruption-budget health.",
+    },
+  },
+  cloudDeploymentProxy,
+  ctrl.kubernetesStatus,
+);
+r.post(
+  "/:id/kubernetes/scale",
+  {
+    tag: "deployment:write",
+    mcp: { description: "Scale one OpenShip-managed Kubernetes Deployment and wait for rollout." },
+  },
+  cloudDeploymentProxy,
+  ctrl.kubernetesScale,
+);
+r.post(
+  "/:id/kubernetes/restart",
+  {
+    tag: "deployment:write",
+    mcp: { description: "Roll one OpenShip-managed Kubernetes Deployment and wait for readiness." },
+  },
+  cloudDeploymentProxy,
+  ctrl.kubernetesRestart,
+);
+r.post(
+  "/:id/kubernetes/replace-pod",
+  {
+    tag: "deployment:write",
+    mcp: {
+      description:
+        "Guarded chaos action: replace one owned pod and wait for its workload to recover.",
+    },
+  },
+  cloudDeploymentProxy,
+  ctrl.kubernetesReplacePod,
+);
 
 export const deploymentRoutes = r.hono;

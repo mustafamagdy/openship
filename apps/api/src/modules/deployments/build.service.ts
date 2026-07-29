@@ -1010,15 +1010,9 @@ export async function requestBuildAccess(ctx: RequestContext, input: BuildAccess
     if (!clusterServer) {
       throw new AppError("Kubernetes cluster server not found in this organization.", 404);
     }
-    if (requestedServiceMode === "services") {
-      throw new AppError(
-        "The Kubernetes MVP currently supports single-app deployments only.",
-        400,
-      );
-    }
     if (!snapshot.hasServer) {
       throw new AppError(
-        "The Kubernetes MVP currently supports long-running web applications only; deploy static sites with the native edge target.",
+        "Kubernetes supports long-running applications and image-based service stacks; deploy static sites with the native edge target.",
         400,
       );
     }

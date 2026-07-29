@@ -10,9 +10,10 @@ import {
 import { useProjectSettings } from "@/context/ProjectSettingsContext";
 import { useAnalyticsData } from "@/hooks/useProjectEndpoints";
 import { useI18n, interpolate } from "@/components/i18n-provider";
+import { KubernetesControlPanel } from "./KubernetesControlPanel";
 
 export const MonitoringTab = () => {
-  const { id, selectedDomain } = useProjectSettings();
+  const { id, selectedDomain, projectData } = useProjectSettings();
   const { t } = useI18n();
   // Atomic analytics fetch — own state, own loading, no context coupling.
   // The hook backs onto the same module-level caches as OverviewTab so
@@ -95,6 +96,7 @@ export const MonitoringTab = () => {
 
   return (
     <div className="space-y-5">
+      <KubernetesControlPanel deploymentId={projectData?.activeDeploymentId} />
       {!isLoadingAnalytics && !hasAnalytics && (
         <div className="rounded-2xl border border-border/50 bg-card px-5 py-4">
           <p className="text-sm font-medium text-foreground">{t.projects.monitoring.noDataTitle}</p>

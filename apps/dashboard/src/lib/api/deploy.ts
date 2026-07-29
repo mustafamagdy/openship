@@ -292,4 +292,19 @@ export const deployApi = {
   /** Respond to a pipeline prompt (e.g. port conflict) */
   buildRespond: (deploymentId: string, action: string) =>
     api.post<any>(endpoints.deploy.buildRespond(deploymentId), { action }),
+
+  getKubernetesStatus: (deploymentId: string) =>
+    api.get<any>(`deployments/${deploymentId}/kubernetes`),
+
+  scaleKubernetesWorkload: (deploymentId: string, workload: string, replicas: number) =>
+    api.post<any>(`deployments/${deploymentId}/kubernetes/scale`, { workload, replicas }),
+
+  restartKubernetesWorkload: (deploymentId: string, workload: string) =>
+    api.post<any>(`deployments/${deploymentId}/kubernetes/restart`, { workload }),
+
+  replaceKubernetesPod: (deploymentId: string, pod: string) =>
+    api.post<any>(`deployments/${deploymentId}/kubernetes/replace-pod`, {
+      pod,
+      confirmation: "REPLACE POD",
+    }),
 };

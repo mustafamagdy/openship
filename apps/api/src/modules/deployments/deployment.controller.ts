@@ -17,6 +17,7 @@ import * as prepareService from "./prepare.service";
 import { maybeProxyCloudProject, proxyToSaaS } from "../../lib/cloud/project-router";
 import { promoteProjectToCloud, TransferConflictError } from "../projects/transfer.service";
 import { env } from "../../config";
+import * as kubernetesControl from "./kubernetes/kubernetes-control.service";
 
 export async function list(c: Context) {
   const ctx = getRequestContext(c);
@@ -293,6 +294,46 @@ export async function containerUsage(c: Context) {
   await permission.assert(getRequestContext(c), { resourceType: "deployment", resourceId: id, action: "read" });
   const usage = await deploymentService.getContainerUsage(id, ctx.organizationId);
   return c.json({ data: usage });
+}
+
+export async function kubernetesStatus(c: Context) {
+  const ctx = getRequestContext(c);
+  const id = param(c, "id");
+  await permission.assert(ctx, { resourceType: "deployment", resourceId: id, action: "read" });
+  return c.json({ data: await kubernetesControl.inventory(id, ctx.organizationId) });
+}
+
+export async function kubernetesScale(c: Context) {
+  const ctx = getRequestContext(c);
+  const id = param(c, "id");
+  await permission.assert(ctx, { resourceType: "deployment", resourceId: id, action: "write" });
+  const body = await c.req.json<{ workload: string; replicas: number }>();
+  return c.json({
+    data: await kubernetesControl.scale(id, ctx.organizationId, body.workload, body.replicas),
+  });
+}
+
+export async function kubernetesRestart(c: Context) {
+  const ctx = getRequestContext(c);
+  const id = param(c, "id");
+  await permission.assert(ctx, { resourceType: "deployment", resourceId: id, action: "write" });
+  const body = await c.req.json<{ workload: string }>();
+  return c.json({
+    data: await kubernetesControl.restart(id, ctx.organizationId, body.workload),
+  });
+}
+
+export async function kubernetesReplacePod(c: Context) {
+  const ctx = getRequestContext(c);
+  const id = param(c, "id");
+  await permission.assert(ctx, { resourceType: "deployment", resourceId: id, action: "write" });
+  const body = await c.req.json<{ pod: string; confirmation: string }>();
+  if (body.confirmation !== "REPLACE POD") {
+    return c.json({ error: 'Type "REPLACE POD" to confirm this chaos action.' }, 400);
+  }
+  return c.json({
+    data: await kubernetesControl.replacePod(id, ctx.organizationId, body.pod),
+  });
 }
 
 export async function buildRespond(c: Context) {

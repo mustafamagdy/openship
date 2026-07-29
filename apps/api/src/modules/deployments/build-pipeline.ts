@@ -98,7 +98,7 @@ import {
   getDefaultRegistryAuth,
   publishBuildArtifact,
 } from "../container-registry/container-registry.service";
-import { deployToKubernetes } from "./kubernetes/kubernetes-provider";
+import { deployStackToKubernetes, deployToKubernetes } from "./kubernetes/kubernetes-provider";
 
 // Build env = CI/telemetry defaults (BUILD_ENV_VARS) + the customer's own env
 // vars. NODE_ENV is deliberately NOT set or overridden here: it's the customer's
@@ -771,6 +771,107 @@ async function executeBuildAndDeploy(project: Project, dep: Deployment, buildSes
       logger.log(
         `[pre-deploy-backup] trigger crashed (ignoring, best-effort): ${safeErrorMessage(err)}`,
       );
+    }
+
+    if (useServicePipeline && snapshot.deploymentEngine === "kubernetes") {
+      if (!snapshot.kubernetesServerId) {
+        throw new Error("Kubernetes stack deployment has no cluster server configured.");
+      }
+      const stackServices = (
+        snapshot.composeServices?.length
+          ? snapshot.composeServices
+          : await resolveProjectServicePreflightServices(project.id)
+      ).filter((service) => service.enabled !== false);
+      if (stackServices.length === 0) {
+        throw new Error("Kubernetes stack has no enabled services.");
+      }
+
+      const composeOnly = stackServices.filter((service) => serviceKind(service) === "compose");
+      if (composeOnly.length !== stackServices.length) {
+        throw new Error(
+          "Kubernetes stack mode currently supports image-based Compose services only.",
+        );
+      }
+      await repos.service.syncFromCompose(project.id, composeOnly);
+
+      const clusterServer = await repos.server.getInOrganization(
+        snapshot.kubernetesServerId,
+        dep.organizationId,
+      );
+      if (!clusterServer) {
+        throw new Error("Kubernetes cluster server is no longer available in this organization.");
+      }
+
+      await setDeploymentStatus(dep.id, "deploying");
+      const deployed = await sshManager.withExecutor(
+        snapshot.kubernetesServerId,
+        (executor) =>
+          deployStackToKubernetes(
+            executor,
+            {
+              projectId: project.id,
+              projectSlug: project.slug ?? project.name,
+              deploymentId: dep.id,
+              services: stackServices.map((service) => ({
+                name: service.name,
+                image: service.image ?? "",
+                ports: service.ports,
+                exposedPort: service.exposedPort,
+                exposed: service.exposed,
+                environment: service.environment,
+                dependsOn: service.dependsOn,
+                volumes: service.volumes,
+                command: service.command,
+              })),
+              resources: prodResources,
+              defaultReplicas: snapshot.kubernetesReplicas,
+            },
+            (message) => logger.log(`${message}\n`),
+          ),
+      );
+
+      const publicService = deployed.services.find((service) => service.nodePort);
+      if (!publicService?.nodePort) {
+        throw new Error(
+          "Kubernetes stack is ready but has no exposed service. Mark one service as exposed.",
+        );
+      }
+      const plannedDomains = buildProjectRouteDomains({
+        project,
+        projectDomains: routeState.projectDomains,
+        managedSlug: routeState.primarySlug,
+        publicEndpoints: routeState.publicEndpoints,
+        runtimeName: "docker",
+        usesManagedRouting: true,
+      });
+      const upstream = `http://${clusterServer.sshHost}:${publicService.nodePort}`;
+      for (const domain of plannedDomains) {
+        await routing.registerRoute({
+          domain: domain.hostname,
+          targetUrl: upstream,
+          tls: domain.tls,
+          webhookProxy: webhookProxyTarget,
+        });
+        if (domain.provisionSsl) await ssl.provisionCert(domain.hostname);
+      }
+
+      const primary = plannedDomains.find((domain) => domain.isPrimary) ?? plannedDomains[0];
+      await onSuccess(ctx, {
+        containerId: deployed.workloadId,
+        url: primary
+          ? `${primary.tls ? "https" : "http"}://${primary.hostname}`
+          : upstream,
+        durationMs: 0,
+        metaPatch: {
+          kubernetesNamespace: deployed.namespace,
+          kubernetesDeployments: deployed.deployments,
+          kubernetesServices: deployed.services,
+          kubernetesNodePort: publicService.nodePort,
+          kubernetesServerId: snapshot.kubernetesServerId,
+        },
+      });
+      await archivePreviousDeployment(dep, project, logger);
+      return;
     }
 
     if (useServicePipeline && isMultiServiceRuntime(runtime)) {
