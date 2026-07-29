@@ -60,6 +60,7 @@
     "domains": "ドメイン",
     "monitoring": "モニタリング",
     "servers": "サーバー",
+    "kubernetes": "Kubernetes",
     "emails": "メール",
     "settings": "設定",
     "billing": "請求と使用状況",

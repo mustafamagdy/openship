@@ -280,6 +280,7 @@ export const endpoints = {
     installSession: "system/install/session",
     monitorStream: "system/monitor/stream",
     servers: "system/servers",
+    kubernetesClusters: "system/kubernetes/clusters",
     server: (id: string) => `system/servers/${id}`,
     serverReachability: (id: string) => `system/servers/${id}/reachability`,
     serverRateLimit: (id: string) => `system/servers/${id}/rate-limit`,

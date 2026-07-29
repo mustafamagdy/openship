@@ -26,6 +26,7 @@ import {
   Building2,
   ChevronsUpDown,
   Check,
+  Boxes,
 } from "lucide-react";
 import { authClient, signOut } from "@/lib/auth-client";
 import { useTheme } from "@/components/theme-provider";
@@ -111,6 +112,7 @@ function getNavSections(isSaaS: boolean, selfHosted: boolean): NavSection[] {
   const infraItems: NavItem[] = [];
   if (selfHosted) {
     infraItems.push({ key: "servers", href: "/servers", icon: Server });
+    infraItems.push({ key: "kubernetes", href: "/kubernetes", icon: Boxes });
     infraItems.push({ key: "domains", href: "/domains", icon: Globe });
     infraItems.push({ key: "emails", href: "/emails", icon: Mail });
     infraItems.push({ key: "jobs", href: "/jobs", icon: Clock });
