@@ -134,6 +134,14 @@ describe("Kubernetes provider", () => {
     expect(commands.filter((command) => command.includes("rollout status"))).toHaveLength(2);
     expect(commands.some((command) => command.includes("--timeout=900s"))).toBe(true);
     expect(commands.filter((command) => command.includes(" apply "))).toHaveLength(3);
+    const foundationApply = commands.findIndex((command) =>
+      command.includes("foundation.json"),
+    );
+    const frontendApply = commands.findIndex((command) =>
+      command.includes("deployment-frontend.json"),
+    );
+    expect(foundationApply).toBeGreaterThan(-1);
+    expect(frontendApply).toBeGreaterThan(foundationApply);
     const firstRollout = commands.findIndex((command) =>
       command.includes("rollout status deployment/frontend"),
     );
