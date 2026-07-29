@@ -8,14 +8,19 @@ const onDeploymentReady = vi.fn();
 const rollupDeploymentStatus = vi.fn();
 const setDeploymentStatus = vi.fn();
 
-vi.mock("@repo/db", () => ({
-  repos: {
-    deployment: { findById: (...args: unknown[]) => findById(...args) },
-    serviceDeployment: {
-      listByDeployment: (...args: unknown[]) => listByDeployment(...args),
+vi.mock("@repo/db", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@repo/db")>();
+  return {
+    ...actual,
+    repos: {
+      ...actual.repos,
+      deployment: { findById: (...args: unknown[]) => findById(...args) },
+      serviceDeployment: {
+        listByDeployment: (...args: unknown[]) => listByDeployment(...args),
+      },
     },
-  },
-}));
+  };
+});
 
 vi.mock("../../lib/controller-helpers", () => ({ platform: vi.fn() }));
 
@@ -26,6 +31,8 @@ vi.mock("../../lib/openship-manifest-sync", () => ({
 vi.mock("../github/clone-auth", () => ({ resolveBuildGitToken: vi.fn() }));
 
 vi.mock("../../lib/git-forwarding", () => ({ openDeployRelay: vi.fn() }));
+
+vi.mock("../../lib/org-actor", () => ({ resolveOrgOwner: vi.fn() }));
 
 vi.mock("./service-checks", () => ({
   preCreateServiceDeployments: vi.fn(),

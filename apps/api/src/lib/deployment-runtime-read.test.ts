@@ -98,9 +98,10 @@ describe("resolveDeploymentRuntimeForRead — reaches the deploy's host, without
     expect(socketCalls()).toBe(0);
   });
 
-  it("a recorded serverId wins even when deployTarget says otherwise", async () => {
+  it("an explicit local target wins over a stale recorded serverId", async () => {
     await read({ deployTarget: "local", serverId: "srv-3" });
-    expect(sshHosts()).toEqual(["host-of-srv-3"]);
+    expect(socketCalls()).toBe(1);
+    expect(sshHosts()).toEqual([]);
   });
 
   it("local target → the host socket, and never builds a platform", async () => {

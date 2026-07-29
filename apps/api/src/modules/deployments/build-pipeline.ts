@@ -63,7 +63,6 @@ import { normalizeTargetPath } from "../../lib/public-endpoints";
 import { withDefaults } from "../../lib/resources";
 import { resolveBuildGitToken } from "../github/clone-auth";
 import { openDeployRelay } from "../../lib/git-forwarding";
-import { sshManager } from "../../lib/ssh-manager";
 import { resolveOrgOwner } from "../../lib/org-actor";
 import {
   preCreateServiceDeployments,

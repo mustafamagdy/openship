@@ -1,4 +1,5 @@
 import {
+  createHostExecutor,
   createPlatform,
   DockerRuntime,
   type CommandExecutor,
@@ -8,7 +9,6 @@ import {
   type RuntimeAdapter,
   type SshConfig,
 } from "@repo/adapters";
-import { isLoopbackServerHost } from "./loopback-server-host";
 import type { Deployment } from "@repo/db";
 import { repos } from "@repo/db";
 import type { DeployTarget, RuntimeMode } from "@repo/core";
