@@ -206,6 +206,16 @@ export function usesManagedRouting(base: Platform["target"], effectiveTarget: De
   );
 }
 
+/** Kubernetes can run a long-lived single app or an image-based service stack.
+ * A catalog stack may intentionally have `hasServer=false` because OpenShip
+ * does not need to build source code for its prebuilt images. */
+export function supportsKubernetesDeployment(
+  hasServer: boolean | undefined,
+  usesServicePipeline: boolean,
+): boolean {
+  return Boolean(hasServer || usesServicePipeline);
+}
+
 /**
  * Resolve the runtime from the actual workload shape.
  *

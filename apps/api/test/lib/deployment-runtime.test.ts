@@ -3,6 +3,7 @@ import { isLoopbackServerHost } from "../../src/lib/loopback-server-host";
 import {
   bareWorkDirFromHome,
   resolveWorkloadRuntimeMode,
+  supportsKubernetesDeployment,
 } from "../../src/lib/deployment-runtime";
 
 describe("deployment target resolution", () => {
@@ -21,6 +22,14 @@ describe("deployment target resolution", () => {
 });
 
 describe("workload runtime resolution", () => {
+  test("allows a prebuilt-image service stack on Kubernetes", () => {
+    expect(supportsKubernetesDeployment(false, true)).toBe(true);
+  });
+
+  test("rejects a static single app from Kubernetes", () => {
+    expect(supportsKubernetesDeployment(false, false)).toBe(false);
+  });
+
   test("publishes a static single app through the bare file runtime", () => {
     expect(
       resolveWorkloadRuntimeMode({ runtimeMode: "docker", hasServer: false }, false),
