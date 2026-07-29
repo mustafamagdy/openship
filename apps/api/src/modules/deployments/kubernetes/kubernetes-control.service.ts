@@ -2,6 +2,7 @@ import { ForbiddenError } from "@repo/core";
 import { sshManager } from "../../../lib/ssh-manager";
 import type { DeploymentMeta } from "../../../lib/deployment-runtime";
 import { getDeployment } from "../deployment.service";
+import { ownedResourceQuery } from "./kubernetes-command";
 
 type KubernetesList<T> = { items?: T[] };
 
@@ -212,7 +213,7 @@ export async function scale(
   await sshManager.withExecutor(target.serverId, async (executor) => {
     const prefix = `sudo -n kubectl -n ${target.namespace}`;
     const owned = await executor.exec(
-      `${prefix} get deployment/${workload} -l ${target.selector} -o name`,
+      ownedResourceQuery(prefix, "deployment", workload, target.selector),
       { timeout: 30_000 },
     );
     assertOwnedResource(owned, workload);
@@ -236,7 +237,7 @@ export async function restart(
   await sshManager.withExecutor(target.serverId, async (executor) => {
     const prefix = `sudo -n kubectl -n ${target.namespace}`;
     const owned = await executor.exec(
-      `${prefix} get deployment/${workload} -l ${target.selector} -o name`,
+      ownedResourceQuery(prefix, "deployment", workload, target.selector),
       { timeout: 30_000 },
     );
     assertOwnedResource(owned, workload);
@@ -257,9 +258,10 @@ export async function replacePod(
   const pod = safeName(podName, "pod name");
   await sshManager.withExecutor(target.serverId, async (executor) => {
     const prefix = `sudo -n kubectl -n ${target.namespace}`;
-    const owned = await executor.exec(`${prefix} get pod/${pod} -l ${target.selector} -o name`, {
-      timeout: 30_000,
-    });
+    const owned = await executor.exec(
+      ownedResourceQuery(prefix, "pod", pod, target.selector),
+      { timeout: 30_000 },
+    );
     assertOwnedResource(owned, pod);
 
     const podRaw = await executor.exec(`${prefix} get pod/${pod} -o json`, {
@@ -271,7 +273,7 @@ export async function replacePod(
       "deployment name",
     );
     const ownedWorkload = await executor.exec(
-      `${prefix} get deployment/${workload} -l ${target.selector} -o name`,
+      ownedResourceQuery(prefix, "deployment", workload, target.selector),
       { timeout: 30_000 },
     );
     assertOwnedResource(ownedWorkload, workload);
