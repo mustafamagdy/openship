@@ -129,5 +129,6 @@ describe("Kubernetes provider", () => {
     expect(result.workloadId).toBe("kubernetes-stack:openship-boutique");
     expect(result.services[0]?.nodePort).toBe(31234);
     expect(commands.filter((command) => command.includes("rollout status"))).toHaveLength(2);
+    expect(commands.some((command) => command.includes("--timeout=900s"))).toBe(true);
   });
 });
