@@ -408,7 +408,7 @@
         },
         {
           "service": "db",
-          "path": "/docker-entrypoint-initdb.d/99-roles.sql",
+          "path": "/docker-entrypoint-initdb.d/init-scripts/99-roles.sql",
           "content": "ALTER USER authenticator WITH PASSWORD '{{config:POSTGRES_PASSWORD}}';\nALTER USER pgbouncer WITH PASSWORD '{{config:POSTGRES_PASSWORD}}';\nALTER USER supabase_auth_admin WITH PASSWORD '{{config:POSTGRES_PASSWORD}}';\nALTER USER supabase_functions_admin WITH PASSWORD '{{config:POSTGRES_PASSWORD}}';\nALTER USER supabase_storage_admin WITH PASSWORD '{{config:POSTGRES_PASSWORD}}';\nALTER USER supabase_admin WITH PASSWORD '{{config:POSTGRES_PASSWORD}}';\n"
         }
       ],
