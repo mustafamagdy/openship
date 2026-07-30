@@ -1,4 +1,10 @@
 {
+  "appInstall": {
+    "destKubernetes": "Kubernetes",
+    "destKubernetesLoading": "Kubernetes クラスターを検出中…",
+    "destKubernetesHealthy": "{nodes} 個の準備完了ノード · Openship が管理",
+    "destKubernetesUnhealthy": "クラスターを利用できません"
+  },
   "settingSection": {
     "edit": "編集",
     "save": "保存",

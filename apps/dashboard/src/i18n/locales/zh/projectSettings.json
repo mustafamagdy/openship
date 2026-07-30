@@ -1,4 +1,10 @@
 {
+  "appInstall": {
+    "destKubernetes": "Kubernetes",
+    "destKubernetesLoading": "正在发现 Kubernetes 集群…",
+    "destKubernetesHealthy": "{nodes} 个就绪节点 · 由 Openship 管理",
+    "destKubernetesUnhealthy": "集群不可用"
+  },
   "settingSection": {
     "edit": "编辑",
     "save": "保存",

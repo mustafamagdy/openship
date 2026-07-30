@@ -1,4 +1,10 @@
 {
+  "appInstall": {
+    "destKubernetes": "Kubernetes",
+    "destKubernetesLoading": "Buscando clústeres de Kubernetes…",
+    "destKubernetesHealthy": "{nodes} nodos listos · administrado por Openship",
+    "destKubernetesUnhealthy": "El clúster no está disponible"
+  },
   "settingSection": {
     "edit": "Editar",
     "save": "Guardar",

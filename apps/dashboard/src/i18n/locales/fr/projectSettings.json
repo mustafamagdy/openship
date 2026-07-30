@@ -1,4 +1,10 @@
 {
+  "appInstall": {
+    "destKubernetes": "Kubernetes",
+    "destKubernetesLoading": "Recherche des clusters Kubernetes…",
+    "destKubernetesHealthy": "{nodes} nœuds prêts · géré par Openship",
+    "destKubernetesUnhealthy": "Le cluster est indisponible"
+  },
   "settingSection": {
     "edit": "Modifier",
     "save": "Enregistrer",
