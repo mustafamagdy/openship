@@ -32,6 +32,7 @@ export function OperatorTopbar() {
       <label className="operator-topbar__search">
         <Search aria-hidden="true" />
         <input
+          id="operator-global-search"
           type="search"
           aria-label="Search OpenShip"
           placeholder="Search projects, workloads, servers…"
