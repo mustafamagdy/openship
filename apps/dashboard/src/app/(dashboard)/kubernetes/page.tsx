@@ -390,6 +390,20 @@ export default function KubernetesPage() {
           <p>Manage clusters, nodes, and OpenShip workloads.</p>
         </div>
         <div className="operator-kube__actions">
+          {data && data.clusters.length > 0 ? (
+            <label className="operator-kube__cluster-select">
+              <span className="sr-only">Active Kubernetes cluster</span>
+              <select
+                value={activeCluster?.serverId ?? ""}
+                onChange={(event) => setActiveClusterId(event.target.value)}
+              >
+                {data.clusters.map((cluster) => (
+                  <option value={cluster.serverId} key={cluster.serverId}>{cluster.name}</option>
+                ))}
+              </select>
+              <ChevronDown aria-hidden="true" />
+            </label>
+          ) : null}
           <button type="button" onClick={() => void refresh()} disabled={loading}>
             <RefreshCw className={loading ? "animate-spin" : ""} aria-hidden="true" />
             Refresh
@@ -400,21 +414,6 @@ export default function KubernetesPage() {
           </Link>
         </div>
       </header>
-
-      {data && data.clusters.length > 0 ? (
-        <label className="operator-kube__cluster-select">
-          <span className="sr-only">Active Kubernetes cluster</span>
-          <select
-            value={activeCluster?.serverId ?? ""}
-            onChange={(event) => setActiveClusterId(event.target.value)}
-          >
-            {data.clusters.map((cluster) => (
-              <option value={cluster.serverId} key={cluster.serverId}>{cluster.name}</option>
-            ))}
-          </select>
-          <ChevronDown aria-hidden="true" />
-        </label>
-      ) : null}
 
       {loading && !data ? (
         <div className="operator-kube__state">
