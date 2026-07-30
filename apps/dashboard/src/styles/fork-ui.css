@@ -100,10 +100,16 @@
 }
 
 .operator-sidebar__workspace {
+  width: 100%;
   justify-content: space-between;
   gap: 8px;
   margin-top: 18px;
   color: #ededed;
+  text-align: left;
+}
+
+.operator-sidebar__workspace:disabled {
+  cursor: default;
 }
 
 .operator-sidebar__workspace strong {
@@ -393,6 +399,26 @@
 .operator-sidebar__utility svg {
   width: 15px;
   height: 15px;
+}
+
+.operator-sidebar__brand-row > button:focus-visible,
+.operator-sidebar__workspace:focus-visible,
+.operator-sidebar__find:focus-visible,
+.operator-sidebar__nav a:focus-visible,
+.operator-sidebar__operator:focus-visible,
+.operator-sidebar__popover > button:focus-visible,
+.operator-sidebar__utility:focus-visible {
+  outline: 2px solid var(--op-accent);
+  outline-offset: 2px;
+}
+
+.operator-sidebar__utility:disabled {
+  cursor: wait;
+  opacity: 0.5;
+}
+
+.operator-sidebar__utility:disabled:focus-visible {
+  outline-color: var(--op-text-muted);
 }
 
 .operator-shell .operator-sidebar.operator-sidebar--collapsed {

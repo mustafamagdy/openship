@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { usePathname, useRouter } from "next/navigation";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { useEffect, useState } from "react";
 import {
   LayoutDashboard,
@@ -167,6 +167,7 @@ export function Sidebar() {
   const isSaaS = !selfHosted || cloudConnected;
   const navSections = getNavSections(isSaaS, selfHosted);
   const pathname = usePathname();
+  const searchParams = useSearchParams();
   const router = useRouter();
   const { resolvedTheme, toggle } = useTheme();
   const { t } = useI18n();
@@ -385,11 +386,20 @@ export function Sidebar() {
 
         {!collapsed && (
           <>
-            <div className="operator-sidebar__workspace">
+            <button
+              type="button"
+              className="operator-sidebar__workspace"
+              onClick={() => showOrgSwitcher && setOrgsOpen((value) => !value)}
+              disabled={!showOrgSwitcher}
+              aria-label={`Switch workspace from ${workspaceLabel}`}
+              aria-expanded={showOrgSwitcher ? orgsOpen : undefined}
+            >
               <strong>{workspaceLabel}</strong>
-              <ChevronsUpDown />
-            </div>
-            <span className="operator-sidebar__mode">Self-hosted</span>
+              {showOrgSwitcher && <ChevronsUpDown />}
+            </button>
+            <span className="operator-sidebar__mode">
+              {selfHosted && !cloudConnected ? "Self-hosted" : "Cloud"}
+            </span>
             <button
               type="button"
               className="operator-sidebar__find"
@@ -410,11 +420,19 @@ export function Sidebar() {
             <div>
               {section.items.map((item) => {
                 const Icon = item.icon;
-                const cleanHref = item.href.split("?")[0];
+                const [cleanHref, query = ""] = item.href.split("?");
+                const targetParams = new URLSearchParams(query);
+                const targetSection = targetParams.get("section");
+                const targetView = targetParams.get("view");
+                const pathMatches =
+                  pathname === cleanHref || (!query && pathname.startsWith(`${cleanHref}/`));
                 const active =
-                  cleanHref === "/settings"
-                    ? pathname === "/settings" && item.href === "/settings"
-                    : pathname === cleanHref || pathname.startsWith(`${cleanHref}/`);
+                  pathMatches &&
+                  (targetSection
+                    ? searchParams.get("section") === targetSection
+                    : targetView
+                      ? searchParams.get("view") === targetView
+                      : !searchParams.get("section") && !searchParams.get("view"));
                 return (
                   <Link
                     key={`${section.label}-${item.label}`}
@@ -446,21 +464,25 @@ export function Sidebar() {
             title={collapsed ? "Operator" : undefined}
           >
             <span className="operator-sidebar__avatar">
-              {collapsed ? <UserRound /> : "OP"}
+              {displayInitial || <UserRound />}
             </span>
             {!collapsed && (
               <>
                 <span className="operator-sidebar__identity">
-                  <strong>Operator</strong>
-                  <small>{activeOrgRole ?? "admin"}</small>
+                  <strong>{displayName || "Operator"}</strong>
+                  <small>{displayEmail || activeOrgRole || "Local account"}</small>
                 </span>
                 <ChevronsUpDown />
               </>
             )}
           </button>
 
-          {orgsOpen && (
-            <div className="operator-sidebar__popover">
+          {showOrgSwitcher && orgsOpen && (
+            <div
+              className="operator-sidebar__popover"
+              role="dialog"
+              aria-label="Switch workspace"
+            >
               <p>Switch workspace</p>
               {orgs.map((org) => {
                 const current = org.id === activeOrgId;
