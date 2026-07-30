@@ -506,7 +506,6 @@ export function buildKubernetesStackObjects(input: KubernetesStackDeployInput): 
                 resources: quantities,
                 securityContext: {
                   allowPrivilegeEscalation: false,
-                  capabilities: { drop: ["ALL"] },
                 },
                 readinessProbe: {
                   tcpSocket: { port: "tcp" },
