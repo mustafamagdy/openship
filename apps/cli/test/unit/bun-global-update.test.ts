@@ -1,9 +1,10 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   packageManagerExecutable,
+  packageManagerFailure,
   resolveBunGlobalDir,
   updateBunGlobalManifest,
 } from "../../src/commands/update";
@@ -21,8 +22,41 @@ describe("Bun global fork updates", () => {
     expect(packageManagerExecutable("bun", "1.3.10", "/opt/bun/bin/bun")).toBe(
       "/opt/bun/bin/bun",
     );
-    expect(packageManagerExecutable("bun", null, "/usr/local/bin/node")).toBe("bun");
+    expect(packageManagerExecutable("bun", null, "/usr/local/bin/node", {}, "/missing")).toBe("bun");
     expect(packageManagerExecutable("npm")).toBe("npm");
+  });
+
+  it("finds Bun installed for a Node-managed service before falling back to PATH", () => {
+    const home = mkdtempSync(join(tmpdir(), "openship-bun-home-"));
+    const bunInstall = mkdtempSync(join(tmpdir(), "openship-bun-install-"));
+    temporaryDirectories.push(home);
+    temporaryDirectories.push(bunInstall);
+    const bunBin = join(home, ".bun", "bin");
+    const executable = join(bunBin, process.platform === "win32" ? "bun.exe" : "bun");
+    const configuredBin = join(bunInstall, "bin");
+    const configuredExecutable = join(
+      configuredBin,
+      process.platform === "win32" ? "bun.exe" : "bun",
+    );
+    mkdirSync(bunBin, { recursive: true });
+    mkdirSync(configuredBin, { recursive: true });
+    writeFileSync(executable, "");
+    writeFileSync(configuredExecutable, "");
+
+    expect(packageManagerExecutable("bun", null, "/usr/local/bin/node", {}, home)).toBe(executable);
+    expect(
+      packageManagerExecutable("bun", null, "/usr/local/bin/node", { BUN_INSTALL: bunInstall }, home),
+    ).toBe(configuredExecutable);
+  });
+
+  it("reports a missing Bun executable instead of mislabeling it as a signal", () => {
+    expect(
+      packageManagerFailure("/home/user/.bun/bin/bun", {
+        status: null,
+        signal: null,
+        error: new Error("spawn /home/user/.bun/bin/bun ENOENT"),
+      }),
+    ).toBe("could not start /home/user/.bun/bin/bun: spawn /home/user/.bun/bin/bun ENOENT");
   });
 
   it("resolves Bun's documented global directory precedence", () => {
