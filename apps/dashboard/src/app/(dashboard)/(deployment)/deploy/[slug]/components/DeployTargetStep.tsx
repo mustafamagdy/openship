@@ -32,6 +32,7 @@ interface OptionCardProps {
   children?: React.ReactNode;
   /** Extra classes for the outer wrapper - e.g. `h-full` for equal-height grids. */
   className?: string;
+  disabled?: boolean;
 }
 
 export const OptionCard: React.FC<OptionCardProps> = ({
@@ -42,13 +43,15 @@ export const OptionCard: React.FC<OptionCardProps> = ({
   description,
   children,
   className,
+  disabled = false,
 }) => (
   <div className={className}>
     <button
       type="button"
       onClick={onSelect}
+      disabled={disabled}
       className={`
-        relative w-full h-full text-start p-4 rounded-xl border transition-all
+        relative w-full h-full text-start p-4 rounded-xl border transition-all disabled:cursor-not-allowed disabled:opacity-50
         ${selected
           ? "border-primary bg-primary/5 ring-1 ring-primary/20"
           : "border-border/50 bg-card hover:border-primary/30 hover:bg-primary/[0.02]"

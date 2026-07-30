@@ -480,6 +480,9 @@ export default function AppInstallPage() {
         // Undefined falls back to the project/meta default server-side.
         deployTarget: destination?.deployTarget,
         serverId: destination?.deployTarget === "server" ? destination.serverId : undefined,
+        deploymentEngine: destination?.deploymentEngine,
+        kubernetesServerId: destination?.kubernetesServerId,
+        kubernetesReplicas: destination?.kubernetesReplicas,
       });
       const depId =
         dep?.data?.deployment_id ?? dep?.data?.deploymentId ?? dep?.deployment_id ?? null;

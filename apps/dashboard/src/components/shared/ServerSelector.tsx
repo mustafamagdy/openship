@@ -44,6 +44,11 @@ export interface ServerSelectorProps {
    * picked. Off by default — flows that must not guess (adopt / migrate) skip it.
    */
   autoSelectFirst?: boolean;
+  /** Server ids owned by another destination picker (for example registered
+   * Kubernetes clusters) and therefore hidden from this native-server list. */
+  excludeIds?: string[];
+  /** Render nothing when filtering leaves no native servers. */
+  hideWhenEmpty?: boolean;
 }
 
 /* ── Helpers ────────────────────────────────────────────────────────── */
@@ -69,6 +74,8 @@ export default function ServerSelector({
   compact = false,
   dropUp = false,
   autoSelectFirst = false,
+  excludeIds = [],
+  hideWhenEmpty = false,
 }: ServerSelectorProps) {
   const router = useRouter();
   const { t } = useI18n();
@@ -82,8 +89,9 @@ export default function ServerSelector({
     try {
       setLoading(true);
       const list = await systemApi.listServers();
-      if (list.length > 0) {
-        const opts = list.map(serverInfoToOption);
+      const excluded = new Set(excludeIds);
+      const opts = list.filter((server) => !excluded.has(server.id)).map(serverInfoToOption);
+      if (opts.length > 0) {
         setServers(opts);
         // Auto-select the lone server, or the first one when the caller asked
         // for a default and nothing's chosen yet (captured initial `value`).
@@ -99,7 +107,7 @@ export default function ServerSelector({
       setLoading(false);
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []); // onSelect intentionally excluded - same-cb identity contract as before
+  }, [excludeIds.join("|")]); // onSelect intentionally excluded - same-cb identity contract as before
 
   useEffect(() => {
     fetchServers();
@@ -128,6 +136,7 @@ export default function ServerSelector({
   /* ── No servers - empty state ──────────────────────────────────────── */
 
   if (servers.length === 0) {
+    if (hideWhenEmpty) return null;
     return (
       <div className="flex items-center justify-center py-16">
         <div className="max-w-sm w-full text-center">
@@ -163,7 +172,13 @@ export default function ServerSelector({
             {labelText}
           </label>
         )}
-        <div className="flex items-center gap-3 px-3.5 py-3 rounded-xl border border-border/50 bg-muted/30">
+        <button
+          type="button"
+          onClick={() => !disabled && onSelect(s)}
+          disabled={disabled}
+          aria-pressed={value === s.id}
+          className="flex w-full items-center gap-3 px-3.5 py-3 rounded-xl border border-border/50 bg-muted/30 text-start transition-colors hover:bg-muted/45 disabled:cursor-not-allowed disabled:opacity-50"
+        >
           <div className="w-8 h-8 rounded-lg bg-success-bg flex items-center justify-center shrink-0">
             <Server className="size-4 text-success" />
           </div>
@@ -173,8 +188,10 @@ export default function ServerSelector({
               {s.user}@<BlurIp>{s.host}</BlurIp>:{s.port}
             </p>
           </div>
-          <CheckCircle2 className="size-4 text-success shrink-0" />
-        </div>
+          <CheckCircle2
+            className={`size-4 shrink-0 ${value === s.id ? "text-success" : "text-muted-foreground/40"}`}
+          />
+        </button>
       </div>
     );
   }
