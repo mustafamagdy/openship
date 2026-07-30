@@ -4,6 +4,9 @@ import { resolvePublicUrlPlaceholders } from "@repo/core";
 const DNS_LABEL_MAX = 63;
 const DEFAULT_STACK_ROLLOUT_TIMEOUT_SECONDS = 900;
 const DEFAULT_PVC_SIZE = "10Gi";
+const MIN_KUBECTL_APPLY_TIMEOUT_MS = 120_000;
+const MAX_KUBECTL_APPLY_TIMEOUT_MS = 900_000;
+const KUBECTL_APPLY_TIMEOUT_PER_OBJECT_MS = 20_000;
 
 export interface KubernetesDeployInput {
   projectId: string;
@@ -94,6 +97,13 @@ function dnsLabel(value: string, fallback: string): string {
 
 function positiveInt(value: number | undefined, fallback: number): number {
   return Number.isInteger(value) && value! > 0 ? value! : fallback;
+}
+
+function kubectlApplyTimeoutMs(objectCount: number): number {
+  return Math.min(
+    MAX_KUBECTL_APPLY_TIMEOUT_MS,
+    Math.max(MIN_KUBECTL_APPLY_TIMEOUT_MS, objectCount * KUBECTL_APPLY_TIMEOUT_PER_OBJECT_MS),
+  );
 }
 
 function resourceQuantity(resources: ResourceConfig): {
@@ -718,7 +728,7 @@ export async function deployStackToKubernetes(
     onLog?.(`Applying Kubernetes stack foundation in ${namespace}...`);
     await executor.exec(
       `${kubectl} apply --server-side --field-manager=openship -f ${foundationManifestPath}`,
-      { timeout: 120_000 },
+      { timeout: kubectlApplyTimeoutMs(foundationObjects.length) },
     );
 
     // Services are part of the foundation, so Kubernetes has allocated every
@@ -771,7 +781,7 @@ export async function deployStackToKubernetes(
       );
       await executor.exec(
         `${kubectl} apply --server-side --field-manager=openship -f ${configurationManifestPath}`,
-        { timeout: 120_000 },
+        { timeout: kubectlApplyTimeoutMs(configurationObjects.length) },
       );
     }
 

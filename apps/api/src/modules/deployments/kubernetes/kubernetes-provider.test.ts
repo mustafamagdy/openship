@@ -226,14 +226,16 @@ describe("Kubernetes provider", () => {
 
   it("deploys every stack workload and returns public service ports", async () => {
     const commands: string[] = [];
+    const commandTimeouts = new Map<string, number | undefined>();
     const writtenFiles = new Map<string, string>();
     const executor = {
       mkdir: async () => {},
       writeFile: async (path: string, contents: string) => {
         writtenFiles.set(path, contents);
       },
-      exec: async (command: string) => {
+      exec: async (command: string, options?: { timeout?: number }) => {
         commands.push(command);
+        commandTimeouts.set(command, options?.timeout);
         return command.includes("jsonpath") ? "31234" : "";
       },
       rm: async () => {},
@@ -270,6 +272,7 @@ describe("Kubernetes provider", () => {
     );
     expect(foundationApply).toBeGreaterThan(-1);
     expect(frontendApply).toBeGreaterThan(foundationApply);
+    expect(commandTimeouts.get(commands[foundationApply]!)).toBe(120_000);
     const firstRollout = commands.findIndex((command) =>
       command.includes("rollout status deployment/frontend"),
     );
@@ -296,5 +299,32 @@ describe("Kubernetes provider", () => {
       (object: any) => object.metadata.name === "catalog-env",
     );
     expect(catalogSecret.stringData.PUBLIC_FRONTEND).toBe("http://10.0.0.20:31234");
+  });
+
+  it("scales the foundation apply timeout for large multi-service stacks", async () => {
+    let foundationTimeout: number | undefined;
+    const executor = {
+      mkdir: async () => {},
+      writeFile: async () => {},
+      exec: async (command: string, options?: { timeout?: number }) => {
+        if (command.includes("foundation.json")) foundationTimeout = options?.timeout;
+        return "";
+      },
+      rm: async () => {},
+    } as unknown as CommandExecutor;
+
+    await deployStackToKubernetes(executor, {
+      projectId: "project-123",
+      projectSlug: "large-stack",
+      deploymentId: "dep-large",
+      resources: base.resources,
+      services: Array.from({ length: 12 }, (_, index) => ({
+        name: `service-${index}`,
+        image: `example/service-${index}:v1`,
+        ports: [`${3000 + index}`],
+      })),
+    });
+
+    expect(foundationTimeout).toBe(500_000);
   });
 });
