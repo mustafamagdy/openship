@@ -207,8 +207,16 @@ jobs:
           if [ -d apps/dashboard/public ]; then
             cp -a apps/dashboard/public "$STAGING/apps/dashboard/public"
           fi
+          # Next route handlers cannot forward WebSocket upgrades. The CLI
+          # deliberately prefers this wrapper over server.js so terminal
+          # upgrades under /api/proxy/* are relayed directly to the API.
+          cp apps/dashboard/standalone-server.mjs \
+            "$STAGING/apps/dashboard/standalone-server.mjs"
+          test -s "$STAGING/apps/dashboard/standalone-server.mjs"
           ARTIFACT="openship-dashboard-${TAG}.tar.gz"
           tar -czf "$ARTIFACT" -C "$STAGING" .
+          tar -tzf "$ARTIFACT" | grep -qx \
+            './apps/dashboard/standalone-server.mjs'
           sha256sum "$ARTIFACT" > "$ARTIFACT.sha256"
           echo "artifact=$ARTIFACT" >> "$GITHUB_OUTPUT"
 
