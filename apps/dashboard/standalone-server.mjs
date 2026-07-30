@@ -28,6 +28,8 @@ const require = createRequire(import.meta.url);
 // Grab the CJS `http` singleton so the monkeypatch is visible to Next's own
 // `require("http")` inside start-server (ESM named imports are read-only).
 const http = require("node:http");
+const net = require("node:net");
+const tls = require("node:tls");
 
 const API_BASE = (
   process.env.INTERNAL_API_URL ||
@@ -45,39 +47,53 @@ const PROXY_PREFIX = "/api/proxy";
 function proxyUpgrade(req, clientSocket, head) {
   const upstreamPath = req.url.slice(PROXY_PREFIX.length) || "/";
   const target = new URL(API_BASE + upstreamPath);
-  const proxyReq = http.request({
-    protocol: target.protocol,
-    hostname: target.hostname,
-    port: target.port || (target.protocol === "https:" ? 443 : 80),
-    path: target.pathname + target.search,
-    method: req.method,
-    // Pass the client's headers verbatim (Upgrade, Connection, Sec-WebSocket-*,
-    // Cookie) so the API sees a genuine upgrade + the terminal ticket/session.
-    headers: { ...req.headers, host: target.host },
-  });
+  const secure = target.protocol === "https:";
+  const port = Number(target.port || (secure ? 443 : 80));
 
-  proxyReq.on("upgrade", (proxyRes, proxySocket, proxyHead) => {
-    const statusLine = `HTTP/1.1 ${proxyRes.statusCode} ${proxyRes.statusMessage}\r\n`;
-    const headerLines = Object.entries(proxyRes.headers)
-      .map(([k, v]) => `${k}: ${Array.isArray(v) ? v.join(", ") : v}`)
+  // Do not use http.request() here. OpenShip's CLI commonly runs this Node-
+  // targeted bundle under Bun, whose Node compatibility layer normalizes an
+  // outbound Upgrade request into ordinary HTTP. The API then sees no Upgrade
+  // header and returns the route's placeholder 200 instead of a 101. Relaying
+  // the original handshake over a raw socket preserves every WebSocket header
+  // identically under both Node and Bun.
+  const proxySocket = secure
+    ? tls.connect({ host: target.hostname, port, servername: target.hostname })
+    : net.connect({ host: target.hostname, port });
+
+  const teardown = () => {
+    proxySocket.destroy();
+    clientSocket.destroy();
+  };
+  proxySocket.on("error", teardown);
+  clientSocket.on("error", teardown);
+  proxySocket.on("close", () => clientSocket.destroy());
+  clientSocket.on("close", () => proxySocket.destroy());
+
+  proxySocket.once("connect", () => {
+    const headers = { ...req.headers, host: target.host };
+    const headerLines = Object.entries(headers)
+      .filter(([, value]) => value != null)
+      .map(([key, value]) =>
+        Array.isArray(value)
+          ? value.map((item) => `${key}: ${item}`).join("\r\n")
+          : `${key}: ${value}`,
+      )
       .join("\r\n");
-    clientSocket.write(statusLine + headerLines + "\r\n\r\n");
-    if (proxyHead && proxyHead.length) clientSocket.write(proxyHead);
+    proxySocket.write(
+      `${req.method ?? "GET"} ${target.pathname}${target.search} HTTP/1.1\r\n` +
+        headerLines +
+        "\r\n\r\n",
+    );
     if (head && head.length) proxySocket.write(head);
-
-    const teardown = () => {
-      proxySocket.destroy();
-      clientSocket.destroy();
-    };
-    proxySocket.on("error", teardown);
-    clientSocket.on("error", teardown);
-    proxySocket.on("close", () => clientSocket.destroy());
-    clientSocket.on("close", () => proxySocket.destroy());
+    proxySocket.once("data", (chunk) => {
+      const statusLine = chunk.toString("latin1", 0, Math.min(chunk.length, 160)).split("\r\n", 1)[0];
+      if (!statusLine.startsWith("HTTP/1.1 101 ")) {
+        console.error(`[dashboard-ws] upstream rejected upgrade: ${statusLine}`);
+      }
+    });
     proxySocket.pipe(clientSocket);
     clientSocket.pipe(proxySocket);
   });
-  proxyReq.on("error", () => clientSocket.destroy());
-  proxyReq.end();
 }
 
 let wrapped = false;

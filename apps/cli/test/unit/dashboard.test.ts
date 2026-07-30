@@ -74,6 +74,26 @@ describe("ensureDashboard release source", () => {
     });
   });
 
+  it("prefers the WebSocket-capable entry in a cached release", async () => {
+    mocks.resolveLatestTag.mockResolvedValue("v0.4.2");
+    const releaseDir = join(
+      mocks.cacheDir,
+      "dashboard",
+      "mustafamagdy",
+      "openship",
+      "v0.4.2",
+    );
+    const dashboardDir = join(releaseDir, "apps", "dashboard");
+    mkdirSync(dashboardDir, { recursive: true });
+    writeFileSync(join(dashboardDir, "server.js"), "");
+    writeFileSync(join(dashboardDir, "standalone-server.mjs"), "");
+    writeFileSync(join(releaseDir, ".extracted"), "v0.4.2\n");
+
+    const bundle = await ensureDashboard();
+
+    expect(bundle.entry).toBe(join(dashboardDir, "standalone-server.mjs"));
+  });
+
   it("downloads and verifies a tagged dashboard from the configured fork", async () => {
     mocks.assetUrl.mockReturnValue("https://example.test/fork-dashboard.tgz");
     mocks.expectedSha256.mockResolvedValue("expected-sha");
