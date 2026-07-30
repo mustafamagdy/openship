@@ -141,7 +141,10 @@ r.post(
   "/:id/kubernetes/scale",
   {
     tag: "deployment:write",
-    mcp: { description: "Scale one OpenShip-managed Kubernetes Deployment and wait for rollout." },
+    mcp: {
+      description:
+        "Scale one OpenShip-managed Kubernetes Deployment from 0 to 50 replicas and wait for rollout. Use 0 to pause the workload.",
+    },
   },
   cloudDeploymentProxy,
   ctrl.kubernetesScale,

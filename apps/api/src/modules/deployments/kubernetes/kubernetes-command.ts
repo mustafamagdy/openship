@@ -1,5 +1,9 @@
 export type OwnedKubernetesResource = "deployment" | "pod";
 
+export function isValidReplicaCount(replicas: number): boolean {
+  return Number.isInteger(replicas) && replicas >= 0 && replicas <= 50;
+}
+
 /**
  * Query one named resource while retaining the OpenShip ownership label guard.
  *

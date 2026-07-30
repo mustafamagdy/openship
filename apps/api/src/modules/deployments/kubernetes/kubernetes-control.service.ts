@@ -3,7 +3,7 @@ import { sshManager } from "../../../lib/ssh-manager";
 import type { DeploymentMeta } from "../../../lib/deployment-runtime";
 import type { ShellOptions, ShellSession } from "@repo/adapters";
 import { getDeployment } from "../deployment.service";
-import { ownedResourceQuery } from "./kubernetes-command";
+import { isValidReplicaCount, ownedResourceQuery } from "./kubernetes-command";
 
 type KubernetesList<T> = { items?: T[] };
 
@@ -280,8 +280,8 @@ export async function scale(
   workloadName: string,
   replicas: number,
 ): Promise<KubernetesInventory> {
-  if (!Number.isInteger(replicas) || replicas < 1 || replicas > 50) {
-    throw new ForbiddenError("Replicas must be an integer between 1 and 50.");
+  if (!isValidReplicaCount(replicas)) {
+    throw new ForbiddenError("Replicas must be an integer between 0 and 50.");
   }
   const target = await binding(deploymentId, organizationId);
   const workload = safeName(workloadName, "deployment name");
