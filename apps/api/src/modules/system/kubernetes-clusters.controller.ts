@@ -21,8 +21,18 @@ interface VersionInfo {
 }
 
 interface NodeItem {
-  metadata?: { name?: string; labels?: Record<string, string> };
+  metadata?: {
+    name?: string;
+    labels?: Record<string, string>;
+    creationTimestamp?: string;
+  };
   status?: {
+    addresses?: Array<{ type?: string; address?: string }>;
+    allocatable?: {
+      cpu?: string;
+      memory?: string;
+      pods?: string;
+    };
     conditions?: Array<{ type?: string; status?: string }>;
     nodeInfo?: {
       kubeletVersion?: string;
@@ -31,6 +41,11 @@ interface NodeItem {
       containerRuntimeVersion?: string;
     };
   };
+}
+
+interface PodItem {
+  spec?: { nodeName?: string };
+  status?: { phase?: string };
 }
 
 interface WorkloadItem {
@@ -56,6 +71,32 @@ function nodeReady(node: NodeItem): boolean {
   );
 }
 
+interface NodeMetrics {
+  cpuUsage: string | null;
+  cpuPercent: number | null;
+  memoryUsage: string | null;
+  memoryPercent: number | null;
+}
+
+function parseNodeMetrics(value: string): Map<string, NodeMetrics> {
+  const metrics = new Map<string, NodeMetrics>();
+  for (const line of value.trim().split("\n")) {
+    const [name, cpuUsage, cpuPercentRaw, memoryUsage, memoryPercentRaw] = line
+      .trim()
+      .split(/\s+/);
+    if (!name) continue;
+    const cpuPercent = Number.parseInt(cpuPercentRaw?.replace("%", "") ?? "", 10);
+    const memoryPercent = Number.parseInt(memoryPercentRaw?.replace("%", "") ?? "", 10);
+    metrics.set(name, {
+      cpuUsage: cpuUsage || null,
+      cpuPercent: Number.isFinite(cpuPercent) ? cpuPercent : null,
+      memoryUsage: memoryUsage || null,
+      memoryPercent: Number.isFinite(memoryPercent) ? memoryPercent : null,
+    });
+  }
+  return metrics;
+}
+
 async function inspectServer(
   server: Awaited<ReturnType<typeof repos.server.listByOrganization>>[number],
   projectsById: Map<string, { id: string; name: string; activeDeploymentId: string | null }>,
@@ -69,16 +110,29 @@ async function inspectServer(
 
   try {
     return await sshManager.withExecutor(server.id, async (executor) => {
-      const [versionRaw, nodesRaw, workloadsRaw] = await Promise.all([
+      const [versionRaw, nodesRaw, workloadsRaw, podsRaw, nodeMetricsRaw] = await Promise.all([
         executor.exec("sudo -n kubectl version -o json", { timeout: 30_000 }),
         executor.exec("sudo -n kubectl get nodes -o json", { timeout: 30_000 }),
         executor.exec(
           "sudo -n kubectl get deployments -A -l app.kubernetes.io/managed-by=openship -o json",
           { timeout: 30_000 },
         ),
+        executor
+          .exec("sudo -n kubectl get pods -A -o json", { timeout: 30_000 })
+          .catch(() => '{"items":[]}'),
+        executor
+          .exec("sudo -n kubectl top nodes --no-headers", { timeout: 30_000 })
+          .catch(() => ""),
       ]);
 
       const version = parseJson<VersionInfo>(versionRaw);
+      const podCounts = new Map<string, number>();
+      for (const pod of listItems<PodItem>(podsRaw)) {
+        const nodeName = pod.spec?.nodeName;
+        if (!nodeName || pod.status?.phase === "Succeeded" || pod.status?.phase === "Failed") continue;
+        podCounts.set(nodeName, (podCounts.get(nodeName) ?? 0) + 1);
+      }
+      const nodeMetrics = parseNodeMetrics(nodeMetricsRaw);
       const nodes = listItems<NodeItem>(nodesRaw).map((node) => ({
         name: node.metadata?.name ?? "unknown",
         ready: nodeReady(node),
@@ -92,6 +146,21 @@ async function inspectServer(
         operatingSystem: node.status?.nodeInfo?.operatingSystem ?? null,
         architecture: node.status?.nodeInfo?.architecture ?? null,
         containerRuntime: node.status?.nodeInfo?.containerRuntimeVersion ?? null,
+        ip:
+          node.status?.addresses?.find((address) => address.type === "InternalIP")?.address ??
+          node.status?.addresses?.find((address) => address.address)?.address ??
+          null,
+        createdAt: node.metadata?.creationTimestamp ?? null,
+        cpuCapacity: node.status?.allocatable?.cpu ?? null,
+        memoryCapacity: node.status?.allocatable?.memory ?? null,
+        podCapacity: Number.parseInt(node.status?.allocatable?.pods ?? "", 10) || null,
+        podCount: podCounts.get(node.metadata?.name ?? "") ?? 0,
+        ...(nodeMetrics.get(node.metadata?.name ?? "") ?? {
+          cpuUsage: null,
+          cpuPercent: null,
+          memoryUsage: null,
+          memoryPercent: null,
+        }),
       }));
       const workloads = listItems<WorkloadItem>(workloadsRaw).map((workload) => {
         const projectId = workload.metadata?.labels?.["openship.io/project-id"] ?? null;

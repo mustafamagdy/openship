@@ -283,6 +283,16 @@ export interface KubernetesClusterOverview {
     operatingSystem: string | null;
     architecture: string | null;
     containerRuntime: string | null;
+    ip: string | null;
+    createdAt: string | null;
+    cpuCapacity: string | null;
+    memoryCapacity: string | null;
+    podCapacity: number | null;
+    podCount: number;
+    cpuUsage: string | null;
+    cpuPercent: number | null;
+    memoryUsage: string | null;
+    memoryPercent: number | null;
   }>;
   workloads: Array<{
     name: string;

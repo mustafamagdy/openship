@@ -7,6 +7,7 @@ import { MigratedLauncher } from "@/components/migrated-launcher";
 import { MigrationInProgress } from "@/components/migration-in-progress";
 import { DashboardProviders } from "./providers";
 import { serverApi, ServerApiError } from "@/lib/server/api";
+import { OperatorTopbar } from "@/components/fork-ui/operator-topbar";
 
 /**
  * Better Auth's organization plugin returns `{ data: Org[] }` from
@@ -154,16 +155,19 @@ export default async function DashboardLayout({ children }: { children: React.Re
       machineName={deploymentInfo.machineName}
       hostDomain={deploymentInfo.hostDomain}
     >
-      <div className="flex flex-col h-dvh">
+      <div className="operator-shell flex h-dvh flex-col">
         {/* Update + platform-status surface — full app width, ABOVE the sidebar.
             Renders nothing unless there's an advisory / platform notice (SaaS:
             partial outage, maintenance) / available update / what's-new, so it
             adds no chrome when idle. */}
         <UpdateCenter />
-        <div className="flex flex-1 min-h-0">
+        <div className="flex min-h-0 flex-1">
           <Sidebar />
-          {/* Main content */}
-          <main className="flex-1 overflow-y-auto">{children}</main>
+          <div className="operator-workspace flex min-w-0 flex-1 flex-col">
+            <OperatorTopbar />
+            {/* Main content */}
+            <main className="operator-main min-h-0 flex-1 overflow-y-auto">{children}</main>
+          </div>
         </div>
       </div>
     </DashboardProviders>

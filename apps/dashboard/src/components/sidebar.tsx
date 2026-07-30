@@ -325,7 +325,7 @@ export function Sidebar() {
 
   return (
     <aside
-      className={`my-3 ms-3 flex shrink-0 flex-col rounded-2xl border border-border/50 bg-card transition-[width] duration-200 overflow-hidden ${
+      className={`operator-sidebar my-3 ms-3 flex shrink-0 flex-col overflow-hidden rounded-2xl border border-border/50 bg-card transition-[width] duration-200 ${
         collapsed ? "w-[72px]" : "w-[260px]"
       }`}
     >
@@ -395,6 +395,7 @@ export function Sidebar() {
                     <Link
                       key={key}
                       href={href}
+                      aria-current={active ? "page" : undefined}
                       title={collapsed ? label(key) : undefined}
                       className={`flex items-center rounded-xl px-3 py-2.5 text-[15px] font-medium transition-colors ${
                         collapsed ? "justify-center" : "gap-3"
