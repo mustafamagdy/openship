@@ -34,11 +34,11 @@ import {
   Container,
   ListTree,
   UserRound,
+  Layers3,
 } from "lucide-react";
 import { authClient, signOut } from "@/lib/auth-client";
 import { useTheme } from "@/components/theme-provider";
 import { useI18n, interpolate } from "@/components/i18n-provider";
-import { Logo } from "@/components/logo";
 import { useAuth } from "@/context/AuthContext";
 import { usePlatform } from "@/context/PlatformContext";
 import { useCloud } from "@/context/CloudContext";
@@ -333,6 +333,10 @@ export function Sidebar() {
 
   const workspaceOwner = displayName.trim().split(/\s+/)[0] || "Operator";
   const workspaceLabel = `${workspaceOwner}'s workspace`;
+  const canResetDesktopSetup =
+    isDesktop &&
+    typeof window !== "undefined" &&
+    Boolean((window as any).desktop?.reset);
   const operatorSections = [
     {
       label: "Manage",
@@ -371,7 +375,7 @@ export function Sidebar() {
       <div className="operator-sidebar__header">
         <div className="operator-sidebar__brand-row">
           <div className="operator-sidebar__brand">
-            <Logo size={28} />
+            <Layers3 aria-hidden="true" />
             {!collapsed && <span>{t.brand}</span>}
           </div>
           <button
@@ -518,11 +522,11 @@ export function Sidebar() {
           onClick={handleLogout}
           disabled={loggingOut}
           className="operator-sidebar__utility"
-          title={collapsed ? (isDesktop ? t.chrome.sidebar.backToSetup : t.dashboard.user.logout) : undefined}
+          title={collapsed ? (canResetDesktopSetup ? t.chrome.sidebar.backToSetup : "Sign out") : undefined}
         >
           {loggingOut ? <Loader2 className="animate-spin" /> : <LogOut />}
           {!collapsed && (
-            <span>{isDesktop ? t.chrome.sidebar.backToSetup : "Sign out"}</span>
+            <span>{canResetDesktopSetup ? t.chrome.sidebar.backToSetup : "Sign out"}</span>
           )}
         </button>
       </div>
