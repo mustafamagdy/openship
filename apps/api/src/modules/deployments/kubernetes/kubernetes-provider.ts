@@ -1,4 +1,5 @@
 import type { CommandExecutor, ResourceConfig } from "@repo/adapters";
+import { resolvePublicUrlPlaceholders } from "@repo/core";
 
 const DNS_LABEL_MAX = 63;
 const DEFAULT_STACK_ROLLOUT_TIMEOUT_SECONDS = 900;
@@ -62,6 +63,8 @@ export interface KubernetesStackDeployInput {
   storageClassName?: string;
   /** Requested capacity for each Compose named volume. */
   defaultVolumeSize?: string;
+  /** Host clients use to reach exposed NodePorts. */
+  publicHost?: string;
 }
 
 export interface KubernetesStackDeployResult {
@@ -690,6 +693,57 @@ export async function deployStackToKubernetes(
       `${kubectl} apply --server-side --field-manager=openship -f ${foundationManifestPath}`,
       { timeout: 120_000 },
     );
+
+    // Services are part of the foundation, so Kubernetes has allocated every
+    // exposed NodePort before any workload starts. Resolve catalog
+    // {{publicUrl:service}} placeholders now and re-apply only the Secrets.
+    // Internal-only references use cluster DNS; exposed references use the
+    // externally reachable cluster host + assigned NodePort.
+    const services: KubernetesStackDeployResult["services"] = [];
+    const publicUrls = new Map<string, string>();
+    for (const descriptor of built.serviceDescriptors) {
+      let nodePort: number | undefined;
+      if (descriptor.exposed) {
+        const raw = await executor.exec(
+          `${kubectl} -n ${namespace} get service ${safeKubectlName(descriptor.serviceName)} -o jsonpath='{.spec.ports[0].nodePort}'`,
+          { timeout: 30_000 },
+        );
+        nodePort = Number(raw.trim().replace(/^'|'$/g, ""));
+        if (!Number.isInteger(nodePort) || nodePort < 30000 || nodePort > 32767) {
+          throw new Error(
+            `Kubernetes did not assign a valid NodePort to service/${descriptor.serviceName}`,
+          );
+        }
+      }
+      const internalUrl = `http://${descriptor.serviceName}:${descriptor.port}`;
+      publicUrls.set(
+        descriptor.name,
+        nodePort && input.publicHost ? `http://${input.publicHost}:${nodePort}` : internalUrl,
+      );
+      publicUrls.set(`${descriptor.name}:${descriptor.port}`, internalUrl);
+      services.push({ ...descriptor, nodePort });
+    }
+    const secretObjects = built.objects
+      .filter((object) => object.kind === "Secret" && object.stringData)
+      .map((object) => ({
+        ...object,
+        stringData: resolvePublicUrlPlaceholders(
+          object.stringData as Record<string, string>,
+          (name, port) => publicUrls.get(port === undefined ? name : `${name}:${port}`),
+        ),
+      }));
+    if (secretObjects.length > 0) {
+      const secretsManifestPath = `${remoteDir}/secrets.json`;
+      await executor.writeFile(
+        secretsManifestPath,
+        JSON.stringify({ apiVersion: "v1", kind: "List", items: secretObjects }),
+      );
+      await executor.exec(
+        `${kubectl} apply --server-side --field-manager=openship -f ${secretsManifestPath}`,
+        { timeout: 120_000 },
+      );
+    }
+
     for (const [index, deployment] of built.deployments.entries()) {
       const safeDeployment = safeKubectlName(deployment);
       const deploymentObject = deploymentObjects.get(safeDeployment);
@@ -710,24 +764,6 @@ export async function deployStackToKubernetes(
         `${kubectl} -n ${namespace} rollout status deployment/${safeDeployment} --timeout=${timeout}s`,
         { timeout: (timeout + 15) * 1_000 },
       );
-    }
-
-    const services: KubernetesStackDeployResult["services"] = [];
-    for (const descriptor of built.serviceDescriptors) {
-      let nodePort: number | undefined;
-      if (descriptor.exposed) {
-        const raw = await executor.exec(
-          `${kubectl} -n ${namespace} get service ${safeKubectlName(descriptor.serviceName)} -o jsonpath='{.spec.ports[0].nodePort}'`,
-          { timeout: 30_000 },
-        );
-        nodePort = Number(raw.trim().replace(/^'|'$/g, ""));
-        if (!Number.isInteger(nodePort) || nodePort < 30000 || nodePort > 32767) {
-          throw new Error(
-            `Kubernetes did not assign a valid NodePort to service/${descriptor.serviceName}`,
-          );
-        }
-      }
-      services.push({ ...descriptor, nodePort });
     }
 
     return {
