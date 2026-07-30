@@ -14,7 +14,12 @@ export function PageContainer({
   fullScreen = true,
 }: PageContainerProps) {
   const inner = (
-    <div className={cn("max-w-[1600px] mx-auto px-4 sm:px-6 lg:px-8 py-6", className)}>
+    <div
+      className={cn(
+        "operator-page-container max-w-[1600px] mx-auto px-4 sm:px-6 lg:px-8 py-6",
+        className,
+      )}
+    >
       {children}
     </div>
   );
@@ -22,7 +27,7 @@ export function PageContainer({
   if (!fullScreen) return inner;
 
   return (
-    <div className={cn("min-h-screen bg-background", outerClassName)}>
+    <div className={cn("operator-page-frame min-h-screen bg-background", outerClassName)}>
       {inner}
     </div>
   );

@@ -571,6 +571,143 @@
   background: var(--op-canvas);
 }
 
+/*
+ * Shared operator page language.
+ *
+ * The upstream dashboard still owns each feature's layout and behavior. These
+ * hooks normalize its page frame and common Tailwind component vocabulary so
+ * every route reads as one product while keeping upstream merges localized to
+ * this fork-owned layer.
+ */
+.operator-page-frame {
+  min-height: 100%;
+  background: var(--op-canvas);
+}
+
+.operator-page-container {
+  width: 100%;
+  max-width: 1600px;
+  padding: 20px;
+  color: var(--op-text);
+  font-size: 13px;
+}
+
+.operator-page-container > :first-child:is(.mb-5, .mb-6, .mb-7),
+.operator-page-container > header:first-child {
+  margin-bottom: 14px;
+}
+
+.operator-page-container h1,
+.operator-page-container .text-2xl {
+  color: var(--op-text);
+  font-size: 21px;
+  font-weight: 600;
+  letter-spacing: -0.025em !important;
+  line-height: 1.2;
+}
+
+.operator-page-container h1 + p,
+.operator-page-container .text-2xl + p {
+  margin-top: 4px;
+  color: var(--op-text-muted);
+  font-size: 12px;
+}
+
+.operator-page-container h2,
+.operator-page-container h3 {
+  letter-spacing: -0.012em;
+}
+
+.operator-page-container .bg-card,
+.operator-page-container [class*="bg-card/"] {
+  background-color: var(--op-panel);
+}
+
+.operator-page-container .border-border,
+.operator-page-container .border-border\/50,
+.operator-page-container .border-border\/60 {
+  border-color: var(--op-border);
+}
+
+.operator-page-container .divide-border\/50 > :not([hidden]) ~ :not([hidden]) {
+  border-color: var(--op-border-soft);
+}
+
+.operator-page-container .rounded-2xl {
+  border-radius: 6px;
+}
+
+.operator-page-container .rounded-xl {
+  border-radius: 5px;
+}
+
+.operator-page-container input,
+.operator-page-container select,
+.operator-page-container textarea {
+  border-color: var(--op-border);
+  border-radius: 5px;
+  background: #0b0b0c;
+  color: var(--op-text);
+  box-shadow: none;
+}
+
+.operator-page-container input::placeholder,
+.operator-page-container textarea::placeholder {
+  color: #626269;
+}
+
+.operator-page-container input:focus,
+.operator-page-container select:focus,
+.operator-page-container textarea:focus {
+  border-color: #4c4c55;
+  outline: 2px solid color-mix(in srgb, var(--op-accent) 35%, transparent);
+  outline-offset: 1px;
+  box-shadow: none;
+}
+
+.operator-page-container .bg-primary {
+  border-color: #f4f4f5;
+  background: #f4f4f5;
+  color: #09090b;
+  box-shadow: none;
+}
+
+.operator-page-container .bg-primary:hover {
+  background: #ffffff;
+  box-shadow: none;
+  transform: none;
+}
+
+.operator-page-container button,
+.operator-page-container a {
+  transition-duration: 120ms;
+}
+
+.operator-page-container button:focus-visible,
+.operator-page-container a:focus-visible {
+  outline: 2px solid var(--op-accent);
+  outline-offset: 2px;
+}
+
+.operator-page-container table {
+  font-size: 12px;
+}
+
+.operator-page-container thead {
+  color: var(--op-text-muted);
+  font-size: 10px;
+  letter-spacing: 0.045em;
+  text-transform: uppercase;
+}
+
+.operator-page-container tbody tr {
+  border-color: var(--op-border-soft);
+}
+
+.operator-page-container tbody tr:hover {
+  background: #0e0e10;
+}
+
 @media (max-width: 1100px) {
   .operator-topbar {
     grid-template-columns: 1fr minmax(280px, 420px) auto;
@@ -592,6 +729,10 @@
 
   .operator-shell .operator-sidebar {
     width: 72px !important;
+  }
+
+  .operator-page-container {
+    padding: 16px;
   }
 }
 
@@ -681,9 +822,7 @@
 }
 
 .operator-kube__cluster-select {
-  position: absolute;
-  top: 20px;
-  left: 180px;
+  position: relative;
   display: flex;
   align-items: center;
   width: 190px;
@@ -711,6 +850,21 @@
   height: 13px;
   color: var(--op-text-muted);
   pointer-events: none;
+}
+
+@media (max-width: 760px) {
+  .operator-kube__page-header {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .operator-kube__actions {
+    flex-wrap: wrap;
+  }
+
+  .operator-kube__cluster-select {
+    width: min(100%, 240px);
+  }
 }
 
 .operator-kube__status-strip {
