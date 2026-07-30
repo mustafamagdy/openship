@@ -119,6 +119,9 @@
         {
           "name": "auth",
           "image": "supabase/gotrue:v2.189.0",
+          "ports": [
+            "9999"
+          ],
           "dependsOn": [
             "db"
           ],
@@ -159,6 +162,9 @@
         {
           "name": "rest",
           "image": "postgrest/postgrest:v14.12",
+          "ports": [
+            "3000"
+          ],
           "dependsOn": [
             "db"
           ],
@@ -176,6 +182,9 @@
         {
           "name": "realtime-dev.supabase-realtime",
           "image": "supabase/realtime:v2.102.3",
+          "ports": [
+            "4000"
+          ],
           "dependsOn": [
             "db"
           ],
@@ -203,6 +212,9 @@
         {
           "name": "storage",
           "image": "supabase/storage-api:v1.60.4",
+          "ports": [
+            "5000"
+          ],
           "dependsOn": [
             "db",
             "rest",
@@ -244,6 +256,9 @@
         {
           "name": "imgproxy",
           "image": "darthsim/imgproxy:v3.30.1",
+          "ports": [
+            "5001"
+          ],
           "environment": {
             "IMGPROXY_BIND": ":5001",
             "IMGPROXY_LOCAL_FILESYSTEM_ROOT": "/",
@@ -268,6 +283,9 @@
         {
           "name": "meta",
           "image": "supabase/postgres-meta:v0.96.6",
+          "ports": [
+            "8080"
+          ],
           "dependsOn": [
             "db"
           ],
@@ -285,6 +303,9 @@
         {
           "name": "studio",
           "image": "supabase/studio:2026.07.07-sha-a6a04f2",
+          "ports": [
+            "3000"
+          ],
           "dependsOn": [
             "meta"
           ],
