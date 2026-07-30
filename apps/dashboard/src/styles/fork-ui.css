@@ -17,8 +17,31 @@
   --op-text-muted: #71717a;
   --op-accent: #5b7cff;
   --op-success: #45c95a;
+  /*
+   * The operator shell is intentionally dark regardless of the user's legacy
+   * theme preference. Bridge the existing shadcn/Tailwind tokens as well as
+   * the fork-owned tokens so inherited sidebar chrome (logo, account switcher,
+   * scroll fade, borders) cannot retain light-theme colours.
+   */
+  --background: var(--op-canvas);
+  --foreground: var(--op-text);
+  --card: #08090a;
+  --card-foreground: var(--op-text);
+  --popover: var(--op-panel-raised);
+  --popover-foreground: var(--op-text);
+  --primary: var(--op-accent);
+  --primary-foreground: #ffffff;
+  --muted: #151517;
+  --muted-foreground: var(--op-text-secondary);
+  --accent: #17171a;
+  --accent-foreground: var(--op-text);
+  --border: var(--op-border);
+  --input: var(--op-border);
+  --ring: var(--op-accent);
+  --th-card-on-page: #08090a;
   background: var(--op-canvas);
   color: var(--op-text);
+  color-scheme: dark;
 }
 
 .operator-shell .operator-sidebar {
