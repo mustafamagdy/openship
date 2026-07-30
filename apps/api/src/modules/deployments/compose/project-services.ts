@@ -12,7 +12,7 @@
  */
 
 import { repos, type Project, type Service } from "@repo/db";
-import { getProjectType, type StackId } from "@repo/core";
+import { getProjectType, type ComposeAdvanced, type StackId } from "@repo/core";
 import { serviceKind, type DeployableService } from "../../../lib/deployable-service";
 export { serviceKind } from "../../../lib/deployable-service";
 
@@ -62,6 +62,7 @@ export function projectServicesToDeployableServices(services: Service[]): Deploy
     ports: (s.ports as string[] | null) ?? [],
     dependsOn: (s.dependsOn as string[] | null) ?? [],
     environment: (s.environment as Record<string, string> | null) ?? {},
+    advanced: (s.advanced as ComposeAdvanced | null) ?? undefined,
     volumes: (s.volumes as string[] | null) ?? [],
     command: s.command ?? undefined,
     restart: s.restart ?? undefined,
@@ -102,4 +103,3 @@ export async function shouldUseProjectServicePipeline(
   // Fallback for compose projects that don't have synced service rows.
   return isMultiServiceProject(project);
 }
-

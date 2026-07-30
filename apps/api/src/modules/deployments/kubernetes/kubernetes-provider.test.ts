@@ -118,6 +118,12 @@ describe("Kubernetes provider", () => {
           image: "postgres:17",
           ports: ["5432"],
           volumes: ["supabase_db_data:/var/lib/postgresql/data"],
+          files: [
+            {
+              path: "/docker-entrypoint-initdb.d/99-roles.sql",
+              content: "ALTER USER authenticator;",
+            },
+          ],
         },
         {
           name: "storage",
@@ -145,6 +151,19 @@ describe("Kubernetes provider", () => {
     expect(claims[0].spec.accessModes).toEqual(["ReadWriteOnce"]);
     expect(claims[0].spec.resources.requests.storage).toBe("10Gi");
     expect(claims[0].spec.storageClassName).toBeUndefined();
+    const dbFiles = built.objects.find(
+      (object: any) => object.kind === "ConfigMap" && object.metadata.name === "db-files",
+    ) as any;
+    expect(dbFiles.data["file-0"]).toBe("ALTER USER authenticator;");
+    const db = built.objects.find(
+      (object: any) => object.kind === "Deployment" && object.metadata.name === "db",
+    ) as any;
+    expect(db.spec.template.spec.containers[0].volumeMounts[1]).toEqual({
+      name: "db-files",
+      mountPath: "/docker-entrypoint-initdb.d/99-roles.sql",
+      subPath: "file-0",
+      readOnly: true,
+    });
 
     const storage = built.objects.find(
       (object: any) => object.kind === "Deployment" && object.metadata.name === "storage",
@@ -270,10 +289,10 @@ describe("Kubernetes provider", () => {
     expect(
       [...writtenFiles.keys()].filter((path) => path.includes("/deployment-")),
     ).toHaveLength(2);
-    const secrets = [...writtenFiles.entries()].find(([path]) =>
-      path.endsWith("/secrets.json"),
+    const configuration = [...writtenFiles.entries()].find(([path]) =>
+      path.endsWith("/configuration.json"),
     );
-    const catalogSecret = JSON.parse(secrets![1]).items.find(
+    const catalogSecret = JSON.parse(configuration![1]).items.find(
       (object: any) => object.metadata.name === "catalog-env",
     );
     expect(catalogSecret.stringData.PUBLIC_FRONTEND).toBe("http://10.0.0.20:31234");
