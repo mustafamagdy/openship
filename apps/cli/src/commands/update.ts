@@ -21,6 +21,7 @@ import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
   copyFileSync,
+  existsSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -128,8 +129,31 @@ export function packageManagerExecutable(
   pm: CliPackageManager,
   bunVersion: string | undefined | null = process.versions.bun,
   execPath = process.execPath,
+  env: NodeJS.ProcessEnv = process.env,
+  home = homedir(),
 ): string {
-  return pm === "bun" && bunVersion ? execPath : pm;
+  if (pm !== "bun") return pm;
+  if (bunVersion) return execPath;
+
+  // `openship update` often runs from a Node systemd unit. In that process
+  // PATH intentionally does not include ~/.bun/bin, even though Bun installed
+  // the CLI globally. Do not fall back to a bare `bun` until the standard Bun
+  // install locations have been checked first.
+  const binary = process.platform === "win32" ? "bun.exe" : "bun";
+  const candidates = [
+    env.BUN_INSTALL ? join(env.BUN_INSTALL, "bin", binary) : undefined,
+    join(home, ".bun", "bin", binary),
+  ];
+  return candidates.find((candidate) => candidate && existsSync(candidate)) ?? "bun";
+}
+
+export function packageManagerFailure(
+  executable: string,
+  result: { status: number | null; signal: NodeJS.Signals | null; error?: Error },
+): string {
+  if (result.error) return `could not start ${executable}: ${result.error.message}`;
+  if (result.signal) return `${executable} was terminated by ${result.signal}`;
+  return `${executable} exited ${result.status ?? "without an exit status"}`;
 }
 
 export const updateCommand = new Command("update")
@@ -238,11 +262,12 @@ export const updateCommand = new Command("update")
         ? cliInstallCommand(pm, latest)
         : `${pm} install verified ${source.repo} release bundle`;
     info(`Updating v${current} → v${latest} (${installDescription})...`);
+    const executable = packageManagerExecutable(pm);
     const res =
       pm === "bun" && source.repo !== UPSTREAM_RELEASE_REPO
         ? installForkBundleWithBun(installRef, latest)
         : spawnSync(
-            packageManagerExecutable(pm),
+            executable,
             pm === "bun" ? ["add", "-g", installRef] : ["install", "-g", installRef],
             {
               stdio: "inherit",
@@ -252,7 +277,7 @@ export const updateCommand = new Command("update")
     cleanup?.();
     if (res.status !== 0) {
       err(
-        `Update failed (${pm} exited ${res.status ?? "with a signal"}). ${
+        `Update failed (${packageManagerFailure(executable, res)}). ${
           source.repo === UPSTREAM_RELEASE_REPO
             ? `Reinstall manually: ${cliInstallCommand(pm, latest)}`
             : `Retry after checking release v${latest} in ${source.repo}.`
@@ -427,7 +452,8 @@ function installForkBundleWithBun(bundlePath: string, version: string) {
 
   const globalDir = resolveBunGlobalDir();
   const previousManifest = updateBunGlobalManifest(globalDir, durableBundlePath);
-  const result = spawnSync(packageManagerExecutable("bun"), ["install"], {
+  const executable = packageManagerExecutable("bun");
+  const result = spawnSync(executable, ["install"], {
     cwd: globalDir,
     stdio: "inherit",
     shell: process.platform === "win32",
