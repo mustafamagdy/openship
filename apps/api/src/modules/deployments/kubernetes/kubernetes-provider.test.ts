@@ -91,6 +91,9 @@ describe("Kubernetes provider", () => {
     expect(frontend.spec.template.spec.topologySpreadConstraints[0].topologyKey).toBe(
       "kubernetes.io/hostname",
     );
+    expect(frontend.spec.template.spec.containers[0].securityContext).toEqual({
+      allowPrivilegeEscalation: false,
+    });
     const disruptionBudget = built.objects.find(
       (object: any) =>
         object.kind === "PodDisruptionBudget" && object.metadata.name === "frontend-pdb",
