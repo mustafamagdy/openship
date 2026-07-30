@@ -822,6 +822,7 @@ async function executeBuildAndDeploy(project: Project, dep: Deployment, buildSes
                 dependsOn: service.dependsOn,
                 volumes: service.volumes,
                 command: service.command,
+                files: service.advanced?.files,
               })),
               resources: prodResources,
               defaultReplicas: snapshot.kubernetesReplicas,

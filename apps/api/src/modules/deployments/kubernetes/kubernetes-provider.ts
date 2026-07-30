@@ -45,6 +45,7 @@ export interface KubernetesStackService {
   volumes?: string[];
   command?: string;
   replicas?: number;
+  files?: Array<{ path: string; content: string }>;
 }
 
 export interface KubernetesStackDeployInput {
@@ -419,6 +420,10 @@ export function buildKubernetesStackObjects(input: KubernetesStackDeployInput): 
     const parsedVolumes = (service.volumes ?? []).map((volume) =>
       parseNamedVolume(volume, service.name),
     );
+    const files = (service.files ?? []).filter(
+      (file) => file.path.startsWith("/") && file.content.length > 0,
+    );
+    const filesVolumeName = `${name}-files`.slice(0, DNS_LABEL_MAX);
     const requestedReplicas = positiveInt(
       service.replicas,
       service.exposed ? positiveInt(input.defaultReplicas, 2) : 1,
@@ -433,6 +438,15 @@ export function buildKubernetesStackObjects(input: KubernetesStackDeployInput): 
     };
     const secretName = `${name}-env`.slice(0, DNS_LABEL_MAX);
     const serviceName = name;
+
+    if (files.length > 0) {
+      objects.push({
+        apiVersion: "v1",
+        kind: "ConfigMap",
+        metadata: { name: filesVolumeName, namespace, labels },
+        data: Object.fromEntries(files.map((file, index) => [`file-${index}`, file.content])),
+      });
+    }
 
     objects.push({
       apiVersion: "v1",
@@ -497,13 +511,21 @@ export function buildKubernetesStackObjects(input: KubernetesStackDeployInput): 
                 imagePullPolicy: "IfNotPresent",
                 ports: [{ name: "tcp", containerPort: port, protocol: "TCP" }],
                 envFrom: [{ secretRef: { name: secretName } }],
-                ...(parsedVolumes.length > 0
+                ...(parsedVolumes.length > 0 || files.length > 0
                   ? {
-                      volumeMounts: parsedVolumes.map((volume) => ({
-                        name: dnsLabel(volume.source, "data"),
-                        mountPath: volume.target,
-                        readOnly: volume.readOnly,
-                      })),
+                      volumeMounts: [
+                        ...parsedVolumes.map((volume) => ({
+                          name: dnsLabel(volume.source, "data"),
+                          mountPath: volume.target,
+                          readOnly: volume.readOnly,
+                        })),
+                        ...files.map((file, index) => ({
+                          name: filesVolumeName,
+                          mountPath: file.path,
+                          subPath: `file-${index}`,
+                          readOnly: true,
+                        })),
+                      ],
                     }
                   : {}),
                 resources: quantities,
@@ -526,15 +548,20 @@ export function buildKubernetesStackObjects(input: KubernetesStackDeployInput): 
                 },
               },
             ],
-            ...(parsedVolumes.length > 0
+            ...(parsedVolumes.length > 0 || files.length > 0
               ? {
-                  volumes: parsedVolumes.map((volume) => ({
-                    name: dnsLabel(volume.source, "data"),
-                    persistentVolumeClaim: {
-                      claimName: volumeClaims.get(volume.source),
-                      readOnly: volume.readOnly,
-                    },
-                  })),
+                  volumes: [
+                    ...parsedVolumes.map((volume) => ({
+                      name: dnsLabel(volume.source, "data"),
+                      persistentVolumeClaim: {
+                        claimName: volumeClaims.get(volume.source),
+                        readOnly: volume.readOnly,
+                      },
+                    })),
+                    ...(files.length > 0
+                      ? [{ name: filesVolumeName, configMap: { name: filesVolumeName } }]
+                      : []),
+                  ],
                 }
               : {}),
           },
@@ -723,23 +750,27 @@ export async function deployStackToKubernetes(
       publicUrls.set(`${descriptor.name}:${descriptor.port}`, internalUrl);
       services.push({ ...descriptor, nodePort });
     }
-    const secretObjects = built.objects
-      .filter((object) => object.kind === "Secret" && object.stringData)
+    const configurationObjects = built.objects
+      .filter(
+        (object) =>
+          (object.kind === "Secret" && object.stringData) ||
+          (object.kind === "ConfigMap" && object.data),
+      )
       .map((object) => ({
         ...object,
-        stringData: resolvePublicUrlPlaceholders(
-          object.stringData as Record<string, string>,
+        [object.kind === "Secret" ? "stringData" : "data"]: resolvePublicUrlPlaceholders(
+          (object.kind === "Secret" ? object.stringData : object.data) as Record<string, string>,
           (name, port) => publicUrls.get(port === undefined ? name : `${name}:${port}`),
         ),
       }));
-    if (secretObjects.length > 0) {
-      const secretsManifestPath = `${remoteDir}/secrets.json`;
+    if (configurationObjects.length > 0) {
+      const configurationManifestPath = `${remoteDir}/configuration.json`;
       await executor.writeFile(
-        secretsManifestPath,
-        JSON.stringify({ apiVersion: "v1", kind: "List", items: secretObjects }),
+        configurationManifestPath,
+        JSON.stringify({ apiVersion: "v1", kind: "List", items: configurationObjects }),
       );
       await executor.exec(
-        `${kubectl} apply --server-side --field-manager=openship -f ${secretsManifestPath}`,
+        `${kubectl} apply --server-side --field-manager=openship -f ${configurationManifestPath}`,
         { timeout: 120_000 },
       );
     }
