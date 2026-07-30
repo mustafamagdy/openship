@@ -68,6 +68,9 @@ const envSchema = z.object({
    * Presence, not the value, is the signal.
    */
   OPENSHIP_PUBLIC_URL: z.string().optional(),
+  /** Optional runtime app-catalog overlay. Forks can point this at their own
+   * catalog while retaining the bundled catalog as the offline fallback. */
+  OPENSHIP_APP_CATALOG_URL: z.string().url().optional(),
 
   /**
    * The origin THIS API is actually reachable at — used ONLY to construct
