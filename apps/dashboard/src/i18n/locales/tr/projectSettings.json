@@ -67,6 +67,10 @@
     "destinationHint": "Bu uygulamanın çalışacağı sunucuyu veya bulutu seçin.",
     "destLocal": "Bu bilgisayar",
     "destLocalDesc": "Burada, bu Openship sunucusunda çalıştırın.",
+    "destKubernetes": "Kubernetes",
+    "destKubernetesLoading": "Kubernetes kümeleri keşfediliyor…",
+    "destKubernetesHealthy": "{nodes} hazır düğüm · Openship tarafından yönetiliyor",
+    "destKubernetesUnhealthy": "Küme kullanılamıyor",
     "mail": {
       "title": "E-posta kur",
       "subtitle": "Kendi alan adınızda webmail dağıtın veya mevcut bir posta kutusunu bağlayın.",

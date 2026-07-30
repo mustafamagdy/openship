@@ -1,4 +1,10 @@
 {
+  "appInstall": {
+    "destKubernetes": "Kubernetes",
+    "destKubernetesLoading": "جارٍ اكتشاف مجموعات Kubernetes…",
+    "destKubernetesHealthy": "{nodes} عقدة جاهزة · تُدار بواسطة Openship",
+    "destKubernetesUnhealthy": "المجموعة غير متاحة"
+  },
   "settingSection": {
     "edit": "تعديل",
     "save": "حفظ",
