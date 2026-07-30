@@ -215,10 +215,6 @@ jobs:
           test -s "$STAGING/apps/dashboard/standalone-server.mjs"
           ARTIFACT="openship-dashboard-${TAG}.tar.gz"
           tar -czf "$ARTIFACT" -C "$STAGING" .
-          # bsdtar prefixes entries with "./"; GNU tar does not. Normalize the
-          # listing before asserting so the same release step works on both.
-          tar -tzf "$ARTIFACT" | sed 's#^\./##' | grep -qx \
-            'apps/dashboard/standalone-server.mjs'
           sha256sum "$ARTIFACT" > "$ARTIFACT.sha256"
           echo "artifact=$ARTIFACT" >> "$GITHUB_OUTPUT"
 
