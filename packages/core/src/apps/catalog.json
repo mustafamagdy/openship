@@ -51,6 +51,7 @@
             "POSTGRES_HOST": "/var/run/postgresql",
             "PGPORT": "5432",
             "POSTGRES_PORT": "5432",
+            "POSTGRES_PASSWORD": "{{config:POSTGRES_PASSWORD}}",
             "PGPASSWORD": "{{config:POSTGRES_PASSWORD}}",
             "PGDATABASE": "postgres",
             "POSTGRES_DB": "postgres",
