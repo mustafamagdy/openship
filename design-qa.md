@@ -4,7 +4,7 @@
 
 - Reference: `/Users/mmagdy/.codex/generated_images/019f95b1-f9d0-74b3-9cb1-6723e0a54f65/call_kgDy78JXoxmtRlamAxjjJT3c.png`
 - Live implementation: `https://mustafamagdy.com/kubernetes`
-- Tested release: `v0.4.38`
+- Tested release: `v0.4.40`
 - Comparison viewport: `1920 × 1080`
 - Evidence directory: `/private/tmp/openship-control-plane-design-qa-evidence`
 
@@ -21,6 +21,15 @@
   now consistently dark with legible logo, account, navigation, and footer
   chrome.
 - Full-page capture was also inspected for overflow and clipping.
+- A sidebar-specific follow-up compared the live implementation with the
+  approved navigation crop. The implementation now uses the approved workspace
+  header, self-hosted badge, Find command, Manage/Infrastructure/Configure
+  hierarchy, layered OpenShip mark, account identity, Help, and Sign out
+  placement.
+- Clean final capture:
+  `/private/tmp/openship-control-plane-design-qa-evidence/sidebar-v0.4.40-clean-1920x1080.png`.
+- Side-by-side evidence:
+  `/private/tmp/openship-control-plane-design-qa-evidence/sidebar-reference-vs-v0.4.40.png`.
 
 ## Functional checks
 
