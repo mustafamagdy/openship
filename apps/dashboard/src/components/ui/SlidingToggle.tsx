@@ -62,8 +62,8 @@ export function SlidingToggle<T extends string = string>({
   const config = sizeConfig[size];
 
   // Border radius based on variant
-  const borderRadius = variant === "rounded" ? "rounded-full" : "rounded-xl";
-  const pillRadius = variant === "rounded" ? "rounded-full" : "rounded-lg";
+  const borderRadius = variant === "rounded" ? "rounded-full" : "rounded";
+  const pillRadius = variant === "rounded" ? "rounded-full" : "rounded-[3px]";
 
   // Update pill position when selection changes
   useEffect(() => {
