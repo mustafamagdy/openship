@@ -1,22 +1,21 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import {
-  Activity,
   AlertTriangle,
   ArrowRight,
-  Boxes,
-  CheckCircle2,
-  Cpu,
+  Check,
+  ChevronDown,
   ExternalLink,
+  Filter,
   Loader2,
+  MoreVertical,
   Plus,
   RefreshCw,
-  Rocket,
+  Search,
   Server,
 } from "lucide-react";
-import { PageContainer } from "@/components/ui/PageContainer";
 import {
   systemApi,
   type KubernetesClusterOverview,
@@ -24,227 +23,329 @@ import {
 } from "@/lib/api/system";
 import { groupWorkloadsByProject } from "./kubernetes-workload-groups";
 
-function SummaryCard({
-  label,
-  value,
-  detail,
-  icon: Icon,
+type ClusterNode = KubernetesClusterOverview["nodes"][number];
+
+function average(values: Array<number | null>): number | null {
+  const valid = values.filter((value): value is number => value != null);
+  if (valid.length === 0) return null;
+  return Math.round(valid.reduce((sum, value) => sum + value, 0) / valid.length);
+}
+
+function formatUptime(createdAt: string | null): string {
+  if (!createdAt) return "—";
+  const elapsed = Math.max(0, Date.now() - new Date(createdAt).getTime());
+  const days = Math.floor(elapsed / 86_400_000);
+  const hours = Math.floor((elapsed % 86_400_000) / 3_600_000);
+  if (days > 0) return `${days}d ${hours}h`;
+  const minutes = Math.floor((elapsed % 3_600_000) / 60_000);
+  return `${hours}h ${minutes}m`;
+}
+
+function Utilization({
+  usage,
+  capacity,
+  percent,
 }: {
-  label: string;
-  value: string | number;
-  detail: string;
-  icon: React.ComponentType<{ className?: string }>;
+  usage: string | null;
+  capacity: string | null;
+  percent: number | null;
 }) {
   return (
-    <div className="rounded-2xl border border-border/50 bg-card p-5">
-      <div className="mb-4 flex items-center justify-between">
-        <span className="text-sm text-muted-foreground">{label}</span>
-        <span className="flex size-9 items-center justify-center rounded-xl bg-muted/60">
-          <Icon className="size-4 text-foreground/70" />
-        </span>
+    <div className="operator-kube__utilization">
+      <span>
+        {usage ?? "—"}
+        {capacity ? ` / ${capacity}` : ""}
+      </span>
+      <div aria-label={percent == null ? "Utilization unavailable" : `${percent}% utilized`}>
+        <i style={{ width: `${Math.min(100, Math.max(0, percent ?? 0))}%` }} />
       </div>
-      <p className="text-2xl font-semibold tracking-tight">{value}</p>
-      <p className="mt-1 text-xs text-muted-foreground/70">{detail}</p>
+      <small>{percent == null ? "Metrics unavailable" : `${percent}%`}</small>
     </div>
   );
 }
 
-function ClusterCard({ cluster }: { cluster: KubernetesClusterOverview }) {
-  const [activeTab, setActiveTab] = useState<"status" | "deployments">("status");
-  const readyNodes = cluster.nodes.filter((node) => node.ready).length;
-  const projects = groupWorkloadsByProject(cluster.workloads);
-  const readyProjects = projects.filter((project) => project.ready).length;
+function NodeTable({
+  nodes,
+  query,
+}: {
+  nodes: ClusterNode[];
+  query: string;
+}) {
+  const filteredNodes = useMemo(() => {
+    const normalized = query.trim().toLowerCase();
+    if (!normalized) return nodes;
+    return nodes.filter((node) =>
+      [node.name, node.ip, node.role, node.kubeletVersion]
+        .filter(Boolean)
+        .some((value) => value!.toLowerCase().includes(normalized)),
+    );
+  }, [nodes, query]);
 
   return (
-    <section className="overflow-hidden rounded-2xl border border-border/50 bg-card">
-      <header className="flex flex-col gap-4 border-b border-border/50 px-5 py-4 sm:flex-row sm:items-center sm:justify-between">
-        <div className="flex min-w-0 items-center gap-3">
-          <span className="flex size-10 shrink-0 items-center justify-center rounded-xl bg-info/10">
-            <Boxes className="size-5 text-info" />
-          </span>
-          <div className="min-w-0">
-            <div className="flex flex-wrap items-center gap-2">
-              <h2 className="truncate font-semibold">{cluster.name}</h2>
-              <span
-                className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-medium ${
-                  cluster.healthy ? "bg-success/10 text-success" : "bg-warning/10 text-warning"
-                }`}
-              >
-                {cluster.healthy ? (
-                  <CheckCircle2 className="size-3" />
-                ) : (
-                  <AlertTriangle className="size-3" />
-                )}
-                {cluster.healthy ? "Healthy" : "Needs attention"}
-              </span>
-            </div>
-            <p className="mt-0.5 truncate text-xs text-muted-foreground">
-              {cluster.host} · {cluster.version ?? "Kubernetes version unavailable"}
-            </p>
-          </div>
-        </div>
-        <Link
-          href={`/servers/${cluster.serverId}`}
-          className="inline-flex items-center gap-1.5 text-xs font-medium text-muted-foreground transition-colors hover:text-foreground"
-        >
-          Server settings
-          <ExternalLink className="size-3.5" />
-        </Link>
-      </header>
-
-      <div
-        role="tablist"
-        aria-label={`${cluster.name} cluster views`}
-        className="flex gap-1 border-b border-border/50 px-5 pt-3"
-      >
-        <button
-          type="button"
-          role="tab"
-          id={`${cluster.serverId}-status-tab`}
-          aria-selected={activeTab === "status"}
-          aria-controls={`${cluster.serverId}-status-panel`}
-          onClick={() => setActiveTab("status")}
-          className={`inline-flex items-center gap-2 border-b-2 px-3 py-2.5 text-sm font-medium transition-colors ${
-            activeTab === "status"
-              ? "border-primary text-foreground"
-              : "border-transparent text-muted-foreground hover:text-foreground"
-          }`}
-        >
-          <Server className="size-4" />
-          Cluster status
-          <span className="rounded-full bg-muted px-1.5 py-0.5 text-[10px] tabular-nums">
-            {readyNodes}/{cluster.nodes.length}
-          </span>
-        </button>
-        <button
-          type="button"
-          role="tab"
-          id={`${cluster.serverId}-deployments-tab`}
-          aria-selected={activeTab === "deployments"}
-          aria-controls={`${cluster.serverId}-deployments-panel`}
-          onClick={() => setActiveTab("deployments")}
-          className={`inline-flex items-center gap-2 border-b-2 px-3 py-2.5 text-sm font-medium transition-colors ${
-            activeTab === "deployments"
-              ? "border-primary text-foreground"
-              : "border-transparent text-muted-foreground hover:text-foreground"
-          }`}
-        >
-          <Rocket className="size-4" />
-          Deployments
-          <span className="rounded-full bg-muted px-1.5 py-0.5 text-[10px] tabular-nums">
-            {projects.length}
-          </span>
-        </button>
-      </div>
-
-      {activeTab === "status" && (
-        <div
-          role="tabpanel"
-          id={`${cluster.serverId}-status-panel`}
-          aria-labelledby={`${cluster.serverId}-status-tab`}
-          className="p-5"
-        >
-          <div className="mb-3 flex items-center justify-between">
-            <h3 className="text-sm font-medium">Nodes</h3>
-            <span className="text-xs text-muted-foreground">
-              {readyNodes}/{cluster.nodes.length} ready
-            </span>
-          </div>
-          <div className="space-y-2">
-            {cluster.nodes.map((node) => (
-              <div
-                key={node.name}
-                className="flex items-center gap-3 rounded-xl border border-border/40 bg-muted/20 px-3 py-2.5"
-              >
-                <span
-                  className={`size-2 shrink-0 rounded-full ${
-                    node.ready ? "bg-success-solid" : "bg-danger-solid"
-                  }`}
-                />
-                <div className="min-w-0 flex-1">
-                  <p className="truncate text-sm font-medium">{node.name}</p>
-                  <p className="truncate text-[11px] text-muted-foreground">
-                    {node.role} · {node.kubeletVersion ?? "version unknown"} ·{" "}
-                    {[node.operatingSystem, node.architecture].filter(Boolean).join("/")}
-                  </p>
-                </div>
-                <span className="text-[11px] text-muted-foreground">
+    <div className="operator-kube__table-wrap">
+      <table className="operator-kube__table">
+        <thead>
+          <tr>
+            <th>Node / IP</th>
+            <th>Status</th>
+            <th>Role</th>
+            <th>CPU</th>
+            <th>Memory</th>
+            <th>Pods</th>
+            <th>Uptime</th>
+            <th>Version</th>
+            <th aria-label="Actions" />
+          </tr>
+        </thead>
+        <tbody>
+          {filteredNodes.map((node) => (
+            <tr key={node.name}>
+              <td>
+                <strong>{node.name}</strong>
+                <code>{node.ip ?? "IP unavailable"}</code>
+              </td>
+              <td>
+                <span className={node.ready ? "is-ready" : "is-unavailable"}>
+                  <i aria-hidden="true" />
                   {node.ready ? "Ready" : "Not ready"}
                 </span>
-              </div>
-            ))}
-          </div>
+              </td>
+              <td className="capitalize">{node.role.replace("-", " ")}</td>
+              <td>
+                <Utilization
+                  usage={node.cpuUsage}
+                  capacity={node.cpuCapacity ? `${node.cpuCapacity} CPU` : null}
+                  percent={node.cpuPercent}
+                />
+              </td>
+              <td>
+                <Utilization
+                  usage={node.memoryUsage}
+                  capacity={node.memoryCapacity}
+                  percent={node.memoryPercent}
+                />
+              </td>
+              <td>
+                <span className="operator-kube__pods">
+                  {node.podCount} / {node.podCapacity ?? "—"}
+                </span>
+              </td>
+              <td>
+                <span className="operator-kube__uptime">{formatUptime(node.createdAt)}</span>
+              </td>
+              <td>
+                <code>{node.kubeletVersion ?? "—"}</code>
+                <small>{node.containerRuntime?.split("://")[0] ?? ""}</small>
+              </td>
+              <td>
+                <button type="button" className="operator-kube__row-action" aria-label={`Actions for ${node.name}`}>
+                  <MoreVertical aria-hidden="true" />
+                </button>
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      {filteredNodes.length === 0 ? (
+        <div className="operator-kube__empty">No nodes match “{query}”.</div>
+      ) : null}
+    </div>
+  );
+}
+
+function ClusterWorkspace({ cluster }: { cluster: KubernetesClusterOverview }) {
+  const [activeTab, setActiveTab] = useState<"nodes" | "deployments">("nodes");
+  const [query, setQuery] = useState("");
+  const readyNodes = cluster.nodes.filter((node) => node.ready).length;
+  const projects = useMemo(() => groupWorkloadsByProject(cluster.workloads), [cluster.workloads]);
+  const cpuPercent = average(cluster.nodes.map((node) => node.cpuPercent));
+  const memoryPercent = average(cluster.nodes.map((node) => node.memoryPercent));
+  const podCount = cluster.nodes.reduce((sum, node) => sum + node.podCount, 0);
+  const podCapacity = cluster.nodes.reduce((sum, node) => sum + (node.podCapacity ?? 0), 0);
+
+  return (
+    <>
+      <div className="operator-kube__status-strip">
+        <div>
+          <span className={cluster.healthy ? "is-ready" : "is-unavailable"}>
+            <i aria-hidden="true" />
+            {cluster.healthy ? "Healthy" : "Needs attention"}
+          </span>
         </div>
-      )}
+        <div>
+          <small>Health</small>
+          <strong>{cluster.healthy ? "100%" : "Degraded"}</strong>
+        </div>
+        <div>
+          <small>Nodes</small>
+          <strong>{readyNodes} / {cluster.nodes.length} ready</strong>
+        </div>
+        <div>
+          <small>Workloads</small>
+          <strong>{cluster.workloads.length}</strong>
+        </div>
+        <div>
+          <small>Kubernetes</small>
+          <code>{cluster.version ?? "Unavailable"}</code>
+        </div>
+        <div>
+          <small>Context</small>
+          <code>{cluster.name}</code>
+        </div>
+      </div>
 
-      {activeTab === "deployments" && (
-        <div
-          role="tabpanel"
-          id={`${cluster.serverId}-deployments-panel`}
-          aria-labelledby={`${cluster.serverId}-deployments-tab`}
-          className="p-5"
-        >
-          <div className="mb-3 flex items-center justify-between">
-            <div>
-              <h3 className="text-sm font-medium">OpenShip projects</h3>
-              <p className="mt-0.5 text-xs text-muted-foreground">
-                Projects deployed through this Kubernetes cluster
-              </p>
-            </div>
-            <span className="text-xs text-muted-foreground">
-              {readyProjects}/{projects.length} ready
-            </span>
-          </div>
-          {projects.length === 0 ? (
-            <div className="rounded-xl border border-dashed border-border px-4 py-8 text-center">
-              <p className="text-sm text-muted-foreground">No OpenShip projects on this cluster.</p>
-            </div>
-          ) : (
-            <div className="space-y-2">
-              {projects.map((project) => {
-                const content = (
-                  <>
-                    <span
-                      className={`size-2 shrink-0 rounded-full ${
-                        project.ready ? "bg-success-solid" : "bg-warning-solid"
-                      }`}
-                    />
-                    <div className="min-w-0 flex-1">
-                      <p className="truncate text-sm font-medium">{project.projectName}</p>
-                      <p className="truncate text-[11px] text-muted-foreground">
-                        {project.serviceCount} {project.serviceCount === 1 ? "service" : "services"}{" "}
-                        · {project.namespace}
-                      </p>
-                    </div>
-                    <span className="text-xs tabular-nums text-muted-foreground">
-                      {project.readyReplicas}/{project.desiredReplicas}
-                    </span>
-                    {project.projectId && <ArrowRight className="size-3.5 text-muted-foreground" />}
-                  </>
-                );
+      <div className="operator-kube__content-grid">
+        <aside className="operator-kube__rail">
+          <section>
+            <header>
+              <h2>Cluster</h2>
+              <span className={cluster.healthy ? "is-ready" : "is-unavailable"}>
+                <i aria-hidden="true" />
+                {cluster.healthy ? "Healthy" : "Degraded"}
+              </span>
+            </header>
+            <dl>
+              <div><dt>Health</dt><dd>{cluster.healthy ? "100%" : "Needs attention"}</dd></div>
+              <div><dt>Nodes</dt><dd>{readyNodes} / {cluster.nodes.length} ready</dd></div>
+              <div><dt>Workloads</dt><dd>{cluster.workloads.length}</dd></div>
+              <div><dt>Version</dt><dd><code>{cluster.version ?? "—"}</code></dd></div>
+              <div><dt>Host</dt><dd><code>{cluster.host}</code></dd></div>
+            </dl>
+            <Link href={`/servers/${cluster.serverId}`}>
+              Server settings <ExternalLink aria-hidden="true" />
+            </Link>
+          </section>
 
-                return project.projectId ? (
-                  <Link
-                    key={project.key}
-                    href={`/projects/${project.projectId}/monitoring`}
-                    className="flex items-center gap-3 rounded-xl border border-border/40 bg-muted/20 px-3 py-2.5 transition-colors hover:bg-muted/50"
-                  >
-                    {content}
-                  </Link>
+          <section>
+            <header><h2>Capacity</h2></header>
+            <div className="operator-kube__capacity">
+              <div>
+                <span>CPU</span><strong>{cpuPercent == null ? "—" : `${cpuPercent}%`}</strong>
+                <i><b style={{ width: `${cpuPercent ?? 0}%` }} /></i>
+              </div>
+              <div>
+                <span>Memory</span><strong>{memoryPercent == null ? "—" : `${memoryPercent}%`}</strong>
+                <i><b style={{ width: `${memoryPercent ?? 0}%` }} /></i>
+              </div>
+              <div>
+                <span>Pods</span><strong>{podCount} / {podCapacity || "—"}</strong>
+                <i><b style={{ width: `${podCapacity ? Math.round((podCount / podCapacity) * 100) : 0}%` }} /></i>
+              </div>
+            </div>
+          </section>
+
+          <section>
+            <header><h2>Cluster signals</h2></header>
+            <ul className="operator-kube__signals">
+              {cluster.nodes.map((node) => (
+                <li key={node.name}>
+                  <i className={node.ready ? "is-ready" : "is-unavailable"} aria-hidden="true" />
+                  <span>
+                    <strong>{node.name}</strong>
+                    <small>{node.ready ? "Node is ready" : "Node needs attention"}</small>
+                  </span>
+                </li>
+              ))}
+            </ul>
+          </section>
+        </aside>
+
+        <div className="operator-kube__primary">
+          <section className="operator-kube__resource-panel">
+            <header className="operator-kube__resource-toolbar">
+              <div role="tablist" aria-label={`${cluster.name} cluster resources`}>
+                <button
+                  type="button"
+                  role="tab"
+                  aria-selected={activeTab === "nodes"}
+                  onClick={() => setActiveTab("nodes")}
+                >
+                  Nodes <span>{cluster.nodes.length}</span>
+                </button>
+                <button
+                  type="button"
+                  role="tab"
+                  aria-selected={activeTab === "deployments"}
+                  onClick={() => setActiveTab("deployments")}
+                >
+                  Deployments <span>{projects.length}</span>
+                </button>
+              </div>
+              {activeTab === "nodes" ? (
+                <div className="operator-kube__filter">
+                  <Search aria-hidden="true" />
+                  <input
+                    value={query}
+                    onChange={(event) => setQuery(event.target.value)}
+                    placeholder="Filter nodes by name, role, IP…"
+                    aria-label="Filter nodes"
+                  />
+                  <button type="button" aria-label="Node filters"><Filter aria-hidden="true" /></button>
+                </div>
+              ) : null}
+            </header>
+
+            {activeTab === "nodes" ? (
+              <NodeTable nodes={cluster.nodes} query={query} />
+            ) : (
+              <div className="operator-kube__deployments">
+                {projects.length === 0 ? (
+                  <div className="operator-kube__empty">No OpenShip deployments on this cluster.</div>
                 ) : (
-                  <div
-                    key={project.key}
-                    className="flex items-center gap-3 rounded-xl border border-border/40 bg-muted/20 px-3 py-2.5"
+                  projects.map((project) => (
+                    <Link
+                      href={project.projectId ? `/projects/${project.projectId}/monitoring` : "#"}
+                      key={project.key}
+                    >
+                      <span className={project.ready ? "is-ready" : "is-unavailable"}>
+                        <i aria-hidden="true" />
+                      </span>
+                      <div>
+                        <strong>{project.projectName}</strong>
+                        <small>{project.namespace} · {project.serviceCount} services</small>
+                      </div>
+                      <code>{project.readyReplicas} / {project.desiredReplicas}</code>
+                      <ArrowRight aria-hidden="true" />
+                    </Link>
+                  ))
+                )}
+              </div>
+            )}
+          </section>
+
+          <section className="operator-kube__workloads">
+            <header>
+              <div>
+                <h2>Managed workloads</h2>
+                <p>Deployments controlled by OpenShip on this cluster.</p>
+              </div>
+              <span>{cluster.workloads.length} total</span>
+            </header>
+            <div className="operator-kube__workload-table">
+              <div className="operator-kube__workload-head">
+                <span>Workload</span><span>Namespace</span><span>Replicas</span><span>Status</span>
+              </div>
+              {cluster.workloads.slice(0, 5).map((workload) => {
+                const ready = workload.readyReplicas >= workload.desiredReplicas;
+                return (
+                  <Link
+                    href={workload.projectId ? `/projects/${workload.projectId}/monitoring` : "#"}
+                    key={`${workload.namespace}/${workload.name}`}
                   >
-                    {content}
-                  </div>
+                    <span><Server aria-hidden="true" /><strong>{workload.name}</strong></span>
+                    <code>{workload.namespace}</code>
+                    <code>{workload.readyReplicas} / {workload.desiredReplicas}</code>
+                    <span className={ready ? "is-ready" : "is-unavailable"}>
+                      <i aria-hidden="true" />{ready ? "Running" : "Progressing"}
+                    </span>
+                  </Link>
                 );
               })}
             </div>
-          )}
+          </section>
         </div>
-      )}
-    </section>
+      </div>
+    </>
   );
 }
 
@@ -252,12 +353,19 @@ export default function KubernetesPage() {
   const [data, setData] = useState<KubernetesClustersResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [activeClusterId, setActiveClusterId] = useState<string | null>(null);
 
   const refresh = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
-      setData(await systemApi.listKubernetesClusters());
+      const result = await systemApi.listKubernetesClusters();
+      setData(result);
+      setActiveClusterId((current) =>
+        result.clusters.some((cluster) => cluster.serverId === current)
+          ? current
+          : result.clusters[0]?.serverId ?? null,
+      );
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Failed to inspect Kubernetes clusters.");
     } finally {
@@ -269,132 +377,80 @@ export default function KubernetesPage() {
     void refresh();
   }, [refresh]);
 
+  const activeCluster =
+    data?.clusters.find((cluster) => cluster.serverId === activeClusterId) ??
+    data?.clusters[0] ??
+    null;
+
   return (
-    <PageContainer>
-      <div className="mb-6 flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+    <div className="operator-page operator-kube">
+      <header className="operator-kube__page-header">
         <div>
-          <h1 className="text-2xl font-medium tracking-tight text-foreground/90">
-            Kubernetes Clusters
-          </h1>
-          <p className="mt-1 max-w-2xl text-sm text-muted-foreground">
-            Live health and OpenShip-managed workloads across every registered cluster.
-          </p>
+          <h1>Kubernetes</h1>
+          <p>Manage clusters, nodes, and OpenShip workloads.</p>
         </div>
-        <div className="flex gap-2">
-          <button
-            type="button"
-            onClick={() => void refresh()}
-            disabled={loading}
-            className="inline-flex items-center gap-2 rounded-xl border border-border bg-card px-3.5 py-2.5 text-sm font-medium transition-colors hover:bg-muted disabled:opacity-50"
-          >
-            <RefreshCw className={`size-4 ${loading ? "animate-spin" : ""}`} />
+        <div className="operator-kube__actions">
+          <button type="button" onClick={() => void refresh()} disabled={loading}>
+            <RefreshCw className={loading ? "animate-spin" : ""} aria-hidden="true" />
             Refresh
           </button>
-          <Link
-            href="/servers/new"
-            className="inline-flex items-center gap-2 rounded-xl bg-primary px-3.5 py-2.5 text-sm font-medium text-primary-foreground transition-colors hover:bg-primary/90"
-          >
-            <Plus className="size-4" />
-            Add cluster host
+          <Link href="/servers/new">
+            <Plus aria-hidden="true" />
+            Add cluster
           </Link>
         </div>
-      </div>
+      </header>
+
+      {data && data.clusters.length > 0 ? (
+        <label className="operator-kube__cluster-select">
+          <span className="sr-only">Active Kubernetes cluster</span>
+          <select
+            value={activeCluster?.serverId ?? ""}
+            onChange={(event) => setActiveClusterId(event.target.value)}
+          >
+            {data.clusters.map((cluster) => (
+              <option value={cluster.serverId} key={cluster.serverId}>{cluster.name}</option>
+            ))}
+          </select>
+          <ChevronDown aria-hidden="true" />
+        </label>
+      ) : null}
 
       {loading && !data ? (
-        <div className="flex items-center justify-center py-24">
-          <Loader2 className="size-6 animate-spin text-muted-foreground" />
+        <div className="operator-kube__state">
+          <Loader2 className="animate-spin" aria-hidden="true" />
+          Inspecting Kubernetes clusters…
         </div>
       ) : error ? (
-        <div className="rounded-2xl border border-danger/30 bg-danger/5 p-6">
-          <div className="flex items-start gap-3">
-            <AlertTriangle className="mt-0.5 size-5 text-danger" />
-            <div>
-              <h2 className="font-medium text-danger">Cluster discovery failed</h2>
-              <p className="mt-1 text-sm text-muted-foreground">{error}</p>
-            </div>
-          </div>
+        <div className="operator-kube__state is-error">
+          <AlertTriangle aria-hidden="true" />
+          <div><strong>Cluster discovery failed</strong><span>{error}</span></div>
         </div>
-      ) : data ? (
-        <>
-          <div className="mb-6 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-            <SummaryCard
-              label="Clusters"
-              value={data.summary.clusters}
-              detail={`${data.summary.healthyClusters} healthy`}
-              icon={Boxes}
-            />
-            <SummaryCard
-              label="Nodes"
-              value={data.summary.nodes}
-              detail={`${data.summary.readyNodes} ready`}
-              icon={Server}
-            />
-            <SummaryCard
-              label="Workloads"
-              value={data.summary.workloads}
-              detail="Managed by OpenShip"
-              icon={Activity}
-            />
-            <SummaryCard
-              label="Cluster health"
-              value={
-                data.summary.clusters
-                  ? `${Math.round((data.summary.healthyClusters / data.summary.clusters) * 100)}%`
-                  : "—"
-              }
-              detail="Across discovered clusters"
-              icon={Cpu}
-            />
+      ) : activeCluster ? (
+        <ClusterWorkspace cluster={activeCluster} />
+      ) : (
+        <div className="operator-kube__state">
+          <Server aria-hidden="true" />
+          <div>
+            <strong>No Kubernetes cluster discovered</strong>
+            <span>Add a server with passwordless sudo access to kubectl.</span>
           </div>
+          <Link href="/servers/new">Add cluster host <ArrowRight aria-hidden="true" /></Link>
+        </div>
+      )}
 
-          {data.clusters.length === 0 ? (
-            <div className="rounded-2xl border border-dashed border-border bg-card px-6 py-14 text-center">
-              <span className="mx-auto flex size-12 items-center justify-center rounded-2xl bg-muted">
-                <Boxes className="size-6 text-muted-foreground" />
-              </span>
-              <h2 className="mt-4 font-semibold">No Kubernetes cluster discovered</h2>
-              <p className="mx-auto mt-1 max-w-md text-sm text-muted-foreground">
-                Add a server with passwordless sudo access to kubectl. OpenShip will discover it
-                automatically without copying its kubeconfig.
-              </p>
-            </div>
-          ) : (
-            <div className="space-y-4">
-              {data.clusters.map((cluster) => (
-                <ClusterCard key={cluster.serverId} cluster={cluster} />
-              ))}
-            </div>
-          )}
-
-          {data.candidates.length > 0 && (
-            <section className="mt-6 rounded-2xl border border-border/50 bg-card p-5">
-              <h2 className="font-semibold">Other registered servers</h2>
-              <p className="mt-1 text-sm text-muted-foreground">
-                These hosts are not currently usable as Kubernetes control points.
-              </p>
-              <div className="mt-4 divide-y divide-border/50 overflow-hidden rounded-xl border border-border/50">
-                {data.candidates.map((server) => (
-                  <Link
-                    key={server.serverId}
-                    href={`/servers/${server.serverId}`}
-                    className="flex items-center gap-3 px-4 py-3 transition-colors hover:bg-muted/40"
-                  >
-                    <Server className="size-4 text-muted-foreground" />
-                    <div className="min-w-0 flex-1">
-                      <p className="truncate text-sm font-medium">{server.name}</p>
-                      <p className="truncate text-xs text-muted-foreground">{server.host}</p>
-                    </div>
-                    <span className="max-w-[45%] truncate text-xs text-warning">
-                      {server.error ?? "kubectl unavailable"}
-                    </span>
-                    <ArrowRight className="size-4 text-muted-foreground" />
-                  </Link>
-                ))}
-              </div>
-            </section>
-          )}
-        </>
+      {data && data.candidates.length > 0 ? (
+        <section className="operator-kube__candidates">
+          <header><h2>Other registered servers</h2></header>
+          {data.candidates.map((candidate) => (
+            <Link href={`/servers/${candidate.serverId}`} key={candidate.serverId}>
+              <Server aria-hidden="true" />
+              <span><strong>{candidate.name}</strong><small>{candidate.error}</small></span>
+              <ArrowRight aria-hidden="true" />
+            </Link>
+          ))}
+        </section>
       ) : null}
-    </PageContainer>
+    </div>
   );
 }
