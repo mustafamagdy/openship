@@ -102,6 +102,106 @@ describe("Kubernetes provider", () => {
     expect(catalog.spec.replicas).toBe(1);
   });
 
+  it("translates named Compose volumes into shared PVC mounts", () => {
+    const built = buildKubernetesStackObjects({
+      projectId: "project-123",
+      projectSlug: "supabase",
+      deploymentId: "dep-stateful",
+      resources: base.resources,
+      defaultReplicas: 3,
+      services: [
+        {
+          name: "db",
+          image: "postgres:17",
+          ports: ["5432"],
+          volumes: ["supabase_db_data:/var/lib/postgresql/data"],
+        },
+        {
+          name: "storage",
+          image: "example/storage:v1",
+          ports: ["5000"],
+          volumes: ["supabase_storage_data:/var/lib/storage"],
+        },
+        {
+          name: "imgproxy",
+          image: "example/imgproxy:v1",
+          ports: ["5001"],
+          volumes: ["supabase_storage_data:/var/lib/storage:ro"],
+        },
+      ],
+    });
+
+    const claims = built.objects.filter(
+      (object: any) => object.kind === "PersistentVolumeClaim",
+    ) as any[];
+    expect(claims).toHaveLength(2);
+    expect(claims.map((claim) => claim.metadata.name)).toEqual([
+      "data-supabase-db-data",
+      "data-supabase-storage-data",
+    ]);
+    expect(claims[0].spec.accessModes).toEqual(["ReadWriteOnce"]);
+    expect(claims[0].spec.resources.requests.storage).toBe("10Gi");
+    expect(claims[0].spec.storageClassName).toBeUndefined();
+
+    const storage = built.objects.find(
+      (object: any) => object.kind === "Deployment" && object.metadata.name === "storage",
+    ) as any;
+    const imgproxy = built.objects.find(
+      (object: any) => object.kind === "Deployment" && object.metadata.name === "imgproxy",
+    ) as any;
+    expect(storage.spec.replicas).toBe(1);
+    expect(storage.spec.strategy).toEqual({ type: "Recreate" });
+    expect(storage.spec.template.spec.volumes[0].persistentVolumeClaim.claimName).toBe(
+      "data-supabase-storage-data",
+    );
+    expect(imgproxy.spec.template.spec.containers[0].volumeMounts[0].readOnly).toBe(true);
+  });
+
+  it("orders stack workloads after their known dependencies", () => {
+    const built = buildKubernetesStackObjects({
+      projectId: "project-123",
+      projectSlug: "ordered",
+      deploymentId: "dep-ordered",
+      resources: base.resources,
+      services: [
+        {
+          name: "gateway",
+          image: "example/gateway:v1",
+          ports: ["8000"],
+          dependsOn: ["api", "external-name"],
+        },
+        {
+          name: "api",
+          image: "example/api:v1",
+          ports: ["3000"],
+          dependsOn: ["db"],
+        },
+        { name: "db", image: "postgres:17", ports: ["5432"] },
+      ],
+    });
+
+    expect(built.deployments).toEqual(["db", "api", "gateway"]);
+  });
+
+  it("rejects host bind mounts in Kubernetes stack mode", () => {
+    expect(() =>
+      buildKubernetesStackObjects({
+        projectId: "project-123",
+        projectSlug: "unsafe",
+        deploymentId: "dep-unsafe",
+        resources: base.resources,
+        services: [
+          {
+            name: "db",
+            image: "postgres:17",
+            ports: ["5432"],
+            volumes: ["/srv/postgres:/var/lib/postgresql/data"],
+          },
+        ],
+      }),
+    ).toThrow(/host bind mount/);
+  });
+
   it("deploys every stack workload and returns public service ports", async () => {
     const commands: string[] = [];
     const writtenFiles = new Map<string, string>();

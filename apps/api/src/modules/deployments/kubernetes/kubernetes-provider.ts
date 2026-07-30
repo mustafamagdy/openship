@@ -2,6 +2,7 @@ import type { CommandExecutor, ResourceConfig } from "@repo/adapters";
 
 const DNS_LABEL_MAX = 63;
 const DEFAULT_STACK_ROLLOUT_TIMEOUT_SECONDS = 900;
+const DEFAULT_PVC_SIZE = "10Gi";
 
 export interface KubernetesDeployInput {
   projectId: string;
@@ -56,6 +57,11 @@ export interface KubernetesStackDeployInput {
   rolloutTimeoutSeconds?: number;
   kubectlCommand?: "kubectl" | "sudo -n kubectl";
   registryAuth?: KubernetesDeployInput["registryAuth"];
+  /** StorageClass used for Compose named volumes. Undefined deliberately uses
+   * the cluster's default StorageClass. */
+  storageClassName?: string;
+  /** Requested capacity for each Compose named volume. */
+  defaultVolumeSize?: string;
 }
 
 export interface KubernetesStackDeployResult {
@@ -114,6 +120,44 @@ function servicePort(service: KubernetesStackService): number {
   return port;
 }
 
+interface ParsedNamedVolume {
+  source: string;
+  target: string;
+  readOnly: boolean;
+}
+
+function parseNamedVolume(raw: string, serviceName: string): ParsedNamedVolume {
+  const parts = raw.split(":");
+  if (parts.length < 2 || parts.length > 3) {
+    throw new Error(
+      `Kubernetes stack service "${serviceName}" has invalid volume "${raw}". Expected named-volume:/container/path[:ro].`,
+    );
+  }
+  const [source, target, mode] = parts;
+  if (
+    !source ||
+    source.startsWith(".") ||
+    source.startsWith("/") ||
+    source.includes("\\") ||
+    source.includes("/")
+  ) {
+    throw new Error(
+      `Kubernetes stack service "${serviceName}" uses host bind mount "${raw}". Kubernetes stack mode supports named volumes only.`,
+    );
+  }
+  if (!target?.startsWith("/")) {
+    throw new Error(
+      `Kubernetes stack service "${serviceName}" volume "${raw}" needs an absolute container path.`,
+    );
+  }
+  if (mode && mode !== "ro" && mode !== "rw") {
+    throw new Error(
+      `Kubernetes stack service "${serviceName}" volume "${raw}" has unsupported mode "${mode}".`,
+    );
+  }
+  return { source, target, readOnly: mode === "ro" };
+}
+
 function assertSupportedStackService(service: KubernetesStackService): void {
   if (!service.image?.trim()) {
     throw new Error(
@@ -125,11 +169,32 @@ function assertSupportedStackService(service: KubernetesStackService): void {
       `Kubernetes stack service "${service.name}" has a custom command. Command translation is not supported yet.`,
     );
   }
-  if (service.volumes?.length) {
-    throw new Error(
-      `Kubernetes stack service "${service.name}" declares volumes. Choose a StorageClass/PVC policy before deploying this stack.`,
-    );
-  }
+  for (const volume of service.volumes ?? []) parseNamedVolume(volume, service.name);
+}
+
+function orderStackServices(services: KubernetesStackService[]): KubernetesStackService[] {
+  const byName = new Map(services.map((service) => [service.name, service]));
+  const visiting = new Set<string>();
+  const visited = new Set<string>();
+  const ordered: KubernetesStackService[] = [];
+
+  const visit = (service: KubernetesStackService) => {
+    if (visited.has(service.name)) return;
+    if (visiting.has(service.name)) {
+      throw new Error(`Kubernetes stack has a dependency cycle involving "${service.name}".`);
+    }
+    visiting.add(service.name);
+    for (const dependency of service.dependsOn ?? []) {
+      const dependencyService = byName.get(dependency);
+      if (dependencyService) visit(dependencyService);
+    }
+    visiting.delete(service.name);
+    visited.add(service.name);
+    ordered.push(service);
+  };
+
+  for (const service of services) visit(service);
+  return ordered;
 }
 
 function dockerConfigJson(auth: NonNullable<KubernetesDeployInput["registryAuth"]>): string {
@@ -306,8 +371,41 @@ export function buildKubernetesStackObjects(input: KubernetesStackDeployInput): 
     exposed: boolean;
   }> = [];
   const seenNames = new Set<string>();
+  const volumeClaims = new Map<string, string>();
+  const seenClaimNames = new Map<string, string>();
 
   for (const service of input.services) {
+    assertSupportedStackService(service);
+    for (const volume of service.volumes ?? []) {
+      const parsed = parseNamedVolume(volume, service.name);
+      if (volumeClaims.has(parsed.source)) continue;
+      const claimName = `data-${dnsLabel(parsed.source, "volume")}`.slice(0, DNS_LABEL_MAX);
+      const collision = seenClaimNames.get(claimName);
+      if (collision && collision !== parsed.source) {
+        throw new Error(
+          `Kubernetes volume names "${collision}" and "${parsed.source}" normalize to the same PVC name.`,
+        );
+      }
+      seenClaimNames.set(claimName, parsed.source);
+      volumeClaims.set(parsed.source, claimName);
+      objects.push({
+        apiVersion: "v1",
+        kind: "PersistentVolumeClaim",
+        metadata: { name: claimName, namespace, labels: projectLabels },
+        spec: {
+          accessModes: ["ReadWriteOnce"],
+          ...(input.storageClassName
+            ? { storageClassName: safeKubectlName(input.storageClassName) }
+            : {}),
+          resources: {
+            requests: { storage: input.defaultVolumeSize ?? DEFAULT_PVC_SIZE },
+          },
+        },
+      });
+    }
+  }
+
+  for (const service of orderStackServices(input.services)) {
     assertSupportedStackService(service);
     const name = dnsLabel(service.name, "service");
     if (seenNames.has(name)) {
@@ -315,10 +413,16 @@ export function buildKubernetesStackObjects(input: KubernetesStackDeployInput): 
     }
     seenNames.add(name);
     const port = servicePort(service);
-    const replicas = positiveInt(
+    const parsedVolumes = (service.volumes ?? []).map((volume) =>
+      parseNamedVolume(volume, service.name),
+    );
+    const requestedReplicas = positiveInt(
       service.replicas,
       service.exposed ? positiveInt(input.defaultReplicas, 2) : 1,
     );
+    // ReadWriteOnce is the portable baseline for the default cluster storage.
+    // A stateful service must not run multiple writers against that claim.
+    const replicas = parsedVolumes.length > 0 ? 1 : requestedReplicas;
     const labels = {
       ...projectLabels,
       "app.kubernetes.io/name": name,
@@ -352,8 +456,12 @@ export function buildKubernetesStackObjects(input: KubernetesStackDeployInput): 
           DEFAULT_STACK_ROLLOUT_TIMEOUT_SECONDS,
         ),
         strategy: {
-          type: "RollingUpdate",
-          rollingUpdate: { maxSurge: 1, maxUnavailable: 0 },
+          ...(parsedVolumes.length > 0
+            ? { type: "Recreate" }
+            : {
+                type: "RollingUpdate",
+                rollingUpdate: { maxSurge: 1, maxUnavailable: 0 },
+              }),
         },
         selector: { matchLabels: { "openship.io/service-name": name } },
         template: {
@@ -386,6 +494,15 @@ export function buildKubernetesStackObjects(input: KubernetesStackDeployInput): 
                 imagePullPolicy: "IfNotPresent",
                 ports: [{ name: "tcp", containerPort: port, protocol: "TCP" }],
                 envFrom: [{ secretRef: { name: secretName } }],
+                ...(parsedVolumes.length > 0
+                  ? {
+                      volumeMounts: parsedVolumes.map((volume) => ({
+                        name: dnsLabel(volume.source, "data"),
+                        mountPath: volume.target,
+                        readOnly: volume.readOnly,
+                      })),
+                    }
+                  : {}),
                 resources: quantities,
                 securityContext: {
                   allowPrivilegeEscalation: false,
@@ -407,6 +524,17 @@ export function buildKubernetesStackObjects(input: KubernetesStackDeployInput): 
                 },
               },
             ],
+            ...(parsedVolumes.length > 0
+              ? {
+                  volumes: parsedVolumes.map((volume) => ({
+                    name: dnsLabel(volume.source, "data"),
+                    persistentVolumeClaim: {
+                      claimName: volumeClaims.get(volume.source),
+                      readOnly: volume.readOnly,
+                    },
+                  })),
+                }
+              : {}),
           },
         },
       },
