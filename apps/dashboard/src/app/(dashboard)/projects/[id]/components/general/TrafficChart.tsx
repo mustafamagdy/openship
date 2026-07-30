@@ -64,12 +64,13 @@ export const TrafficChart: React.FC<Props> = ({
             ]}
             value={chartType}
             onChange={(value) => setChartType(value as 'bar' | 'area')}
-            variant="rounded"
-            selectedBg="bg-primary"
-            selectedTextColor="text-primary-foreground"
+            variant="square"
+            selectedBg="bg-foreground/[0.08]"
+            selectedTextColor="text-foreground"
             unselectedTextColor="text-muted-foreground"
-            backgroundColor="bg-card"
+            backgroundColor="bg-transparent"
             size="sm"
+            className="gap-0.5 p-0.5"
           />
          
         </div>
