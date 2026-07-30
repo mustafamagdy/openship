@@ -825,6 +825,7 @@ async function executeBuildAndDeploy(project: Project, dep: Deployment, buildSes
               })),
               resources: prodResources,
               defaultReplicas: snapshot.kubernetesReplicas,
+              publicHost: clusterServer.sshHost,
             },
             (message) => logger.log(`${message}\n`),
           ),

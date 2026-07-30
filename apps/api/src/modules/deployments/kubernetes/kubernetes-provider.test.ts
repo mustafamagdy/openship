@@ -226,9 +226,15 @@ describe("Kubernetes provider", () => {
       deploymentId: "dep-stack",
       resources: base.resources,
       defaultReplicas: 2,
+      publicHost: "10.0.0.20",
       services: [
         { name: "frontend", image: "example/frontend:v1", ports: ["8080"], exposed: true },
-        { name: "catalog", image: "example/catalog:v1", ports: ["3550"] },
+        {
+          name: "catalog",
+          image: "example/catalog:v1",
+          ports: ["3550"],
+          environment: { PUBLIC_FRONTEND: "{{publicUrl:frontend}}" },
+        },
       ],
     });
 
@@ -236,7 +242,7 @@ describe("Kubernetes provider", () => {
     expect(result.services[0]?.nodePort).toBe(31234);
     expect(commands.filter((command) => command.includes("rollout status"))).toHaveLength(2);
     expect(commands.some((command) => command.includes("--timeout=900s"))).toBe(true);
-    expect(commands.filter((command) => command.includes(" apply "))).toHaveLength(3);
+    expect(commands.filter((command) => command.includes(" apply "))).toHaveLength(4);
     const foundationApply = commands.findIndex((command) =>
       command.includes("foundation.json"),
     );
@@ -264,5 +270,12 @@ describe("Kubernetes provider", () => {
     expect(
       [...writtenFiles.keys()].filter((path) => path.includes("/deployment-")),
     ).toHaveLength(2);
+    const secrets = [...writtenFiles.entries()].find(([path]) =>
+      path.endsWith("/secrets.json"),
+    );
+    const catalogSecret = JSON.parse(secrets![1]).items.find(
+      (object: any) => object.metadata.name === "catalog-env",
+    );
+    expect(catalogSecret.stringData.PUBLIC_FRONTEND).toBe("http://10.0.0.20:31234");
   });
 });
