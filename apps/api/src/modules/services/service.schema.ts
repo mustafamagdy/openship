@@ -63,6 +63,18 @@ const HealthcheckSchema = Type.Object(
 const AdvancedSchema = Type.Object(
   {
     healthcheck: Type.Optional(HealthcheckSchema),
+    files: Type.Optional(
+      Type.Array(
+        Type.Object(
+          {
+            path: Type.String({ minLength: 1, maxLength: 1000 }),
+            content: Type.String({ maxLength: 1_000_000 }),
+          },
+          { additionalProperties: false },
+        ),
+        { maxItems: 100 },
+      ),
+    ),
   },
   { additionalProperties: false },
 );
