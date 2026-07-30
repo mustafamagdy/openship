@@ -32,6 +32,7 @@ import { readApiVersion } from "../../lib/release-dist";
  */
 
 const REMOTE_URL =
+  process.env.OPENSHIP_APP_CATALOG_URL?.trim() ||
   "https://raw.githubusercontent.com/oblien/openship/main/packages/core/src/apps/catalog.json";
 const TTL_MS = 600_000; // 10 minutes
 /** Catalog-ENVELOPE version we know how to read (the top-level `version`). A
