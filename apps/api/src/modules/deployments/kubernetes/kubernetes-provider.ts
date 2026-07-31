@@ -131,16 +131,21 @@ function kubectlApplyTimeoutMs(objectCount: number): number {
   );
 }
 
-function resourceQuantity(resources: ResourceConfig): {
+function resourceQuantity(resources: ResourceConfig, requestUnits = 1): {
   requests: { cpu: string; memory: string };
   limits: { cpu: string; memory: string };
 } {
   const cpu = Math.max(resources.cpuCores ?? 0.25, 0.05);
   const memoryMb = Math.max(resources.memoryMb ?? 256, 64);
+  const units = Math.max(requestUnits, 1);
   return {
     requests: {
-      cpu: `${Math.max(Math.round(cpu * 500), 25)}m`,
-      memory: `${Math.max(Math.round(memoryMb / 2), 32)}Mi`,
+      // A stack's resource selection is its shared scheduling budget, not a
+      // request to reserve the full budget for every service and replica.
+      // Keep portable minimums while distributing its requests across all
+      // pods; limits remain per-service burst ceilings.
+      cpu: `${Math.max(Math.round((cpu * 500) / units), 25)}m`,
+      memory: `${Math.max(Math.round(memoryMb / (2 * units)), 32)}Mi`,
     },
     limits: {
       cpu: `${Math.round(cpu * 1000)}m`,
@@ -290,6 +295,20 @@ function orderStackServices(services: KubernetesStackService[]): KubernetesStack
 
   for (const service of services) visit(service);
   return ordered;
+}
+
+function stackReplicaUnits(input: KubernetesStackDeployInput): number {
+  return input.services.reduce((total, service) => {
+    const parsedVolumes = (service.volumes ?? []).map((volume) =>
+      parseNamedVolume(volume, service.name),
+    );
+    const requested = positiveInt(
+      service.replicas,
+      service.exposed ? positiveInt(input.defaultReplicas, 2) : 1,
+    );
+    // A ReadWriteOnce PVC cannot safely be scheduled for more than one writer.
+    return total + (parsedVolumes.length > 0 ? 1 : requested);
+  }, 0);
 }
 
 function dockerConfigJson(auth: NonNullable<KubernetesDeployInput["registryAuth"]>): string {
@@ -452,7 +471,7 @@ export function buildKubernetesStackObjects(input: KubernetesStackDeployInput): 
     input.namespace ?? projectNamespace(input.projectSlug, input.projectId, "openship-stack"),
     "openship-stack",
   );
-  const quantities = resourceQuantity(input.resources);
+  const quantities = resourceQuantity(input.resources, stackReplicaUnits(input));
   const projectLabels = {
     "app.kubernetes.io/managed-by": "openship",
     "openship.io/project-id": input.projectId,

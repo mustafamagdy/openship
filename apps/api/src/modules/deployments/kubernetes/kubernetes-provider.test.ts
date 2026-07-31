@@ -103,6 +103,17 @@ describe("Kubernetes provider", () => {
       (object: any) => object.kind === "Deployment" && object.metadata.name === "catalog",
     ) as any;
     expect(catalog.spec.replicas).toBe(1);
+    // The project resource selection is distributed across the four planned
+    // pods (three frontend replicas plus one internal service), rather than
+    // reserving a full project-sized request for every pod.
+    expect(frontend.spec.template.spec.containers[0].resources.requests).toEqual({
+      cpu: "125m",
+      memory: "64Mi",
+    });
+    expect(frontend.spec.template.spec.containers[0].resources.limits).toEqual({
+      cpu: "1000m",
+      memory: "512Mi",
+    });
   });
 
   it("translates a literal Compose command into Kubernetes args without replacing the image entrypoint", () => {
