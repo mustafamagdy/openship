@@ -443,11 +443,15 @@ export async function updateService(
 
   if (touchesRouting) {
     const normalized = normalizeRoutingPatch({
-      exposed: patch.exposed ?? svc.exposed,
-      exposedPort: patch.exposedPort ?? svc.exposedPort,
-      domain: patch.domain ?? svc.domain,
-      customDomain: patch.customDomain ?? svc.customDomain,
-      domainType: patch.domainType ?? svc.domainType,
+      // A routing field explicitly sent as null means "clear it". Nullish
+      // coalescing would replace that deliberate clear with the stored value,
+      // which resurrects a template's seeded free domain on a port-only app
+      // installation. Fall back only when the caller omitted the field.
+      exposed: "exposed" in patch ? patch.exposed : svc.exposed,
+      exposedPort: "exposedPort" in patch ? patch.exposedPort : svc.exposedPort,
+      domain: "domain" in patch ? patch.domain : svc.domain,
+      customDomain: "customDomain" in patch ? patch.customDomain : svc.customDomain,
+      domainType: "domainType" in patch ? patch.domainType : svc.domainType,
       // Only fall back to the stored array when the caller didn't send one, so an
       // explicit [] (or a single-route edit) can clear the extra routes.
       publicEndpoints: "publicEndpoints" in patch ? patch.publicEndpoints : svc.publicEndpoints,
