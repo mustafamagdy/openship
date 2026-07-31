@@ -1,6 +1,6 @@
 {
   "name": "openship",
-  "version": "0.4.61",
+  "version": "0.4.62",
   "description": "Openship CLI - deploy, manage, and open your Openship platform from the terminal",
   "license": "Apache-2.0",
   "repository": {
