@@ -105,6 +105,35 @@ describe("Kubernetes provider", () => {
     expect(catalog.spec.replicas).toBe(1);
   });
 
+  it("translates a literal Compose command into Kubernetes args without replacing the image entrypoint", () => {
+    const built = buildKubernetesStackObjects({
+      projectId: "project-123",
+      projectSlug: "minio",
+      deploymentId: "dep-minio",
+      resources: base.resources,
+      services: [
+        {
+          name: "minio",
+          image: "minio/minio:latest",
+          command: "server /data --console-address :9001",
+          ports: ["9001:9001"],
+          exposed: true,
+        },
+      ],
+    });
+    const deployment = built.objects.find(
+      (object: any) => object.kind === "Deployment" && object.metadata.name === "minio",
+    ) as any;
+
+    expect(deployment.spec.template.spec.containers[0].args).toEqual([
+      "server",
+      "/data",
+      "--console-address",
+      ":9001",
+    ]);
+    expect(deployment.spec.template.spec.containers[0].command).toBeUndefined();
+  });
+
   it("translates named Compose volumes into shared PVC mounts", () => {
     const built = buildKubernetesStackObjects({
       projectId: "project-123",

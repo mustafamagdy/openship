@@ -203,12 +203,68 @@ function assertSupportedStackService(service: KubernetesStackService): void {
       `Kubernetes stack service "${service.name}" must use a published image. Source builds are not supported in stack mode yet.`,
     );
   }
-  if (service.command?.trim()) {
-    throw new Error(
-      `Kubernetes stack service "${service.name}" has a custom command. Command translation is not supported yet.`,
-    );
-  }
   for (const volume of service.volumes ?? []) parseNamedVolume(volume, service.name);
+}
+
+/**
+ * Compose string commands replace the image CMD while preserving its ENTRYPOINT.
+ * Kubernetes has the same behavior when the tokens are supplied as `args`.
+ *
+ * The curated catalog deliberately accepts only literal argv-style commands:
+ * shell expansion, redirects, pipes, and control operators are unsafe to
+ * reinterpret and must be modelled as an image entrypoint instead.
+ */
+function commandArgs(command: string | undefined, serviceName: string): string[] | undefined {
+  const source = command?.trim();
+  if (!source) return undefined;
+
+  const args: string[] = [];
+  let token = "";
+  let quote: "'" | '"' | undefined;
+  let escaped = false;
+
+  const push = () => {
+    if (token) args.push(token);
+    token = "";
+  };
+
+  for (const char of source) {
+    if (escaped) {
+      token += char;
+      escaped = false;
+      continue;
+    }
+    if (char === "\\") {
+      escaped = true;
+      continue;
+    }
+    if (quote) {
+      if (char === quote) quote = undefined;
+      else token += char;
+      continue;
+    }
+    if (char === "'" || char === '"') {
+      quote = char;
+      continue;
+    }
+    if (/\s/.test(char)) {
+      push();
+      continue;
+    }
+    if (/[|&;<>`$]/.test(char)) {
+      throw new Error(
+        `Kubernetes stack service "${serviceName}" uses shell syntax in its command. Use literal command arguments only.`,
+      );
+    }
+    token += char;
+  }
+
+  if (escaped || quote) {
+    throw new Error(`Kubernetes stack service "${serviceName}" has an unterminated command argument.`);
+  }
+  push();
+  if (!args.length) return undefined;
+  return args;
 }
 
 function orderStackServices(services: KubernetesStackService[]): KubernetesStackService[] {
@@ -458,6 +514,7 @@ export function buildKubernetesStackObjects(input: KubernetesStackDeployInput): 
     }
     seenNames.add(name);
     const port = servicePort(service);
+    const args = commandArgs(service.command, service.name);
     const parsedVolumes = (service.volumes ?? []).map((volume) =>
       parseNamedVolume(volume, service.name),
     );
@@ -550,6 +607,7 @@ export function buildKubernetesStackObjects(input: KubernetesStackDeployInput): 
                 name,
                 image: service.image,
                 imagePullPolicy: "IfNotPresent",
+                ...(args ? { args } : {}),
                 ports: [{ name: "tcp", containerPort: port, protocol: "TCP" }],
                 envFrom: [{ secretRef: { name: secretName } }],
                 ...(parsedVolumes.length > 0 || files.length > 0

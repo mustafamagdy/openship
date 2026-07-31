@@ -28,6 +28,31 @@ describe("app catalog (JSON)", () => {
     expect(rolesFile?.content).toContain("ALTER FUNCTION auth.uid() OWNER TO supabase_auth_admin;");
   });
 
+  it("keeps every enabled stack template within Kubernetes provider capabilities", () => {
+    const enabledTemplates = APP_TEMPLATES.filter(
+      (app) => app.available && app.kind === "template",
+    );
+    for (const app of enabledTemplates) {
+      for (const service of app.services ?? []) {
+        expect(service.image?.trim(), `${app.id}/${service.name} needs an image`).toBeTruthy();
+        expect(
+          service.exposedPort ?? service.ports?.[0],
+          `${app.id}/${service.name} needs a container port for its Kubernetes Service and probes`,
+        ).toBeTruthy();
+        for (const volume of service.volumes ?? []) {
+          expect(
+            volume,
+            `${app.id}/${service.name} must use a named Kubernetes-compatible volume`,
+          ).toMatch(/^[^./\\][^/:]*:\/.+/);
+        }
+        expect(
+          service.command ?? "",
+          `${app.id}/${service.name} command must not require a shell`,
+        ).not.toMatch(/[|&;<>`$]/);
+      }
+    }
+  });
+
   it("rejects a malformed template (missing required fields)", () => {
     expect(isValidAppTemplate({ id: "x" })).toBe(false);
     expect(isValidAppTemplate(null)).toBe(false);
