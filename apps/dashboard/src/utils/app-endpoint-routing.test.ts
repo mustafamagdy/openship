@@ -32,7 +32,14 @@ describe("buildHttpServiceRouteUpdates", () => {
       "minio:9000": { kind: "http", mode: "port", ep: domainExposure["minio:9000"]!.ep },
     };
     expect(buildHttpServiceRouteUpdates(endpoints, portOnly, service, true)).toEqual([
-      { serviceId: "svc-minio", exposed: true, publicEndpoints: [] },
+      {
+        serviceId: "svc-minio",
+        exposed: true,
+        exposedPort: "",
+        domain: "",
+        customDomain: "",
+        publicEndpoints: [],
+      },
     ]);
   });
 });

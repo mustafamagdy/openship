@@ -19,6 +19,12 @@ type ServiceRoutingSource = {
 export type HttpServiceRouteUpdate = {
   serviceId: string;
   exposed: boolean;
+  /** Empty strings deliberately clear the legacy scalar route fields. They are
+   * normalized to null by the service API, while `publicEndpoints: []` clears
+   * the structured multi-route list. */
+  exposedPort?: string;
+  domain?: string;
+  customDomain?: string;
   publicEndpoints: Array<{
     port: number;
     domainType: "free" | "custom";
@@ -68,6 +74,13 @@ export function buildHttpServiceRouteUpdates(
     updates.push({
       serviceId: service.id,
       exposed: publicEndpoints.length > 0 || isKubernetes,
+      // Templates seed the old scalar route fields as well as the endpoint
+      // list. An explicit port-only choice must clear both representations;
+      // otherwise the API correctly detects the stale free domain and blocks a
+      // disconnected self-hosted deployment.
+      ...(publicEndpoints.length === 0
+        ? { exposedPort: "", domain: "", customDomain: "" }
+        : {}),
       publicEndpoints,
     });
   }
