@@ -1597,6 +1597,9 @@
             "KAFKA_NUM_PARTITIONS": "3",
             "KAFKA_LOG_DIRS": "/var/lib/kafka/data"
           },
+          "ports": [
+            "9092:9092"
+          ],
           "volumes": [
             "kafka_data:/var/lib/kafka/data"
           ],
