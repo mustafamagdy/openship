@@ -832,12 +832,11 @@ async function executeBuildAndDeploy(project: Project, dep: Deployment, buildSes
           ),
       );
 
+      // A stack can intentionally have no public Service (for example a
+      // database-only/internal app). Rollout completion is the success
+      // criterion; public routing is optional and is applied below only when
+      // a NodePort exists.
       const publicService = deployed.services.find((service) => service.nodePort);
-      if (!publicService?.nodePort) {
-        throw new Error(
-          "Kubernetes stack is ready but has no exposed service. Mark one service as exposed.",
-        );
-      }
       // A service stack owns service-scoped domains, not project-level routes.
       // Using buildProjectRouteDomains here silently produced an empty plan for
       // Compose/Kubernetes stacks, leaving healthy workloads unreachable.
@@ -880,7 +879,9 @@ async function executeBuildAndDeploy(project: Project, dep: Deployment, buildSes
         }
       }
 
-      const fallbackUpstream = `http://${clusterServer.sshHost}:${publicService.nodePort}`;
+      const fallbackUpstream = publicService?.nodePort
+        ? `http://${clusterServer.sshHost}:${publicService.nodePort}`
+        : undefined;
       const primary =
         appliedDomains.find((domain) => domain.isPrimary) ?? appliedDomains[0];
       await onSuccess(ctx, {
@@ -902,7 +903,7 @@ async function executeBuildAndDeploy(project: Project, dep: Deployment, buildSes
           kubernetesNamespace: deployed.namespace,
           kubernetesDeployments: deployed.deployments,
           kubernetesServices: deployed.services,
-          kubernetesNodePort: publicService.nodePort,
+          kubernetesNodePort: publicService?.nodePort,
           kubernetesServerId: snapshot.kubernetesServerId,
         },
       });
