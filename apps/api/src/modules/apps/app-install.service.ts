@@ -214,7 +214,11 @@ export async function installApp(
   // lets a service env embed a generated secret it can't otherwise interpolate
   // (e.g. a full `postgres://user:PASSWORD@db/…` connection URL).
   const inlineConfig = (s: string): string =>
-    s.replace(/\{\{\s*config:([A-Za-z0-9_]+)\s*\}\}/g, (_m, k) => resolved.get(k) ?? "");
+    s
+      .replace(/\{\{\s*configUrl:([A-Za-z0-9_]+)\s*\}\}/g, (_m, k) =>
+        encodeURIComponent(resolved.get(k) ?? ""),
+      )
+      .replace(/\{\{\s*config:([A-Za-z0-9_]+)\s*\}\}/g, (_m, k) => resolved.get(k) ?? "");
 
   // Resolve template files per service.
   const filesByService = new Map<string, { path: string; content: string }[]>();
