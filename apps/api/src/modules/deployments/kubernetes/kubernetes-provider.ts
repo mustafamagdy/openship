@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import type { CommandExecutor, ResourceConfig } from "@repo/adapters";
 import { resolvePublicUrlPlaceholders } from "@repo/core";
 
@@ -93,6 +94,30 @@ function dnsLabel(value: string, fallback: string): string {
     .slice(0, DNS_LABEL_MAX)
     .replace(/-+$/g, "");
   return normalized || fallback;
+}
+
+/**
+ * Kubernetes namespaces are the ownership boundary for an OpenShip project.
+ *
+ * A human-readable slug alone is not an identity: two projects may have the
+ * same name, and an app reinstall must not attach to another project's PVCs.
+ * The project id is stable across redeploys, so it gives every project one
+ * durable namespace while preserving its own state between deployment
+ * revisions.
+ */
+function projectNamespace(projectSlug: string, projectId: string, fallback: string): string {
+  // Keep this compact even if a future database uses a long project id. The
+  // hash prevents truncation from turning two distinct ids into one namespace.
+  const normalizedProjectId = dnsLabel(projectId, "project");
+  const identity = `${normalizedProjectId.slice(0, 20)}-${createHash("sha256")
+    .update(projectId)
+    .digest("hex")
+    .slice(0, 8)}`;
+  const prefix = "openship-";
+  const separator = "-";
+  const slugBudget = DNS_LABEL_MAX - prefix.length - separator.length - identity.length;
+  const slug = dnsLabel(projectSlug, "app").slice(0, Math.max(slugBudget, 1));
+  return dnsLabel(`${prefix}${slug}-${identity}`, fallback);
 }
 
 function positiveInt(value: number | undefined, fallback: number): number {
@@ -233,7 +258,10 @@ export function buildKubernetesObjects(input: KubernetesDeployInput): {
   objects: KubernetesObject[];
 } {
   const slug = dnsLabel(input.projectSlug, "app");
-  const namespace = dnsLabel(input.namespace ?? `openship-${slug}`, "openship-app");
+  const namespace = dnsLabel(
+    input.namespace ?? projectNamespace(input.projectSlug, input.projectId, "openship-app"),
+    "openship-app",
+  );
   const deploymentName = dnsLabel(slug, "app");
   const serviceName = `${deploymentName}-web`.slice(0, DNS_LABEL_MAX);
   const labels = {
@@ -364,7 +392,10 @@ export function buildKubernetesStackObjects(input: KubernetesStackDeployInput): 
   objects: KubernetesObject[];
 } {
   const projectSlug = dnsLabel(input.projectSlug, "stack");
-  const namespace = dnsLabel(input.namespace ?? `openship-${projectSlug}`, "openship-stack");
+  const namespace = dnsLabel(
+    input.namespace ?? projectNamespace(input.projectSlug, input.projectId, "openship-stack"),
+    "openship-stack",
+  );
   const quantities = resourceQuantity(input.resources);
   const projectLabels = {
     "app.kubernetes.io/managed-by": "openship",
