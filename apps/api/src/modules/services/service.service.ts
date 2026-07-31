@@ -454,9 +454,14 @@ export async function updateService(
     });
 
     patch.exposed = normalized.exposed;
-    patch.exposedPort = normalized.exposedPort ?? undefined;
-    patch.domain = normalized.domain ?? undefined;
-    patch.customDomain = normalized.customDomain ?? undefined;
+    // Preserve explicit nulls. `undefined` means "leave this column alone" to
+    // the repository, while null is the deliberate clear value produced by the
+    // normalizer for a port-only route. Converting null to undefined kept a
+    // template's old free-domain fields in the database even after the UI sent
+    // an explicit clear.
+    patch.exposedPort = normalized.exposedPort;
+    patch.domain = normalized.domain;
+    patch.customDomain = normalized.customDomain;
     patch.domainType = normalized.domainType;
     patch.publicEndpoints = normalized.publicEndpoints;
 
