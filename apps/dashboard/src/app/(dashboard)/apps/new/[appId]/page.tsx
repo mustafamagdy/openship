@@ -336,7 +336,7 @@ export default function AppInstallPage() {
   /** Apply each endpoint's exposure choice to its service, via the same
    *  service-update endpoint the project Domains tab uses (custom domains
    *  auto-create the pending domain row + SSL through the backend):
-   *   http port   → unexpose (deploy port-only, reachable at host:port);
+   *   http port   → publish a port without creating a domain route;
    *   http free   → managed subdomain (chosen slug or the template default);
    *   http custom → the user's domain;
    *   tcp publish → keep the published host port (no-op — the template seeds it);
@@ -352,9 +352,14 @@ export default function AppInstallPage() {
       if (!svc || !st) continue;
       if (st.kind === "http") {
         if (st.mode === "port") {
-          // Unexpose so preflight skips the free-domain gate. Empty publicEndpoints
-          // sent explicitly — updateService merges otherwise, re-exposing it.
-          await servicesApi.update(pid, svc.id, { exposed: false, publicEndpoints: [] });
+          // On Kubernetes `exposed` controls the Service type. Keep it true to
+          // allocate a NodePort, while an explicit empty endpoint list ensures
+          // this remains port-only (no free/custom domain route). Docker does
+          // not need an exposed flag for its host port mapping.
+          await servicesApi.update(pid, svc.id, {
+            exposed: destination?.deploymentEngine === "kubernetes",
+            publicEndpoints: [],
+          });
         } else if (st.ep.domainType === "custom") {
           const custom = st.ep.customDomain.trim().toLowerCase();
           if (custom)

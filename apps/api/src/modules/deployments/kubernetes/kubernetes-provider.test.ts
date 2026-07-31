@@ -381,7 +381,7 @@ describe("Kubernetes provider", () => {
       rm: async () => {},
     } as unknown as CommandExecutor;
 
-    await deployStackToKubernetes(executor, {
+    const result = await deployStackToKubernetes(executor, {
       projectId: "project-123",
       projectSlug: "large-stack",
       deploymentId: "dep-large",
@@ -394,5 +394,9 @@ describe("Kubernetes provider", () => {
     });
 
     expect(foundationTimeout).toBe(500_000);
+    // Internal-only stacks are valid: they have ClusterIP Services and no
+    // NodePort, but the provider still completes successfully.
+    expect(result.services).toHaveLength(12);
+    expect(result.services.every((service) => service.nodePort === undefined)).toBe(true);
   });
 });
