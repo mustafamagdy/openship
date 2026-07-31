@@ -44,6 +44,10 @@ export interface Project {
   activeVersion?: number | null;
   /** Status of the live release (e.g. `partial_failure`). */
   activeDeploymentStatus?: string | null;
+  /** Execution engine for the active deployment, from the API enrichment. */
+  deploymentEngine?: "native" | "kubernetes" | null;
+  /** Best-effort live state used by list views for Kubernetes workloads. */
+  runtimeHealthy?: boolean | null;
   /** True when the live release is a partial-failure deploy awaiting keep/reject. */
   awaitingDecision?: boolean | null;
   serviceCount?: number;

@@ -22,6 +22,12 @@ type ProjectStatusSource = {
    *  didn't sync — also surfaced as "Action Required", with a Retry routing
    *  action (distinct from the keep/reject decision above). */
   routingUnsynced?: boolean | null;
+  /**
+   * Runtime liveness for Kubernetes apps, derived from the cluster rather than
+   * the historical active-deployment row. `undefined` means the runtime could
+   * not be queried and deliberately preserves the deployment state.
+   */
+  runtimeHealthy?: boolean | null;
   deletedAt?: string | null;
   /** True while an atomic teardown is in flight (the real in-progress flag;
    *  teardown hard-deletes on success, so `deletedAt` is rarely set). */
@@ -110,6 +116,13 @@ export function getProjectStatus(project: ProjectStatusSource): ProjectStatus {
   // deploy awaiting keep/reject, or one whose free-domain edge route didn't
   // sync. Both flag "Action Required" — never the green "Live".
   if (project.awaitingDecision || project.routingUnsynced) {
+    return "attention";
+  }
+
+  // Kubernetes may retain an active deployment record after its workloads were
+  // scaled down or failed. Never show that historical record as a green live
+  // app when the cluster says the enabled services are not running.
+  if (project.runtimeHealthy === false) {
     return "attention";
   }
 
