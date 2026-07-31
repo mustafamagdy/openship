@@ -20,6 +20,14 @@ describe("app catalog (JSON)", () => {
     }
   });
 
+  it("keeps Supabase role setup in the image-managed init-scripts lifecycle", () => {
+    const supabase = APP_TEMPLATES.find((app) => app.id === "supabase");
+    const rolesFile = supabase?.files?.find((file) => file.path.endsWith("99-roles.sql"));
+
+    expect(rolesFile?.path).toBe("/docker-entrypoint-initdb.d/init-scripts/99-roles.sql");
+    expect(rolesFile?.content).toContain("ALTER FUNCTION auth.uid() OWNER TO supabase_auth_admin;");
+  });
+
   it("rejects a malformed template (missing required fields)", () => {
     expect(isValidAppTemplate({ id: "x" })).toBe(false);
     expect(isValidAppTemplate(null)).toBe(false);
