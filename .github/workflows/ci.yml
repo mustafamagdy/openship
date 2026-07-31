@@ -19,7 +19,7 @@ jobs:
           bun-version: latest
 
       - name: Cache bun install
-        uses: actions/cache@v6
+        uses: actions/cache/restore@v5
         with:
           path: ~/.bun/install/cache
           key: ${{ runner.os }}-bun-${{ hashFiles('**/bun.lock', '**/bun.lockb') }}
@@ -57,7 +57,7 @@ jobs:
           bun-version: latest
 
       - name: Cache bun install
-        uses: actions/cache@v6
+        uses: actions/cache/restore@v5
         with:
           path: ~/.bun/install/cache
           key: ${{ runner.os }}-bun-${{ hashFiles('**/bun.lock', '**/bun.lockb') }}
