@@ -231,6 +231,27 @@ export default function AppInstallPage() {
       return cur?.kind === "http" ? { ...p, [key]: { ...cur, ep } } : p;
     });
   const [destination, setDestination] = useState<AppDestination | null>(null);
+  const previousDeploymentEngine = useRef<AppDestination["deploymentEngine"] | null>(null);
+  useEffect(() => {
+    const engine = destination?.deploymentEngine ?? null;
+    // Cloud connectivity is known before an operator chooses where an app runs.
+    // A connected Cloud account used to preselect free routes for every endpoint
+    // and carry those routes into a Kubernetes install, where a port-only app is
+    // the safe default. Switching to Kubernetes therefore resets only the
+    // initial exposure modes; domains remain available as an explicit choice.
+    if (engine === "kubernetes" && previousDeploymentEngine.current !== "kubernetes") {
+      setExpo((current) => {
+        const next = { ...current };
+        for (const endpoint of appEndpoints) {
+          const key = endpointKey(endpoint);
+          const state = next[key];
+          if (state?.kind === "http") next[key] = { ...state, mode: "port" };
+        }
+        return next;
+      });
+    }
+    previousDeploymentEngine.current = engine;
+  }, [destination?.deploymentEngine, appEndpoints]);
   // Project name shown in Openship. Editable for a fresh install (a second
   // install of the same app auto-suffixes server-side, e.g. "Convex 2"); hidden
   // when reopening an existing draft, which already has its name.
