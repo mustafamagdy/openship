@@ -80,7 +80,22 @@ export function endpointsNeedCloud(
 }
 
 export function servicesNeedCloud(
-  services?: ReadonlyArray<{ exposed?: boolean; domainType?: string | null }> | null,
+  services?: ReadonlyArray<{
+    exposed?: boolean;
+    domainType?: string | null;
+    /** An explicit empty list is a port-only/internal service, not a free route. */
+    publicEndpoints?: ReadonlyArray<{ domainType?: string | null }> | null;
+  }> | null,
 ): boolean {
-  return !!services?.length && services.some((s) => s.exposed && endpointNeedsCloud(s.domainType));
+  return !!services?.length && services.some((service) => {
+    if (!service.exposed) return false;
+    // A persisted endpoint array is authoritative. In particular, [] records
+    // the operator's explicit "port only" choice; treating it as the legacy
+    // scalar fallback resurrects a managed free-domain requirement.
+    if (Array.isArray(service.publicEndpoints)) {
+      return endpointsNeedCloud(service.publicEndpoints);
+    }
+    // Legacy services without the array still use their scalar route fields.
+    return endpointNeedsCloud(service.domainType);
+  });
 }

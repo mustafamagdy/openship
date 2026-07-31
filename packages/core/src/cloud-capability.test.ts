@@ -65,11 +65,15 @@ describe("needs-cloud predicate", () => {
     expect(endpointsNeedCloud([{ domainType: "custom" }, { domainType: "free" }])).toBe(true);
   });
 
-  it("servicesNeedCloud: only EXPOSED non-custom services need cloud", () => {
+  it("servicesNeedCloud: only exposed services with a managed route need cloud", () => {
     expect(servicesNeedCloud(undefined)).toBe(false);
     expect(servicesNeedCloud([{ exposed: false, domainType: "free" }])).toBe(false);
     expect(servicesNeedCloud([{ exposed: true, domainType: "custom" }])).toBe(false);
     expect(servicesNeedCloud([{ exposed: true, domainType: "free" }])).toBe(true);
+    expect(servicesNeedCloud([{ exposed: true, domainType: "free", publicEndpoints: [] }])).toBe(false);
+    expect(
+      servicesNeedCloud([{ exposed: true, domainType: "free", publicEndpoints: [{ domainType: "free" }] }]),
+    ).toBe(true);
     expect(
       servicesNeedCloud([
         { exposed: true, domainType: "custom" },

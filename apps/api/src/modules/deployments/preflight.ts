@@ -659,66 +659,69 @@ async function checkComposeServiceDomains(
 
   for (const service of composeServices) {
     if (!service.exposed) continue;
+    // `publicEndpoints: []` is the explicit port-only/internal representation.
+    // Do not fall back to the legacy scalar route in that case: Kubernetes uses
+    // `exposed:true` to allocate a NodePort, which is independent of domains.
+    const routes = Array.isArray(service.publicEndpoints)
+      ? service.publicEndpoints
+      : [service];
 
-    if (service.domainType === "custom" && service.customDomain?.trim()) {
-      const domain = normalizeCustomHostname(service.customDomain);
-      if (seen.has(domain)) {
+    for (const [index, route] of routes.entries()) {
+      const suffix = routes.length > 1 ? `-${index + 1}` : "";
+      const id = `service-domain-${service.name}${suffix}`;
+
+      if (route.domainType === "custom" && route.customDomain?.trim()) {
+        const domain = normalizeCustomHostname(route.customDomain);
+        if (seen.has(domain)) {
+          checks.push({
+            id,
+            label: `Service domain (${service.name})`,
+            status: "fail",
+            message: `Duplicate custom domain configured: ${domain}`,
+          });
+          continue;
+        }
+        seen.add(domain);
+
+        const result = await checkCustomDomain(domain, cloud, snapshot);
+        checks.push({ ...result, id, label: `Service domain (${service.name})` });
+        continue;
+      }
+
+      const subdomain = resolveServiceHostnameLabel(
+        projectSlug || "project",
+        service.name,
+        route.domain,
+        serviceKind(service),
+      );
+      const fqdn = `${subdomain}.${baseDomain}`;
+
+      // Free subdomains require cloud - fail early if not connected.
+      if (!cloud) {
         checks.push({
-          id: `service-domain-${service.name}`,
-          label: `Service domain (${service.name})`,
+          id,
+          label: `Service subdomain (${service.name})`,
           status: "fail",
-          message: `Duplicate custom domain configured: ${domain}`,
+          code: PREFLIGHT_ERROR_CODES.CLOUD_REQUIRED_MANAGED_COMPOSE_DOMAINS,
+          message: `Free subdomain "${fqdn}" requires Openship Cloud. Connect your account or switch to a custom domain.`,
         });
         continue;
       }
-      seen.add(domain);
 
-      const result = await checkCustomDomain(domain, cloud, snapshot);
-      checks.push({
-        ...result,
-        id: `service-domain-${service.name}`,
-        label: `Service domain (${service.name})`,
-      });
-      continue;
+      if (seen.has(fqdn)) {
+        checks.push({
+          id,
+          label: `Service domain (${service.name})`,
+          status: "fail",
+          message: `Duplicate service subdomain configured: ${subdomain}`,
+        });
+        continue;
+      }
+      seen.add(fqdn);
+
+      const result = checkSlugFormat(subdomain);
+      checks.push({ ...result, id, label: `Service subdomain (${service.name})` });
     }
-
-    const subdomain = resolveServiceHostnameLabel(
-      projectSlug || "project",
-      service.name,
-      service.domain,
-      serviceKind(service),
-    );
-    const fqdn = `${subdomain}.${baseDomain}`;
-
-    // Free subdomains require cloud - fail early if not connected
-    if (!cloud) {
-      checks.push({
-        id: `service-domain-${service.name}`,
-        label: `Service subdomain (${service.name})`,
-        status: "fail",
-        code: PREFLIGHT_ERROR_CODES.CLOUD_REQUIRED_MANAGED_COMPOSE_DOMAINS,
-        message: `Free subdomain "${fqdn}" requires Openship Cloud. Connect your account or switch to a custom domain.`,
-      });
-      continue;
-    }
-
-    if (seen.has(fqdn)) {
-      checks.push({
-        id: `service-domain-${service.name}`,
-        label: `Service domain (${service.name})`,
-        status: "fail",
-        message: `Duplicate service subdomain configured: ${subdomain}`,
-      });
-      continue;
-    }
-    seen.add(fqdn);
-
-    const result = checkSlugFormat(subdomain);
-    checks.push({
-      ...result,
-      id: `service-domain-${service.name}`,
-      label: `Service subdomain (${service.name})`,
-    });
   }
 
   return checks;
