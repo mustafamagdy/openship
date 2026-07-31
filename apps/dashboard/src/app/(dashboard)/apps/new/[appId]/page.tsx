@@ -222,6 +222,15 @@ export default function AppInstallPage() {
     }
     return out;
   });
+  // Installation performs several async steps (create project, settings, route
+  // persistence, then build). Keep an always-current endpoint snapshot so the
+  // submission path cannot evaluate a render-time closure from before an
+  // operator changed an exposure choice. This is especially important for
+  // multi-endpoint apps such as MinIO and Convex.
+  const expoRef = useRef(expo);
+  useEffect(() => {
+    expoRef.current = expo;
+  }, [expo]);
   // Author can restrict the exposure choices offered per endpoint via `allowedModes`.
   const modeAllowed = (e: AppEndpoint, mode: NonNullable<AppEndpoint["defaultMode"]>) =>
     !e.allowedModes || e.allowedModes.includes(mode);
@@ -364,7 +373,10 @@ export default function AppInstallPage() {
    *   http custom → the user's domain;
    *   tcp publish → keep the published host port (no-op — the template seeds it);
    *   tcp internal→ strip the published port (reachable only inside the project). */
-  const applyEndpoints = async (pid: string) => {
+  const applyEndpoints = async (
+    pid: string,
+    exposure: Record<string, AppEndpointExposure>,
+  ) => {
     if (!needsExposure) return;
     const svcRes = await servicesApi.list(pid);
     const services = svcRes?.services ?? [];
@@ -376,7 +388,7 @@ export default function AppInstallPage() {
     // service's complete route set and persist it exactly once instead.
     for (const update of buildHttpServiceRouteUpdates(
       appEndpoints,
-      expo,
+      exposure,
       services,
       destination?.deploymentEngine === "kubernetes",
     )) {
@@ -390,7 +402,7 @@ export default function AppInstallPage() {
 
     for (const e of appEndpoints) {
       const svc = byName.get(e.service);
-      const st = expo[endpointKey(e)];
+      const st = exposure[endpointKey(e)];
       if (!svc || !st || st.kind !== "tcp") continue;
       if (st.mode === "internal") {
         // Docker needs the host mapping removed to make a TCP endpoint private.
@@ -434,9 +446,10 @@ export default function AppInstallPage() {
       );
       return;
     }
+    const exposure = expoRef.current;
     const httpStates = appEndpoints
       .filter((e) => e.kind === "http")
-      .map((e) => expo[endpointKey(e)])
+      .map((e) => exposure[endpointKey(e)])
       .filter((s): s is Extract<Expo, { kind: "http" }> => s?.kind === "http");
     // A custom-domain endpoint needs its domain filled in.
     if (
@@ -479,7 +492,7 @@ export default function AppInstallPage() {
 
       const changes = settingChanges();
       if (changes.length > 0) await appsApi.updateSettings(pid, changes);
-      await applyEndpoints(pid);
+      await applyEndpoints(pid, exposure);
 
       // Wire declared connections BEFORE deploy so the injected env is present.
       // Best-effort (mirrors domains — never fails the deploy); the required gate

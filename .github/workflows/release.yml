@@ -785,7 +785,15 @@ jobs:
           # single-OS failure shouldn't block the release).
           for asset in Openship-arm64.dmg Openship-x64.dmg Openship-win32-x64.zip Openship.AppImage Openship-arm64.AppImage Openship.deb Openship.rpm; do
             if [[ -f "dist/${asset}" ]]; then
-              gh release upload "${TAG}" "dist/${asset}" "dist/${asset}.sha256" --clobber
+              assets=("dist/${asset}")
+              if [[ -f "dist/${asset}.sha256" ]]; then
+                assets+=("dist/${asset}.sha256")
+              else
+                echo "::warning::desktop installer checksum missing: ${asset}.sha256"
+              fi
+              # This job intentionally has no checkout — it only consumes build
+              # artifacts — so tell gh exactly which repository owns the release.
+              gh release upload "${TAG}" "${assets[@]}" --clobber --repo "${GITHUB_REPOSITORY}"
             else
               echo "::warning::desktop installer missing: ${asset}"
             fi
