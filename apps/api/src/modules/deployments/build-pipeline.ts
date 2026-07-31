@@ -858,8 +858,12 @@ async function executeBuildAndDeploy(project: Project, dep: Deployment, buildSes
           usesManagedRouting: true,
           domainByHostname,
         });
-        const upstream = `http://${clusterServer.sshHost}:${deployedService.nodePort}`;
         for (const domain of routes) {
+          const routeNodePort = domain.targetPort == null
+            ? deployedService.nodePort
+            : deployedService.nodePorts?.[String(domain.targetPort)] ?? deployedService.nodePort;
+          if (!routeNodePort) continue;
+          const upstream = `http://${clusterServer.sshHost}:${routeNodePort}`;
           if (domain.createIfMissing) {
             await ensureRouteDomainRecord({
               projectId: project.id,

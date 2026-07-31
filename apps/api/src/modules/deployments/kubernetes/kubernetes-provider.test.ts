@@ -178,6 +178,34 @@ describe("Kubernetes provider", () => {
     expect(deployment.spec.template.spec.containers[0].command).toBeUndefined();
   });
 
+  it("publishes every declared port for an exposed multi-port stack service", () => {
+    const built = buildKubernetesStackObjects({
+      projectId: "project-123",
+      projectSlug: "minio",
+      deploymentId: "dep-minio",
+      resources: base.resources,
+      services: [{
+        name: "minio",
+        image: "minio/minio:latest",
+        ports: ["9000:9000", "9001:9001"],
+        exposedPort: "9001",
+        exposed: true,
+      }],
+    });
+    const service = built.objects.find(
+      (object: any) => object.kind === "Service" && object.metadata.name === "minio",
+    ) as any;
+    const deployment = built.objects.find(
+      (object: any) => object.kind === "Deployment" && object.metadata.name === "minio",
+    ) as any;
+
+    expect(service.spec.ports).toEqual([
+      { name: "tcp-9001", port: 9001, targetPort: "tcp-9001", protocol: "TCP" },
+      { name: "tcp-9000", port: 9000, targetPort: "tcp-9000", protocol: "TCP" },
+    ]);
+    expect(deployment.spec.template.spec.containers[0].ports.map((port: any) => port.containerPort)).toEqual([9001, 9000]);
+  });
+
   it("translates named Compose volumes into shared PVC mounts", () => {
     const built = buildKubernetesStackObjects({
       projectId: "project-123",
@@ -337,7 +365,7 @@ describe("Kubernetes provider", () => {
       exec: async (command: string, options?: { timeout?: number }) => {
         commands.push(command);
         commandTimeouts.set(command, options?.timeout);
-        return command.includes("jsonpath") ? "31234" : "";
+        return command.includes("range .spec.ports") ? "8080=31234" : command.includes("jsonpath") ? "31234" : "";
       },
       rm: async () => {},
     } as unknown as CommandExecutor;
@@ -400,6 +428,42 @@ describe("Kubernetes provider", () => {
       (object: any) => object.metadata.name === "catalog-env",
     );
     expect(catalogSecret.stringData.PUBLIC_FRONTEND).toBe("http://10.0.0.20:31234");
+  });
+
+  it("returns an externally usable URL for every NodePort in a multi-port service", async () => {
+    const writtenFiles = new Map<string, string>();
+    const executor = {
+      mkdir: async () => {},
+      writeFile: async (path: string, contents: string) => { writtenFiles.set(path, contents); },
+      exec: async (command: string) => command.includes("range .spec.ports") ? "9001=31201\n9000=31202" : "",
+      rm: async () => {},
+    } as unknown as CommandExecutor;
+
+    const result = await deployStackToKubernetes(executor, {
+      projectId: "project-123",
+      projectSlug: "minio",
+      deploymentId: "dep-minio",
+      resources: base.resources,
+      publicHost: "10.0.0.20",
+      services: [{
+        name: "minio",
+        image: "minio/minio:latest",
+        ports: ["9000:9000", "9001:9001"],
+        exposedPort: "9001",
+        exposed: true,
+        environment: {
+          CONSOLE_URL: "{{publicUrl:minio}}",
+          S3_URL: "{{publicUrl:minio:9000}}",
+        },
+      }],
+    });
+    expect(result.services[0]).toMatchObject({ nodePort: 31201, nodePorts: { "9001": 31201, "9000": 31202 } });
+    const configuration = [...writtenFiles.entries()].find(([path]) => path.endsWith("/configuration.json"));
+    const secret = JSON.parse(configuration![1]).items.find((object: any) => object.metadata.name === "minio-env");
+    expect(secret.stringData).toMatchObject({
+      CONSOLE_URL: "http://10.0.0.20:31201",
+      S3_URL: "http://10.0.0.20:31202",
+    });
   });
 
   it("scales the foundation apply timeout for large multi-service stacks", async () => {
