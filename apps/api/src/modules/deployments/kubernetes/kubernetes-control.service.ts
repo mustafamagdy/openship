@@ -4,6 +4,12 @@ import type { DeploymentMeta } from "../../../lib/deployment-runtime";
 import type { ShellOptions, ShellSession } from "@repo/adapters";
 import { getDeployment } from "../deployment.service";
 import { isValidReplicaCount, ownedResourceQuery } from "./kubernetes-command";
+import {
+  inventorySummary,
+  type KubernetesInventoryDeployment,
+  type KubernetesInventoryPod,
+  type KubernetesInventorySummary,
+} from "./kubernetes-inventory";
 
 type KubernetesList<T> = { items?: T[] };
 
@@ -49,31 +55,9 @@ interface PdbItem {
 
 export interface KubernetesInventory {
   namespace: string;
-  summary: {
-    deployments: number;
-    desiredReplicas: number;
-    readyReplicas: number;
-    pods: number;
-    readyPods: number;
-    healthy: boolean;
-  };
-  deployments: Array<{
-    name: string;
-    desired: number;
-    ready: number;
-    available: number;
-    updated: number;
-    unavailable: number;
-  }>;
-  pods: Array<{
-    name: string;
-    serviceName?: string;
-    node?: string;
-    phase?: string;
-    podIP?: string;
-    ready: boolean;
-    restarts: number;
-  }>;
+  summary: KubernetesInventorySummary;
+  deployments: KubernetesInventoryDeployment[];
+  pods: KubernetesInventoryPod[];
   services: Array<{
     name: string;
     type?: string;
@@ -167,20 +151,9 @@ export async function inventory(
         restarts: statuses.reduce((total, status) => total + (status.restartCount ?? 0), 0),
       };
     });
-    const desiredReplicas = deployments.reduce((total, item) => total + item.desired, 0);
-    const readyReplicas = deployments.reduce((total, item) => total + item.ready, 0);
-    const readyPods = pods.filter((pod) => pod.ready).length;
     return {
       namespace: target.namespace,
-      summary: {
-        deployments: deployments.length,
-        desiredReplicas,
-        readyReplicas,
-        pods: pods.length,
-        readyPods,
-        healthy:
-          deployments.length > 0 && desiredReplicas === readyReplicas && pods.length === readyPods,
-      },
+      summary: inventorySummary(deployments, pods),
       deployments,
       pods,
       services: serviceItems.map((item) => ({
