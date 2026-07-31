@@ -53,6 +53,10 @@ import { AppLogo } from "@/components/AppLogo";
 import { VerifiedBadge } from "@/components/apps/VerifiedBadge";
 import { PageContainer } from "@/components/ui/PageContainer";
 import { encodeProjectSlug } from "@/utils/repoSlug";
+import {
+  buildHttpServiceRouteUpdates,
+  type AppEndpointExposure,
+} from "@/utils/app-endpoint-routing";
 
 /**
  * Dedicated app-install wizard — a CLEAN business-only wrapper over the existing
@@ -197,11 +201,9 @@ export default function AppInstallPage() {
   //  http: mode port|domain — free-vs-custom is chosen inside the domain detail
   //        (the PublicEndpointsCard toggle), so it's not duplicated as a mode.
   //  tcp:  mode publish|internal.
-  type Expo =
-    | { kind: "http"; mode: "port" | "domain"; ep: PublicEndpoint }
-    | { kind: "tcp"; mode: "publish" | "internal" };
-  const [expo, setExpo] = useState<Record<string, Expo>>(() => {
-    const out: Record<string, Expo> = {};
+  type Expo = AppEndpointExposure;
+  const [expo, setExpo] = useState<Record<string, AppEndpointExposure>>(() => {
+    const out: Record<string, AppEndpointExposure> = {};
     for (const e of appEndpoints) {
       if (e.kind === "http") {
         // Author's `defaultMode` wins when valid for http; else a domain defaults
@@ -372,40 +374,17 @@ export default function AppInstallPage() {
     // independently meant a multi-port template such as MinIO or Convex lost
     // every earlier route when the final service update arrived. Build each
     // service's complete route set and persist it exactly once instead.
-    const httpEndpointsByService = new Map<string, AppEndpoint[]>();
-    for (const e of appEndpoints) {
-      if (e.kind === "http") {
-        const group = httpEndpointsByService.get(e.service) ?? [];
-        group.push(e);
-        httpEndpointsByService.set(e.service, group);
-      }
-    }
-    for (const [serviceName, endpoints] of httpEndpointsByService) {
-      const svc = byName.get(serviceName);
-      if (!svc) continue;
-      const publicEndpoints: Array<{
-        port: number;
-        domainType: "free" | "custom";
-        domain?: string;
-        customDomain?: string;
-      }> = [];
-      for (const e of endpoints) {
-        const st = expo[endpointKey(e)];
-        if (st?.kind !== "http" || st.mode !== "domain") continue;
-        const existing = svc.publicEndpoints?.find((endpoint) => Number(endpoint.port) === e.port);
-        if (st.ep.domainType === "custom") {
-          const customDomain = st.ep.customDomain.trim().toLowerCase() || existing?.customDomain;
-          if (customDomain) publicEndpoints.push({ port: e.port, domainType: "custom", customDomain });
-          continue;
-        }
-        const domain = st.ep.domain.trim().toLowerCase() || existing?.domain;
-        if (domain) publicEndpoints.push({ port: e.port, domainType: "free", domain });
-      }
+    for (const update of buildHttpServiceRouteUpdates(
+      appEndpoints,
+      expo,
+      services,
+      destination?.deploymentEngine === "kubernetes",
+    )) {
       // On Kubernetes `exposed` controls NodePort allocation. Keep it true for
       // port-only endpoints while the empty route list guarantees no domain.
-      await servicesApi.update(pid, svc.id, {
-        exposed: publicEndpoints.length > 0 || destination?.deploymentEngine === "kubernetes",
-        publicEndpoints,
+      await servicesApi.update(pid, update.serviceId, {
+        exposed: update.exposed,
+        publicEndpoints: update.publicEndpoints,
       });
     }
 
