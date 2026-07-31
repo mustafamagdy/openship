@@ -53,6 +53,10 @@ import { AppLogo } from "@/components/AppLogo";
 import { VerifiedBadge } from "@/components/apps/VerifiedBadge";
 import { PageContainer } from "@/components/ui/PageContainer";
 import { encodeProjectSlug } from "@/utils/repoSlug";
+import {
+  buildHttpServiceRouteUpdates,
+  type AppEndpointExposure,
+} from "@/utils/app-endpoint-routing";
 
 /**
  * Dedicated app-install wizard — a CLEAN business-only wrapper over the existing
@@ -197,11 +201,9 @@ export default function AppInstallPage() {
   //  http: mode port|domain — free-vs-custom is chosen inside the domain detail
   //        (the PublicEndpointsCard toggle), so it's not duplicated as a mode.
   //  tcp:  mode publish|internal.
-  type Expo =
-    | { kind: "http"; mode: "port" | "domain"; ep: PublicEndpoint }
-    | { kind: "tcp"; mode: "publish" | "internal" };
-  const [expo, setExpo] = useState<Record<string, Expo>>(() => {
-    const out: Record<string, Expo> = {};
+  type Expo = AppEndpointExposure;
+  const [expo, setExpo] = useState<Record<string, AppEndpointExposure>>(() => {
+    const out: Record<string, AppEndpointExposure> = {};
     for (const e of appEndpoints) {
       if (e.kind === "http") {
         // Author's `defaultMode` wins when valid for http; else a domain defaults
@@ -231,6 +233,27 @@ export default function AppInstallPage() {
       return cur?.kind === "http" ? { ...p, [key]: { ...cur, ep } } : p;
     });
   const [destination, setDestination] = useState<AppDestination | null>(null);
+  const previousDeploymentEngine = useRef<AppDestination["deploymentEngine"] | null>(null);
+  useEffect(() => {
+    const engine = destination?.deploymentEngine ?? null;
+    // Cloud connectivity is known before an operator chooses where an app runs.
+    // A connected Cloud account used to preselect free routes for every endpoint
+    // and carry those routes into a Kubernetes install, where a port-only app is
+    // the safe default. Switching to Kubernetes therefore resets only the
+    // initial exposure modes; domains remain available as an explicit choice.
+    if (engine === "kubernetes" && previousDeploymentEngine.current !== "kubernetes") {
+      setExpo((current) => {
+        const next = { ...current };
+        for (const endpoint of appEndpoints) {
+          const key = endpointKey(endpoint);
+          const state = next[key];
+          if (state?.kind === "http") next[key] = { ...state, mode: "port" };
+        }
+        return next;
+      });
+    }
+    previousDeploymentEngine.current = engine;
+  }, [destination?.deploymentEngine, appEndpoints]);
   // Project name shown in Openship. Editable for a fresh install (a second
   // install of the same app auto-suffixes server-side, e.g. "Convex 2"); hidden
   // when reopening an existing draft, which already has its name.
@@ -346,38 +369,30 @@ export default function AppInstallPage() {
     const svcRes = await servicesApi.list(pid);
     const services = svcRes?.services ?? [];
     const byName = new Map(services.map((s) => [s.name, s]));
+
+    // Routing is stored per service, not per endpoint. Applying every endpoint
+    // independently meant a multi-port template such as MinIO or Convex lost
+    // every earlier route when the final service update arrived. Build each
+    // service's complete route set and persist it exactly once instead.
+    for (const update of buildHttpServiceRouteUpdates(
+      appEndpoints,
+      expo,
+      services,
+      destination?.deploymentEngine === "kubernetes",
+    )) {
+      // On Kubernetes `exposed` controls NodePort allocation. Keep it true for
+      // port-only endpoints while the empty route list guarantees no domain.
+      await servicesApi.update(pid, update.serviceId, {
+        exposed: update.exposed,
+        publicEndpoints: update.publicEndpoints,
+      });
+    }
+
     for (const e of appEndpoints) {
       const svc = byName.get(e.service);
       const st = expo[endpointKey(e)];
-      if (!svc || !st) continue;
-      if (st.kind === "http") {
-        if (st.mode === "port") {
-          // On Kubernetes `exposed` controls the Service type. Keep it true to
-          // allocate a NodePort, while an explicit empty endpoint list ensures
-          // this remains port-only (no free/custom domain route). Docker does
-          // not need an exposed flag for its host port mapping.
-          await servicesApi.update(pid, svc.id, {
-            exposed: destination?.deploymentEngine === "kubernetes",
-            publicEndpoints: [],
-          });
-        } else if (st.ep.domainType === "custom") {
-          const custom = st.ep.customDomain.trim().toLowerCase();
-          if (custom)
-            await servicesApi.update(pid, svc.id, {
-              exposed: true,
-              domainType: "custom",
-              customDomain: custom,
-            });
-        } else {
-          const slug = st.ep.domain.trim().toLowerCase();
-          // Blank slug = keep the template's baked free subdomain.
-          await servicesApi.update(pid, svc.id, {
-            exposed: true,
-            domainType: "free",
-            ...(slug ? { domain: slug } : {}),
-          });
-        }
-      } else if (st.mode === "internal") {
+      if (!svc || !st || st.kind !== "tcp") continue;
+      if (st.mode === "internal") {
         // Docker needs the host mapping removed to make a TCP endpoint private.
         // Kubernetes is different: the same `ports` entry is the only declared
         // container/Service port, and the provider never publishes it on the
