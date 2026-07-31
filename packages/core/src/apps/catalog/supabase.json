@@ -105,7 +105,7 @@
         "GOTRUE_API_PORT": "9999",
         "API_EXTERNAL_URL": "{{publicUrl:kong}}",
         "GOTRUE_DB_DRIVER": "postgres",
-        "GOTRUE_DB_DATABASE_URL": "postgres://supabase_auth_admin:{{config:POSTGRES_PASSWORD}}@db:5432/postgres",
+        "GOTRUE_DB_DATABASE_URL": "postgres://supabase_auth_admin:{{configUrl:POSTGRES_PASSWORD}}@db:5432/postgres",
         "GOTRUE_SITE_URL": "{{publicUrl:kong}}",
         "GOTRUE_URI_ALLOW_LIST": "",
         "GOTRUE_DISABLE_SIGNUP": "false",
@@ -142,7 +142,7 @@
         "db"
       ],
       "environment": {
-        "PGRST_DB_URI": "postgres://authenticator:{{config:POSTGRES_PASSWORD}}@db:5432/postgres",
+        "PGRST_DB_URI": "postgres://authenticator:{{configUrl:POSTGRES_PASSWORD}}@db:5432/postgres",
         "PGRST_DB_SCHEMAS": "public,storage,graphql_public",
         "PGRST_DB_ANON_ROLE": "anon",
         "PGRST_JWT_SECRET": "{{config:JWT_SECRET}}",
@@ -194,7 +194,7 @@
         "SERVICE_KEY": "{{config:SERVICE_ROLE_KEY}}",
         "POSTGREST_URL": "http://rest:3000",
         "AUTH_JWT_SECRET": "{{config:JWT_SECRET}}",
-        "DATABASE_URL": "postgres://supabase_storage_admin:{{config:POSTGRES_PASSWORD}}@db:5432/postgres",
+        "DATABASE_URL": "postgres://supabase_storage_admin:{{configUrl:POSTGRES_PASSWORD}}@db:5432/postgres",
         "FILE_SIZE_LIMIT": "52428800",
         "STORAGE_BACKEND": "file",
         "FILE_STORAGE_BACKEND_PATH": "/var/lib/storage",
@@ -370,8 +370,13 @@
     },
     {
       "service": "db",
+      "path": "/docker-entrypoint-initdb.d/migrations/99-realtime.sql",
+      "content": "CREATE SCHEMA IF NOT EXISTS _realtime;\nALTER SCHEMA _realtime OWNER TO postgres;\n"
+    },
+    {
+      "service": "db",
       "path": "/docker-entrypoint-initdb.d/init-scripts/99-roles.sql",
-      "content": "ALTER USER authenticator WITH PASSWORD '{{config:POSTGRES_PASSWORD}}';\nALTER USER pgbouncer WITH PASSWORD '{{config:POSTGRES_PASSWORD}}';\nALTER USER supabase_auth_admin WITH PASSWORD '{{config:POSTGRES_PASSWORD}}';\nALTER USER supabase_functions_admin WITH PASSWORD '{{config:POSTGRES_PASSWORD}}';\nALTER USER supabase_storage_admin WITH PASSWORD '{{config:POSTGRES_PASSWORD}}';\nALTER USER supabase_admin WITH PASSWORD '{{config:POSTGRES_PASSWORD}}';\n"
+      "content": "ALTER USER authenticator WITH PASSWORD '{{config:POSTGRES_PASSWORD}}';\nALTER USER pgbouncer WITH PASSWORD '{{config:POSTGRES_PASSWORD}}';\nALTER USER supabase_auth_admin WITH PASSWORD '{{config:POSTGRES_PASSWORD}}';\nALTER USER supabase_functions_admin WITH PASSWORD '{{config:POSTGRES_PASSWORD}}';\nALTER USER supabase_storage_admin WITH PASSWORD '{{config:POSTGRES_PASSWORD}}';\nALTER USER supabase_admin WITH PASSWORD '{{config:POSTGRES_PASSWORD}}';\n\n-- The PostgreSQL image seeds these helpers as postgres. GoTrue owns and\n-- migrates the auth schema, so it must also own the helpers it replaces.\nALTER FUNCTION auth.uid() OWNER TO supabase_auth_admin;\nALTER FUNCTION auth.role() OWNER TO supabase_auth_admin;\nALTER FUNCTION auth.email() OWNER TO supabase_auth_admin;\n"
     }
   ],
   "management": {
