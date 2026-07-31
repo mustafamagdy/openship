@@ -81,6 +81,8 @@ export interface KubernetesStackDeployResult {
     serviceName: string;
     port: number;
     nodePort?: number;
+    /** Every externally published container port, keyed by container port. */
+    nodePorts?: Record<string, number>;
   }>;
 }
 
@@ -162,6 +164,25 @@ function servicePort(service: KubernetesStackService): number {
     throw new Error(`Kubernetes service "${service.name}" needs a valid container port.`);
   }
   return port;
+}
+
+/**
+ * A Compose service can intentionally publish more than one port (MinIO's S3
+ * API + console is the common example). Keep the explicit exposedPort first so
+ * it remains the service's primary URL, while exposing every declared container
+ * port through the same Kubernetes Service.
+ */
+function servicePorts(service: KubernetesStackService): number[] {
+  const primary = servicePort(service);
+  const ports = [primary];
+  for (const raw of service.ports ?? []) {
+    const containerSide = raw.trim().split(":").pop()?.split("/")[0];
+    const port = Number(containerSide);
+    if (Number.isInteger(port) && port >= 1 && port <= 65535 && !ports.includes(port)) {
+      ports.push(port);
+    }
+  }
+  return ports;
 }
 
 interface ParsedNamedVolume {
@@ -462,6 +483,7 @@ export function buildKubernetesStackObjects(input: KubernetesStackDeployInput): 
     name: string;
     serviceName: string;
     port: number;
+    ports: number[];
     exposed: boolean;
   }>;
   objects: KubernetesObject[];
@@ -488,6 +510,7 @@ export function buildKubernetesStackObjects(input: KubernetesStackDeployInput): 
     name: string;
     serviceName: string;
     port: number;
+    ports: number[];
     exposed: boolean;
   }> = [];
   const seenNames = new Set<string>();
@@ -532,7 +555,8 @@ export function buildKubernetesStackObjects(input: KubernetesStackDeployInput): 
       throw new Error(`Kubernetes stack contains duplicate service name "${name}".`);
     }
     seenNames.add(name);
-    const port = servicePort(service);
+    const ports = servicePorts(service);
+    const port = ports[0]!;
     const args = commandArgs(service.command, service.name);
     const parsedVolumes = (service.volumes ?? []).map((volume) =>
       parseNamedVolume(volume, service.name),
@@ -627,7 +651,11 @@ export function buildKubernetesStackObjects(input: KubernetesStackDeployInput): 
                 image: service.image,
                 imagePullPolicy: "IfNotPresent",
                 ...(args ? { args } : {}),
-                ports: [{ name: "tcp", containerPort: port, protocol: "TCP" }],
+                ports: ports.map((containerPort) => ({
+                  name: `tcp-${containerPort}`,
+                  containerPort,
+                  protocol: "TCP",
+                })),
                 envFrom: [{ secretRef: { name: secretName } }],
                 ...(parsedVolumes.length > 0 || files.length > 0
                   ? {
@@ -651,14 +679,14 @@ export function buildKubernetesStackObjects(input: KubernetesStackDeployInput): 
                   allowPrivilegeEscalation: false,
                 },
                 readinessProbe: {
-                  tcpSocket: { port: "tcp" },
+                  tcpSocket: { port: `tcp-${port}` },
                   initialDelaySeconds: 2,
                   periodSeconds: 5,
                   timeoutSeconds: 2,
                   failureThreshold: 12,
                 },
                 livenessProbe: {
-                  tcpSocket: { port: "tcp" },
+                  tcpSocket: { port: `tcp-${port}` },
                   initialDelaySeconds: 20,
                   periodSeconds: 10,
                   timeoutSeconds: 2,
@@ -694,7 +722,12 @@ export function buildKubernetesStackObjects(input: KubernetesStackDeployInput): 
       spec: {
         type: service.exposed ? "NodePort" : "ClusterIP",
         selector: { "openship.io/service-name": name },
-        ports: [{ name: "tcp", port, targetPort: "tcp", protocol: "TCP" }],
+        ports: ports.map((servicePort) => ({
+          name: `tcp-${servicePort}`,
+          port: servicePort,
+          targetPort: `tcp-${servicePort}`,
+          protocol: "TCP",
+        })),
       },
     });
 
@@ -715,6 +748,7 @@ export function buildKubernetesStackObjects(input: KubernetesStackDeployInput): 
       name: service.name,
       serviceName,
       port,
+      ports,
       exposed: Boolean(service.exposed),
     });
   }
@@ -848,15 +882,27 @@ export async function deployStackToKubernetes(
     const publicUrls = new Map<string, string>();
     for (const descriptor of built.serviceDescriptors) {
       let nodePort: number | undefined;
+      let nodePorts: Record<string, number> | undefined;
       if (descriptor.exposed) {
         const raw = await executor.exec(
-          `${kubectl} -n ${namespace} get service ${safeKubectlName(descriptor.serviceName)} -o jsonpath='{.spec.ports[0].nodePort}'`,
+          `${kubectl} -n ${namespace} get service ${safeKubectlName(descriptor.serviceName)} -o jsonpath='{range .spec.ports[*]}{.port}={.nodePort}{"\\n"}{end}'`,
           { timeout: 30_000 },
         );
-        nodePort = Number(raw.trim().replace(/^'|'$/g, ""));
-        if (!Number.isInteger(nodePort) || nodePort < 30000 || nodePort > 32767) {
+        const pairs = raw.trim().replace(/^'|'$/g, "").split(/\s+/).filter(Boolean);
+        nodePorts = Object.fromEntries(pairs.map((pair) => {
+          const [port, allocated] = pair.split("=");
+          return [port!, Number(allocated)];
+        }));
+        nodePort = nodePorts[String(descriptor.port)];
+        if (
+          !Number.isInteger(nodePort) || nodePort < 30000 || nodePort > 32767 ||
+          descriptor.ports.some((port) => {
+            const allocated = nodePorts![String(port)];
+            return !Number.isInteger(allocated) || allocated < 30000 || allocated > 32767;
+          })
+        ) {
           throw new Error(
-            `Kubernetes did not assign a valid NodePort to service/${descriptor.serviceName}`,
+            `Kubernetes did not assign valid NodePorts to service/${descriptor.serviceName}`,
           );
         }
       }
@@ -865,8 +911,15 @@ export async function deployStackToKubernetes(
         descriptor.name,
         nodePort && input.publicHost ? `http://${input.publicHost}:${nodePort}` : internalUrl,
       );
-      publicUrls.set(`${descriptor.name}:${descriptor.port}`, internalUrl);
-      services.push({ ...descriptor, nodePort });
+      for (const port of descriptor.ports) {
+        const internalPortUrl = `http://${descriptor.serviceName}:${port}`;
+        const allocated = nodePorts?.[String(port)];
+        publicUrls.set(
+          `${descriptor.name}:${port}`,
+          allocated && input.publicHost ? `http://${input.publicHost}:${allocated}` : internalPortUrl,
+        );
+      }
+      services.push({ ...descriptor, nodePort, ...(nodePorts ? { nodePorts } : {}) });
     }
     const configurationObjects = built.objects
       .filter(
