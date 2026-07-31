@@ -5,7 +5,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { Project } from "@/constants/mock";
 import ProjectCard from "../projects/components/ProjectCard";
-import { projectsApi } from "@/lib/api";
+import { projectsApi, servicesApi } from "@/lib/api";
 import { updatesApi } from "@/lib/api/updates";
 import { useI18n, interpolate } from "@/components/i18n-provider";
 import { AVAILABLE_APP_IDS } from "@repo/core";
@@ -63,6 +63,7 @@ export default function AppsPage() {
   const router = useRouter();
   const ap = t.dashboard.pages.apps;
   const [projects, setProjects] = useState<Project[]>([]);
+  const [runtimeHealth, setRuntimeHealth] = useState<Map<string, boolean>>(new Map());
   const [updatesBehind, setUpdatesBehind] = useState<Set<string>>(new Set());
   const [isLoading, setIsLoading] = useState(true);
   const isLoadingRef = useRef(false);
@@ -73,7 +74,32 @@ export default function AppsPage() {
     setIsLoading(true);
     try {
       const home = await projectsApi.getHome();
-      if (home.success && Array.isArray(home.projects)) setProjects(home.projects);
+      if (home.success && Array.isArray(home.projects)) {
+        setProjects(home.projects);
+        const kubernetesApps = home.projects.filter(
+          (project) =>
+            project.isApp &&
+            project.activeDeploymentId &&
+            project.deploymentEngine === "kubernetes",
+        );
+        const runtimeStates = await Promise.all(
+          kubernetesApps.map(async (project) => {
+            try {
+              const response = await servicesApi.containers(project.id);
+              const containers = response.containers;
+              return [
+                project.id,
+                containers.length > 0 && containers.every((container) => container.status === "running"),
+              ] as const;
+            } catch {
+              // An unreachable cluster is unknown, not evidence that a project
+              // is stopped. Preserve the deployment status until a later read.
+              return null;
+            }
+          }),
+        );
+        setRuntimeHealth(new Map(runtimeStates.filter((state): state is readonly [string, boolean] => state !== null)));
+      }
     } catch (error) {
       console.error("Error fetching apps:", error);
     } finally {
@@ -258,7 +284,7 @@ export default function AppsPage() {
               {apps.map((app) => (
                 <ProjectCard
                   key={app.id}
-                  project={app}
+                  project={{ ...app, runtimeHealthy: runtimeHealth.get(app.id) }}
                   preferAppLogo
                   updateAvailable={updatesBehind.has(app.id)}
                   onChanged={load}
