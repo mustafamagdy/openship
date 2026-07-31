@@ -373,6 +373,14 @@ export default function AppInstallPage() {
           });
         }
       } else if (st.mode === "internal") {
+        // Docker needs the host mapping removed to make a TCP endpoint private.
+        // Kubernetes is different: the same `ports` entry is the only declared
+        // container/Service port, and the provider never publishes it on the
+        // host. Removing it leaves stateful services (Postgres, Redis, etc.)
+        // without a valid in-cluster port, so retain it for Kubernetes while
+        // still keeping it private from the public edge.
+        if (destination?.deploymentEngine === "kubernetes") continue;
+
         // Drop the published host mapping for this port; leave any others.
         const ports = ((svc.ports as string[] | null) ?? []).filter((p) => {
           const parts = String(p).split(":");
