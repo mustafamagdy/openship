@@ -14,6 +14,12 @@ concurrency:
 permissions:
   contents: write
 
+# TEMPORARY: keep the release focused on the artifacts used by the self-hosted
+# catalog validation work. Set this back to "true" after every enabled app
+# template has passed live deployment verification.
+env:
+  BUILD_DESKTOP_INSTALLERS: "false"
+
 jobs:
   release-preflight:
     name: Release preflight
@@ -283,7 +289,7 @@ jobs:
 
   build-desktop:
     name: Build desktop installer (${{ matrix.label }})
-    if: github.event_name == 'push'
+    if: github.event_name == 'push' && env.BUILD_DESKTOP_INSTALLERS == 'true'
     strategy:
       fail-fast: false
       matrix:
@@ -451,7 +457,7 @@ jobs:
 
   build-desktop-macos:
     name: Build desktop installers (macOS arm64 + x64)
-    if: github.event_name == 'push'
+    if: github.event_name == 'push' && env.BUILD_DESKTOP_INSTALLERS == 'true'
     runs-on: macos-14
     # Apple signing/notarization creds (repo secrets). All optional: when unset,
     # the signing + notarization steps below are skipped and the build is
@@ -763,7 +769,7 @@ jobs:
 
   attach-desktop-installers:
     name: Attach desktop installers
-    if: always() && github.event_name == 'push' && needs.publish.result == 'success'
+    if: always() && github.event_name == 'push' && env.BUILD_DESKTOP_INSTALLERS == 'true' && needs.publish.result == 'success'
     needs: [publish, build-desktop, build-desktop-macos]
     runs-on: ubuntu-24.04
     steps:

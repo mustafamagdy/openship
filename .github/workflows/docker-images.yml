@@ -5,16 +5,11 @@ name: Docker images
 # binary / npm CLI / desktop installers / GitHub release) so image publishing
 # can be iterated + tested on its own.
 #
-# Triggers:
-#   • tag push v*.*.*      → real release: semver tags + :latest (RCs skip :latest)
-#   • workflow_dispatch     → manual test: publish images ONLY under the given tag
-#                             (or the short SHA), and NEVER move :latest. Lets you
-#                             prerelease-test Docker without cutting a release or
-#                             touching the current :latest.
+# TEMPORARY: tag-triggered image publishing is disabled while releases focus on
+# verifying every self-hosted catalog template. The manual workflow remains
+# available for an intentional image build. Restore the `push.tags` trigger
+# below after that validation is complete.
 on:
-  push:
-    tags:
-      - 'v*.*.*'
   workflow_dispatch:
     inputs:
       tag:
