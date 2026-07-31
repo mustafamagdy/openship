@@ -396,6 +396,9 @@ export default function AppInstallPage() {
       // port-only endpoints while the empty route list guarantees no domain.
       await servicesApi.update(pid, update.serviceId, {
         exposed: update.exposed,
+        exposedPort: update.exposedPort,
+        domain: update.domain,
+        customDomain: update.customDomain,
         publicEndpoints: update.publicEndpoints,
       });
     }
