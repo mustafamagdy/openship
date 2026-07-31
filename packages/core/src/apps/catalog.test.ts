@@ -25,6 +25,7 @@ describe("app catalog (JSON)", () => {
     const rolesFile = supabase?.files?.find((file) => file.path.endsWith("99-roles.sql"));
 
     expect(rolesFile?.path).toBe("/docker-entrypoint-initdb.d/init-scripts/99-roles.sql");
+    expect(rolesFile?.content).toContain("IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = role_name)");
     expect(rolesFile?.content).toContain("ALTER FUNCTION auth.uid() OWNER TO supabase_auth_admin;");
   });
 
