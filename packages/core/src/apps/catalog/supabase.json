@@ -375,7 +375,7 @@
     },
     {
       "service": "db",
-      "path": "/docker-entrypoint-initdb.d/init-scripts/99-roles.sql",
+      "path": "/docker-entrypoint-initdb.d/99-roles.sql",
       "content": "ALTER USER authenticator WITH PASSWORD '{{config:POSTGRES_PASSWORD}}';\nALTER USER pgbouncer WITH PASSWORD '{{config:POSTGRES_PASSWORD}}';\nALTER USER supabase_auth_admin WITH PASSWORD '{{config:POSTGRES_PASSWORD}}';\nALTER USER supabase_functions_admin WITH PASSWORD '{{config:POSTGRES_PASSWORD}}';\nALTER USER supabase_storage_admin WITH PASSWORD '{{config:POSTGRES_PASSWORD}}';\nALTER USER supabase_admin WITH PASSWORD '{{config:POSTGRES_PASSWORD}}';\n\n-- The PostgreSQL image seeds these helpers as postgres. GoTrue owns and\n-- migrates the auth schema, so it must also own the helpers it replaces.\nALTER FUNCTION auth.uid() OWNER TO supabase_auth_admin;\nALTER FUNCTION auth.role() OWNER TO supabase_auth_admin;\nALTER FUNCTION auth.email() OWNER TO supabase_auth_admin;\n"
     }
   ],
