@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { CommandExecutor } from "@repo/adapters";
+import { APP_TEMPLATES } from "@repo/core";
 import {
   buildKubernetesObjects,
   buildKubernetesStackObjects,
@@ -18,6 +19,38 @@ const base = {
 };
 
 describe("Kubernetes provider", () => {
+  it("renders every enabled catalog stack into Kubernetes resources", () => {
+    for (const template of APP_TEMPLATES.filter(
+      (app) => app.available && app.kind === "template" && (app.services?.length ?? 0) > 0,
+    )) {
+      const built = buildKubernetesStackObjects({
+        projectId: `catalog-${template.id}`,
+        projectSlug: template.id,
+        deploymentId: `dep-${template.id}`,
+        resources: base.resources,
+        services: (template.services ?? []).map((service) => ({
+          name: service.name,
+          image: service.image ?? "",
+          ports: service.ports ? [...service.ports] : undefined,
+          exposedPort: service.exposedPort != null ? String(service.exposedPort) : undefined,
+          exposed: service.exposed,
+          environment: service.environment ? { ...service.environment } : undefined,
+          dependsOn: service.dependsOn ? [...service.dependsOn] : undefined,
+          volumes: service.volumes ? [...service.volumes] : undefined,
+          command: service.command,
+          files: template.files
+            ?.filter((file) => file.service === service.name)
+            .map((file) => ({ path: file.path, content: file.content })),
+        })),
+      });
+      expect(built.deployments, `${template.id} deployments`).toHaveLength(template.services?.length ?? 0);
+      expect(
+        built.objects.filter((object: any) => object.kind === "Deployment"),
+        `${template.id} Deployment resources`,
+      ).toHaveLength(template.services?.length ?? 0);
+    }
+  });
+
   it("builds namespaced, secure rolling-update resources", () => {
     const built = buildKubernetesObjects(base);
     expect(built.namespace).toMatch(/^openship-my-api-project-123-[a-f0-9]{8}$/);
