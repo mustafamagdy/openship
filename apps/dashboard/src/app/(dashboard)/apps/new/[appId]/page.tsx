@@ -346,38 +346,53 @@ export default function AppInstallPage() {
     const svcRes = await servicesApi.list(pid);
     const services = svcRes?.services ?? [];
     const byName = new Map(services.map((s) => [s.name, s]));
+
+    // Routing is stored per service, not per endpoint. Applying every endpoint
+    // independently meant a multi-port template such as MinIO or Convex lost
+    // every earlier route when the final service update arrived. Build each
+    // service's complete route set and persist it exactly once instead.
+    const httpEndpointsByService = new Map<string, AppEndpoint[]>();
+    for (const e of appEndpoints) {
+      if (e.kind === "http") {
+        const group = httpEndpointsByService.get(e.service) ?? [];
+        group.push(e);
+        httpEndpointsByService.set(e.service, group);
+      }
+    }
+    for (const [serviceName, endpoints] of httpEndpointsByService) {
+      const svc = byName.get(serviceName);
+      if (!svc) continue;
+      const publicEndpoints: Array<{
+        port: number;
+        domainType: "free" | "custom";
+        domain?: string;
+        customDomain?: string;
+      }> = [];
+      for (const e of endpoints) {
+        const st = expo[endpointKey(e)];
+        if (st?.kind !== "http" || st.mode !== "domain") continue;
+        const existing = svc.publicEndpoints?.find((endpoint) => Number(endpoint.port) === e.port);
+        if (st.ep.domainType === "custom") {
+          const customDomain = st.ep.customDomain.trim().toLowerCase() || existing?.customDomain;
+          if (customDomain) publicEndpoints.push({ port: e.port, domainType: "custom", customDomain });
+          continue;
+        }
+        const domain = st.ep.domain.trim().toLowerCase() || existing?.domain;
+        if (domain) publicEndpoints.push({ port: e.port, domainType: "free", domain });
+      }
+      // On Kubernetes `exposed` controls NodePort allocation. Keep it true for
+      // port-only endpoints while the empty route list guarantees no domain.
+      await servicesApi.update(pid, svc.id, {
+        exposed: publicEndpoints.length > 0 || destination?.deploymentEngine === "kubernetes",
+        publicEndpoints,
+      });
+    }
+
     for (const e of appEndpoints) {
       const svc = byName.get(e.service);
       const st = expo[endpointKey(e)];
-      if (!svc || !st) continue;
-      if (st.kind === "http") {
-        if (st.mode === "port") {
-          // On Kubernetes `exposed` controls the Service type. Keep it true to
-          // allocate a NodePort, while an explicit empty endpoint list ensures
-          // this remains port-only (no free/custom domain route). Docker does
-          // not need an exposed flag for its host port mapping.
-          await servicesApi.update(pid, svc.id, {
-            exposed: destination?.deploymentEngine === "kubernetes",
-            publicEndpoints: [],
-          });
-        } else if (st.ep.domainType === "custom") {
-          const custom = st.ep.customDomain.trim().toLowerCase();
-          if (custom)
-            await servicesApi.update(pid, svc.id, {
-              exposed: true,
-              domainType: "custom",
-              customDomain: custom,
-            });
-        } else {
-          const slug = st.ep.domain.trim().toLowerCase();
-          // Blank slug = keep the template's baked free subdomain.
-          await servicesApi.update(pid, svc.id, {
-            exposed: true,
-            domainType: "free",
-            ...(slug ? { domain: slug } : {}),
-          });
-        }
-      } else if (st.mode === "internal") {
+      if (!svc || !st || st.kind !== "tcp") continue;
+      if (st.mode === "internal") {
         // Docker needs the host mapping removed to make a TCP endpoint private.
         // Kubernetes is different: the same `ports` entry is the only declared
         // container/Service port, and the provider never publishes it on the
