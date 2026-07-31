@@ -20,7 +20,7 @@ const base = {
 describe("Kubernetes provider", () => {
   it("builds namespaced, secure rolling-update resources", () => {
     const built = buildKubernetesObjects(base);
-    expect(built.namespace).toBe("openship-my-api");
+    expect(built.namespace).toMatch(/^openship-my-api-project-123-[a-f0-9]{8}$/);
     expect(built.objects.map((item) => item.kind)).toEqual([
       "Namespace",
       "Secret",
@@ -55,7 +55,7 @@ describe("Kubernetes provider", () => {
 
     const result = await deployToKubernetes(executor, base);
     expect(result.nodePort).toBe(31042);
-    expect(result.workloadId).toBe("kubernetes:openship-my-api/my-api");
+    expect(result.workloadId).toMatch(/^kubernetes:openship-my-api-project-123-[a-f0-9]{8}\/my-api$/);
     expect(commands.some((command) => command.startsWith("sudo -n kubectl apply"))).toBe(true);
     expect(commands.some((command) => command.includes("rollout status"))).toBe(true);
   });
@@ -179,6 +179,34 @@ describe("Kubernetes provider", () => {
     expect(imgproxy.spec.template.spec.containers[0].volumeMounts[0].readOnly).toBe(true);
   });
 
+  it("isolates stack storage by stable project identity while retaining it on redeploy", () => {
+    const common = {
+      projectSlug: "supabase",
+      deploymentId: "dep-stateful",
+      resources: base.resources,
+      services: [
+        {
+          name: "db",
+          image: "postgres:17",
+          ports: ["5432"],
+          volumes: ["supabase_db_data:/var/lib/postgresql/data"],
+        },
+      ],
+    };
+    const firstProject = buildKubernetesStackObjects({ ...common, projectId: "proj-alpha" });
+    const sameProjectRedeploy = buildKubernetesStackObjects({
+      ...common,
+      projectId: "proj-alpha",
+      deploymentId: "dep-redeploy",
+    });
+    const secondProject = buildKubernetesStackObjects({ ...common, projectId: "proj-beta" });
+
+    expect(firstProject.namespace).toMatch(/^openship-supabase-proj-alpha-[a-f0-9]{8}$/);
+    expect(sameProjectRedeploy.namespace).toBe(firstProject.namespace);
+    expect(secondProject.namespace).toMatch(/^openship-supabase-proj-beta-[a-f0-9]{8}$/);
+    expect(secondProject.namespace).not.toBe(firstProject.namespace);
+  });
+
   it("orders stack workloads after their known dependencies", () => {
     const built = buildKubernetesStackObjects({
       projectId: "project-123",
@@ -259,7 +287,7 @@ describe("Kubernetes provider", () => {
       ],
     });
 
-    expect(result.workloadId).toBe("kubernetes-stack:openship-boutique");
+    expect(result.workloadId).toMatch(/^kubernetes-stack:openship-boutique-project-123-[a-f0-9]{8}$/);
     expect(result.services[0]?.nodePort).toBe(31234);
     expect(commands.filter((command) => command.includes("rollout status"))).toHaveLength(2);
     expect(commands.some((command) => command.includes("--timeout=900s"))).toBe(true);
