@@ -29,6 +29,7 @@ export type {
   RouteProxyLocation,
   RouteRedirect,
   RouteHeaderRule,
+  RouteHostRedirect,
   SslResult,
   ManualCert,
   SshConfig,
@@ -76,6 +77,10 @@ export type {
 export { assertCapability, isMultiServiceRuntime } from "./runtime/types";
 export { DockerRuntime, type DockerConnectionOptions } from "./runtime/docker";
 export {
+  resolveLocalDockerSocketPath,
+  DEFAULT_DOCKER_SOCKET_PATH,
+} from "./runtime/docker-transport";
+export {
   transferImage,
   type ImageTransferOptions,
   type ImageTransferResult,
@@ -107,6 +112,16 @@ export {
   type RouteRegistrationOptions,
   registerResolvedRoutes,
 } from "./runtime/route-registration";
+// Post-deploy stabilization watch — "the container was created" is not "the
+// container stayed up", and every point-in-time status read says it did.
+export {
+  type ContainerStabilitySample,
+  type StabilityOptions,
+  type StabilityStatus,
+  type StabilityVerdict,
+  classifyStability,
+  watchContainerStability,
+} from "./runtime/stability";
 export {
   type PortOccupant,
   probeListeningPort,
@@ -138,6 +153,7 @@ export {
 export { CloudInfraProvider } from "./infra/cloud";
 export { NoopInfraProvider } from "./infra/noop";
 export {
+  ACME_HTTP01_PORT,
   OPENRESTY_MGMT_PORT,
   EDGE_CONTAINER_MOUNTS,
   EDGE_HOST_PATHS,
@@ -175,6 +191,7 @@ export {
   EdgeMigrateRequested,
   freeEdgeTargets,
   invalidateEdgeContainer,
+  ourEdgeContainerRunning,
   probeEdge,
   resolveOurEdgeContainer,
   stopTargetsForStatus,

@@ -29,6 +29,12 @@ import { sanitizeEdgeVhosts } from "@repo/adapters/proxy";
 import { DEFAULT_IMAGE_REGISTRY } from "@repo/core";
 
 import { OS_DIR } from "./paths";
+import {
+  DEFAULT_API_PORT,
+  DEFAULT_DASHBOARD_PORT,
+  resolvePorts,
+  type ResolvedPorts,
+} from "./ports";
 import { readSourceInstall } from "./source-install";
 
 /** Host side of the edge's routing mounts — one source of truth with the api. */
@@ -304,6 +310,12 @@ services:
     image: postgres:16-alpine
     restart: unless-stopped
     environment:
+      # Keep the data dir in a subdirectory of the volume so a fresh install never
+      # runs initdb against a bare mount root (which fails on quirky host
+      # filesystems with EPERM — #350). OPENSHIP_PGDATA is decided ONCE at install
+      # by the CLI (fresh → subdir, pre-existing volume → root) and preserved in
+      # .env, so this never moves an existing database.
+      PGDATA: \${OPENSHIP_PGDATA:-/var/lib/postgresql/data/pgdata}
       POSTGRES_USER: \${POSTGRES_USER:-openship}
       POSTGRES_PASSWORD: \${POSTGRES_PASSWORD:?missing from .env — re-run openship up to regenerate it}
       POSTGRES_DB: \${POSTGRES_DB:-openship}
@@ -547,6 +559,25 @@ function provisionHostSshChannel(): { user: string; keyPath: string } | null {
 function composeProjectName(prev: Record<string, string>): string {
   if (prev.COMPOSE_PROJECT_NAME) return prev.COMPOSE_PROJECT_NAME;
   return Object.keys(prev).length > 0 ? "compose" : "openship";
+}
+
+/**
+ * Where Postgres keeps its data directory INSIDE the `postgres_data` volume.
+ *
+ * A fresh install uses a subdirectory (`…/data/pgdata`) rather than the bare
+ * mount root: initdb against a mount root fails on quirky host filesystems with
+ * "Operation not permitted" (WAL preallocation / lost+found — see #350). But a
+ * pre-existing install already has its DB at the mount ROOT, and moving PGDATA
+ * would make Postgres init a fresh empty DB and orphan the old one. So the
+ * decision is made ONCE and then pinned in `.env` (same sticky rule as
+ * COMPOSE_PROJECT_NAME): re-runs reuse it; a volume that predates this pin keeps
+ * the root. The check uses the resolved project name so it inspects the right
+ * `<project>_postgres_data` volume.
+ */
+const PGDATA_ROOT = "/var/lib/postgresql/data";
+function resolvePgData(prev: Record<string, string>): string {
+  if (prev.OPENSHIP_PGDATA) return prev.OPENSHIP_PGDATA; // decided already — never move it
+  return dbVolumeExists(composeProjectName(prev)) ? PGDATA_ROOT : `${PGDATA_ROOT}/pgdata`;
 }
 
 /**
@@ -808,6 +839,8 @@ export function resolveEnvConfig(
 ): {
   apiPort: string;
   dashPort: string;
+  /** Interface the api + dashboard ports are published on; undefined = all. */
+  bindAddr?: string;
   publicUrl?: string;
   trustProxy: boolean;
   extraTrustedOrigins?: string;
@@ -815,9 +848,14 @@ export function resolveEnvConfig(
   hostControl: boolean;
 } {
   const publicUrl = keepConfig(prev, "OPENSHIP_PUBLIC_URL", opts.publicUrl);
+  // Carried, not defaulted: an operator who pinned the stack to one interface has
+  // made a security decision, and regenerating `.env` without it silently
+  // republishes the api + dashboard on every interface of the box.
+  const bindAddr = keepConfig(prev, "OPENSHIP_BIND_ADDR");
   return {
-    apiPort: keepConfig(prev, "API_PORT", opts.apiPort) ?? "4000",
-    dashPort: keepConfig(prev, "DASHBOARD_PORT", opts.dashboardPort) ?? "3001",
+    apiPort: keepConfig(prev, "API_PORT", opts.apiPort) ?? String(DEFAULT_API_PORT),
+    dashPort: keepConfig(prev, "DASHBOARD_PORT", opts.dashboardPort) ?? String(DEFAULT_DASHBOARD_PORT),
+    ...(bindAddr ? { bindAddr } : {}),
     ...(publicUrl ? { publicUrl } : {}),
     // A public URL always implies a proxy in front; otherwise keep whatever the
     // install was configured with.
@@ -839,6 +877,84 @@ export function resolveEnvConfig(
   };
 }
 
+/** A usable TCP port, or undefined for anything that isn't one. */
+function toPort(value?: string): number | undefined {
+  const n = Number(value);
+  return Number.isInteger(n) && n > 0 && n <= 65535 ? n : undefined;
+}
+
+/** The ports the live install is configured with (its `.env`), if any. */
+export function composeEnvPorts(): { api?: number; dashboard?: number } {
+  const env = readEnvFile();
+  return { api: toPort(env.API_PORT), dashboard: toPort(env.DASHBOARD_PORT) };
+}
+
+/** The interface the stack publishes the api + dashboard on (compose default). */
+export function composeBindAddr(): string {
+  return readEnvFile().OPENSHIP_BIND_ADDR?.trim() || "0.0.0.0";
+}
+
+/**
+ * The trusted-origin URLs this install is configured with, so a caller can check
+ * them against a port that just moved (see `stalePortOrigins`).
+ */
+export function composeTrustedOriginUrls(): string[] {
+  const env = readEnvFile();
+  return [env.OPENSHIP_PUBLIC_URL, env.OPENSHIP_EXTRA_TRUSTED_ORIGINS].filter(
+    (v): v is string => !!v?.trim(),
+  );
+}
+
+/**
+ * Host ports currently published by containers belonging to THIS stack — the ones
+ * a port probe would call occupied even though this command is what frees them.
+ *
+ * Matched on the compose config-file label rather than the project name, so it
+ * covers both our own project and an ORPHANED one (a stack from a renamed
+ * project, which `removeOrphanedStack` force-removes before `up` binds). Running
+ * containers only: a stopped one holds nothing.
+ */
+export function composeHeldPorts(): number[] {
+  const r = spawnSync(
+    "docker",
+    ["ps", "--format", '{{.Label "com.docker.compose.project.config_files"}}\t{{.Ports}}'],
+    { encoding: "utf8" },
+  );
+  if (r.status !== 0 || !r.stdout) return [];
+  const ports = new Set<number>();
+  for (const line of r.stdout.split("\n")) {
+    const [configFiles = "", published = ""] = line.split("\t");
+    if (!configFiles.split(",").some((f) => f.trim() === COMPOSE_FILE)) continue;
+    // "0.0.0.0:4000->4000/tcp, [::]:4000->4000/tcp" — the host side is what binds.
+    for (const m of published.matchAll(/:(\d+)->/g)) ports.add(Number(m[1]));
+  }
+  return [...ports];
+}
+
+/**
+ * Resolve the stack's host ports before `.env` is written — the compose
+ * counterpart of what the bare installer does with `resolvePorts`.
+ *
+ * `docker compose up` publishes API_PORT/DASHBOARD_PORT on the host, so an
+ * occupied 4000/3001 is not a degraded install, it is a hard `bind: address
+ * already in use` that takes the whole stack down with it. Probing on the
+ * publish interface (0.0.0.0) and treating our own containers' ports as
+ * reclaimable makes a busy box behave like the desktop app: pick another port and
+ * carry on, while a plain re-run keeps the ports the install already uses.
+ */
+export async function resolveComposePorts(prefs: {
+  api?: string;
+  dashboard?: string;
+}): Promise<ResolvedPorts> {
+  return resolvePorts({
+    api: toPort(prefs.api),
+    dashboard: toPort(prefs.dashboard),
+    previous: composeEnvPorts(),
+    bindAddr: composeBindAddr(),
+    reclaimable: composeHeldPorts(),
+  });
+}
+
 function renderEnv(
   opts: ComposeUpOpts,
   host: { user: string; keyPath: string } | null,
@@ -858,11 +974,19 @@ function renderEnv(
     `OPENSHIP_IMAGE_REGISTRY=${cfg.registry}`,
     `OPENSHIP_VERSION=${opts.version || (typeof __CLI_VERSION__ === "string" ? __CLI_VERSION__ : "latest")}`,
     `POSTGRES_PASSWORD=${keepSecret(prev, "POSTGRES_PASSWORD")}`,
+    // Pinned once (see resolvePgData): fresh install → subdir, existing volume → root.
+    `OPENSHIP_PGDATA=${resolvePgData(prev)}`,
     `BETTER_AUTH_SECRET=${keepSecret(prev, "BETTER_AUTH_SECRET")}`,
     `INTERNAL_TOKEN=${keepSecret(prev, "INTERNAL_TOKEN")}`,
     `API_PORT=${cfg.apiPort}`,
     `DASHBOARD_PORT=${cfg.dashPort}`,
+    // The api's OWN view of the dashboard port: the self-app boot reconcile points
+    // the operator's domain at the dashboard through this (self-deploy.ts), and it
+    // silently defaults to 3001 when unset. Ports are dynamic now, so leaving it
+    // out publishes a domain routed to a port nothing is listening on.
+    `OPENSHIP_DASHBOARD_PORT=${cfg.dashPort}`,
   ];
+  if (cfg.bindAddr) lines.push(`OPENSHIP_BIND_ADDR=${cfg.bindAddr}`);
   // The origin allowlist. Losing either of these is the ORIGIN_REJECTED failure
   // described on keepConfig — they are written whenever they are known, never
   // conditionally on this run having been given a flag.

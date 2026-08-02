@@ -13,9 +13,13 @@ import {
   EyeOff,
   Link2,
   Hash,
+  CornerUpRight,
 } from "lucide-react";
 import { domainsApi } from "@/lib/api";
 import { usePlatform } from "@/context/PlatformContext";
+import { useModal } from "@/context/ModalContext";
+import { CustomSelect } from "@/components/ui/CustomSelect";
+import DnsConfiguration from "@/app/(dashboard)/(deployment)/deploy/[slug]/components/DnsConfiguration";
 import { useI18n, interpolate } from "@/components/i18n-provider";
 import { normalizeSubdomain, normalizeSubdomainInput } from "@/utils/subdomain";
 import { useRegisteredDomains } from "@/hooks/useRegisteredDomains";
@@ -60,6 +64,26 @@ export interface RoutingSettingsCardProps {
   /** Hide the Free/Custom segmented — the caller drives `domainType` from its
    *  own outer control (avoids a redundant nested toggle). */
   hideTypeToggle?: boolean;
+  /** Auto-clean a typed `www.` prefix off the custom hostname on commit — set for
+   *  the PRIMARY/apex input only (never the `www.<apex>` variant endpoint, which
+   *  would collapse into the apex). The `www.` variant is added via the card's own
+   *  "Include www" switch, so a user typing `www.example.com` as their primary
+   *  gets `example.com` + the toggle, not a conflicting duplicate route. */
+  stripWww?: boolean;
+  /**
+   * Canonical redirect: serve a 30x to another of the project's hostnames instead
+   * of the app. Omit the whole prop to hide the control — the parent decides
+   * whether it applies (there's nothing to redirect to with one hostname, and
+   * Openship Cloud owns routing for cloud projects, so it's refused there).
+   *
+   * `targets` are the project's OTHER hostnames; picking "" means serve normally.
+   */
+  redirect?: {
+    to: string;
+    status: number;
+    targets: string[];
+    onChange: (next: { to: string; status: number }) => void | Promise<void>;
+  };
 }
 
 export function RoutingSettingsCard({
@@ -84,15 +108,18 @@ export function RoutingSettingsCard({
   actionSlot,
   portInline = false,
   hideTypeToggle = false,
+  stripWww = false,
+  redirect,
 }: RoutingSettingsCardProps) {
   const { baseDomain } = usePlatform();
   const { t } = useI18n();
   const w = t.widgets.routing.settingsCard;
   const portListId = useId();
-  const [showDnsModal, setShowDnsModal] = useState(false);
+  const { showModal } = useModal();
   const [dnsRecords, setDnsRecords] = useState<DnsRecord[]>([]);
   const [dnsMode, setDnsMode] = useState<"cloud" | "selfhosted" | "external">("cloud");
   const [loadingRecords, setLoadingRecords] = useState(false);
+  const [showDnsModal, setShowDnsModal] = useState(false);
   const [copied, setCopied] = useState<string | null>(null);
   const [draftDomain, setDraftDomain] = useState(domain);
   const [draftCustomDomain, setDraftCustomDomain] = useState(customDomain);
@@ -158,12 +185,6 @@ export function RoutingSettingsCard({
   const previewHostname = domainType === "custom" ? draftCustomDomain : "";
   const freePreview = `${draftDomain || projectName || "my-project"}.${baseDomain}`;
 
-  const copy = (text: string, id: string) => {
-    navigator.clipboard.writeText(text);
-    setCopied(id);
-    setTimeout(() => setCopied(null), 2000);
-  };
-
   const fetchRecords = useCallback(async (hostname: string) => {
     if (!hostname || hostname.length < 3 || !hostname.includes(".")) return;
     setLoadingRecords(true);
@@ -193,13 +214,70 @@ export function RoutingSettingsCard({
 
   const hasRecords = dnsRecords.length > 0 && dnsRecords.every((record) => record.value);
 
+  const copy = useCallback(async (value: string, key: string) => {
+    await navigator.clipboard.writeText(value);
+    setCopied(key);
+    window.setTimeout(() => setCopied((current) => (current === key ? null : current)), 1500);
+  }, []);
+
+  // "View DNS" → the shared glassy modal, reusing the DnsConfiguration record
+  // card so this and the pre-deploy DNS modal are one implementation / one look.
+  const openDnsRecords = () => {
+    showModal({
+      maxWidth: "560px",
+      showCloseButton: true,
+      customContent: (
+        <div className="p-5">
+          <div className="mb-4 flex items-center gap-3">
+            <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-primary/10">
+              <Server className="size-4 text-primary" />
+            </div>
+            <div>
+              <h3 className="text-sm font-semibold text-foreground">{w.dnsConfiguration}</h3>
+              <p className="text-xs text-muted-foreground">
+                {interpolate(w.addRecordsFor, { hostname: previewHostname })}
+              </p>
+            </div>
+          </div>
+          <DnsConfiguration
+            domain={previewHostname}
+            records={dnsRecords}
+            mode={dnsMode === "cloud" ? "cloud" : "selfhosted"}
+            showHeader={false}
+          />
+        </div>
+      ),
+    });
+  };
+
   const commitFreeDomain = () => {
     const next = normalizeSubdomain(draftDomain);
     void onDomainChange(next);
   };
 
+  // Clean a typed `www.` off the PRIMARY hostname (apex input only) — see stripWww.
+  const cleanCustomHost = (value: string) => {
+    const lowered = value.toLowerCase();
+    return stripWww ? lowered.replace(/^www\./, "") : lowered;
+  };
+
   const commitCustomDomain = () => {
-    void onCustomDomainChange(draftCustomDomain.toLowerCase());
+    const cleaned = cleanCustomHost(draftCustomDomain);
+    if (cleaned !== draftCustomDomain) setDraftCustomDomain(cleaned);
+    void onCustomDomainChange(cleaned);
+  };
+
+  // Strip on blur (not per-keystroke, which would fight the user typing "www.").
+  // Explicit mode commits the draft; change mode re-commits the already-live value.
+  const handleCustomDomainBlur = () => {
+    if (saveMode === "explicit") {
+      if (draftCustomDomain !== customDomain || cleanCustomHost(draftCustomDomain) !== draftCustomDomain) {
+        commitCustomDomain();
+      }
+    } else if (stripWww) {
+      const cleaned = cleanCustomHost(customDomain);
+      if (cleaned !== customDomain) void onCustomDomainChange(cleaned);
+    }
   };
 
   const updateCustomDomain = (next: string) => {
@@ -255,6 +333,45 @@ export function RoutingSettingsCard({
       )}
     </div>
   ) : null;
+
+  // Canonical-redirect row. A redirecting hostname serves nothing of its own — it
+  // answers a 30x to another hostname of the SAME project — so the target list is
+  // closed (never a free-text host, which would be an open redirect) and the
+  // status picker only appears once a target is chosen.
+  const redirectRow =
+    redirect && redirect.targets.length > 0 ? (
+      <div className="flex flex-wrap items-center gap-2">
+        <div className="flex items-center gap-2">
+          <CornerUpRight className="size-3.5 text-muted-foreground" />
+          <span className="text-[13px] font-medium text-muted-foreground">{w.redirectTo}</span>
+        </div>
+        <div className="min-w-[190px] flex-1">
+          <CustomSelect
+            value={redirect.to}
+            onChange={(next) => void redirect.onChange({ to: next, status: redirect.status || 301 })}
+            options={[
+              { value: "", label: w.redirectServeApp },
+              ...redirect.targets.map((target) => ({
+                value: target,
+                label: interpolate(w.redirectToHost, { hostname: target }),
+              })),
+            ]}
+          />
+        </div>
+        {redirect.to ? (
+          <div className="w-[132px]">
+            <CustomSelect
+              value={String(redirect.status || 301)}
+              onChange={(next) => void redirect.onChange({ to: redirect.to, status: Number(next) })}
+              options={[
+                { value: "301", label: w.redirectPermanent },
+                { value: "302", label: w.redirectTemporary },
+              ]}
+            />
+          </div>
+        ) : null}
+      </div>
+    ) : null;
 
   return (
     <div className="space-y-3">
@@ -474,6 +591,8 @@ export function RoutingSettingsCard({
             </div>
           )}
 
+          {redirectRow}
+
           {!portInline && showsPortTarget && (
             <div className="flex items-center gap-3">
               <div className="flex items-center gap-2">
@@ -581,7 +700,6 @@ export function RoutingSettingsCard({
           )}
         </div>
       )}
-
       {showDnsModal && hasRecords && (
         <div
           className="fixed inset-0 bg-background/80 backdrop-blur-sm flex items-center justify-center z-50 p-4"

@@ -568,6 +568,69 @@
       "when": 1785360198651,
       "tag": "0077_ensure_upstream_git_settings",
       "breakpoints": true
+    },
+    {
+      "idx": 81,
+      "version": "7",
+      "when": 1785358401651,
+      "tag": "0073_project_volumes_object_storage",
+      "breakpoints": true
+    },
+    {
+      "idx": 82,
+      "version": "7",
+      "when": 1785450107324,
+      "tag": "0074_project_compose_path",
+      "breakpoints": true
+    },
+    {
+      "idx": 83,
+      "version": "7",
+      "when": 1785536507324,
+      "tag": "0075_service_command_argv",
+      "breakpoints": true
+    },
+    {
+      "idx": 84,
+      "version": "7",
+      "when": 1785622907324,
+      "tag": "0076_rollback_retention",
+      "breakpoints": true
+    },
+    {
+      "idx": 85,
+      "version": "7",
+      "when": 1785709307324,
+      "tag": "0077_domain_redirect",
+      "breakpoints": true
+    },
+    {
+      "idx": 86,
+      "version": "7",
+      "when": 1785795707324,
+      "tag": "0078_grant_source_scope",
+      "breakpoints": true
+    },
+    {
+      "idx": 87,
+      "version": "7",
+      "when": 1785882107324,
+      "tag": "0079_project_readiness",
+      "breakpoints": true
+    },
+    {
+      "idx": 88,
+      "version": "7",
+      "when": 1785968507324,
+      "tag": "0080_deployment_error_classification",
+      "breakpoints": true
+    },
+    {
+      "idx": 89,
+      "version": "7",
+      "when": 1786054907324,
+      "tag": "0081_project_readiness_repair",
+      "breakpoints": true
     }
   ]
 }

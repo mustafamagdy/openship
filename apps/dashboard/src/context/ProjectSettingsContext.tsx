@@ -27,6 +27,10 @@ interface ProjectOptions {
   buildCommand?: string;
   outputDirectory?: string;
   productionPaths?: string;
+  /** Declared persistent mounts; null = inheriting the framework's defaults. */
+  volumes?: string[] | null;
+  /** What a deploy would actually mount (declaration OR framework default). */
+  resolvedVolumes?: string[];
   installCommand?: string;
   startCommand?: string;
   productionPort?: string;
@@ -108,11 +112,15 @@ interface BuildData {
   buildCommand: string;
   outputDirectory: string;
   productionPaths: string;
+  volumes: string[] | null;
+  resolvedVolumes: string[];
   installCommand: string;
   startCommand: string;
   productionPort: string;
   buildImage: string;
   rootDirectory: string;
+  /** Explicit compose file location; "" when the root is detected normally. */
+  composePath: string;
   hasBuild: boolean;
   hasServer: boolean;
   isLoading: boolean;
@@ -126,6 +134,8 @@ const BUILD_OPTION_DEFAULTS = {
   buildCommand: "",
   outputDirectory: ".",
   productionPaths: "",
+  volumes: null as string[] | null,
+  resolvedVolumes: [] as string[],
   installCommand: "bun install",
   startCommand: "npm start",
   productionPort: "",
@@ -364,6 +374,9 @@ export const ProjectSettingsProvider: React.FC<ProviderProps> = ({
       ...projectData.options,
       // buildImage lives at top-level on the project, not in options.
       buildImage: projectData.buildImage || "node:22",
+      // Same — a top-level column. Shown read-only; edited through the deploy
+      // wizard, since changing it has to re-scan the repo for services.
+      composePath: projectData.composePath || "",
       isLoading: isLoadingProjectInfo,
       error: projectInfoError,
     }),

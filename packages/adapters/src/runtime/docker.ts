@@ -55,6 +55,31 @@ import { PassThrough, Writable, type Readable } from "node:stream";
  */
 const isDockerNotFoundError = isRuntimeNotFoundError;
 
+/**
+ * Is this image tag one WE built, and therefore ours to delete?
+ *
+ * Only `openship/…` tags are (see `imageTag`), and every build mints a globally
+ * unique one (`openship/<slug>:<session>`), so exactly one deployment row ever
+ * owns a given tag. Anything else is either pulled from a registry
+ * (`postgres:17`) or adopted by a docker-migration import — and those two are
+ * precisely the tags that must NOT be deleted by row:
+ *
+ *   - a migration import reuses ONE mutable, registry-less tag across every
+ *     sibling service, so untagging it for one row strands the others with a
+ *     tag that no longer resolves and cannot be re-pulled;
+ *   - a registry tag is shared with anything else on the box using it, and
+ *     deleting it buys nothing (it re-pulls).
+ *
+ * This mirrors the safety model `image-gc` already documents — it only ever
+ * considers images carrying the `openship.project` label, which `labels()`
+ * stamps on final build images and never on pulled/adopted ones. Structural, so
+ * it needs no daemon round-trip: the caller's keep-set answers "does another
+ * RETAINED release need this tag", and this answers "is it even ours".
+ */
+export function ownsBuiltImage(imageRef: string): boolean {
+  return imageRef.startsWith("openship/");
+}
+
 /** Clamp a terminal window dimension to a sane min/max with default. */
 function clampShellWindow(
   value: number | undefined,
@@ -77,8 +102,6 @@ import type {
   MultiServiceDeployConfig,
   MultiServiceDeployResult,
   DeploymentRef,
-  RollbackInput,
-  MakeActiveResult,
   DockerContainerSummary,
   DockerContainerDetail,
   DockerMount,
@@ -92,10 +115,18 @@ import { githubTarballUrl, downloadTarballOnRemote } from "./source-tarball";
 import { scopeVolumeBinds, isHostPathSource } from "./volume-namespace";
 import { createDockerBuildContext, prepareSourceTree, resolveServiceDockerfile } from "./docker-build-context";
 import { startExecStream, daemonConnectionFrom } from "./docker-exec-stream";
+import { resolveComposeCmd } from "./compose-cmd";
 import { resolveDockerfileCandidates } from "./docker-paths";
+import type { ContainerStabilitySample } from "./stability";
 import { generateDockerfile, staticBuilderOutputPath } from "./docker-build-plan";
 import { transferLocalDirectory } from "./transfer";
 import { safeErrorMessage, type ComposeAdvanced, type ComposeHealthcheck } from "@repo/core";
+import {
+  dockerResourceLimits,
+  dockerBuildResourceLimits,
+  describeResourceLimits,
+  inspectResourceLimits,
+} from "./resource-limits";
 import {
   type DockerConnectionOptions,
   type DockerTransport,
@@ -431,6 +462,7 @@ export class DockerRuntime implements RuntimeAdapter {
     "projectContainerSweep",
     "deploymentContainerQuery",
     "hostContainerQuery",
+    "stabilityProbe",
   ]);
 
   /** Docker honors every extended compose key we currently support. */
@@ -1016,6 +1048,10 @@ export class DockerRuntime implements RuntimeAdapter {
             ...config.envVars,
             NODE_ENV: "production",
           },
+          // Omitted entirely unless the project set a build cap — a self-hosted
+          // build should be free to use the machine (a production build often
+          // needs several GB). Opt-in only; see dockerBuildResourceLimits.
+          ...dockerBuildResourceLimits(config.resources),
           forcerm: true,
         },
       );
@@ -1278,12 +1314,23 @@ export class DockerRuntime implements RuntimeAdapter {
     const docRoot = staticBuilderOutputPath(config);
     const sshExecutor =
       this.transport.kind === "ssh" ? this.connectionOptions?.executor : null;
-    log.log("Moving built files out of the build container...\n");
+    // Name the path: when extraction fails, "which directory was it reading" is the
+    // first question, and it's the one thing the old failure never said.
+    log.log(`Moving built files out of the build container (${docRoot})...\n`);
     try {
       if (sshExecutor) {
         await this.extractDocRootOverSsh(sshExecutor, tag, docRoot, hostOutDir);
       } else {
-        await this.extractDocRootViaDaemon(tag, docRoot, hostOutDir);
+        // A local daemon shares our disk, so let it copy in place. It reports back
+        // false when it can't — VM-backed daemon, or a builder image with no shell —
+        // and that's also the remote-daemon case, where the archive has to come over
+        // the wire.
+        const copiedInPlace =
+          this.transport.kind === "socket" &&
+          (await this.extractDocRootViaBindMount(tag, docRoot, hostOutDir));
+        if (!copiedInPlace) {
+          await this.extractDocRootViaDaemon(tag, docRoot, hostOutDir);
+        }
       }
       log.log(`Static files ready at ${hostOutDir}\n`);
     } finally {
@@ -1306,8 +1353,9 @@ export class DockerRuntime implements RuntimeAdapter {
    * a second web server was never going to run.
    * Returns the host dir as `imageRef`, matching BareRuntime.build's host-dir
    * contract so the existing file-backed serve path (deployStatic /
-   * resolveStaticRoot) consumes it unchanged. Never leaves a long-lived
-   * container: the extraction container is created (not started) and removed.
+   * resolveStaticRoot) consumes it unchanged. Never leaves a long-lived container:
+   * the extraction container runs one `cp` (or isn't started at all, when the tar is
+   * streamed instead) and is removed either way.
    */
   async buildStaticToHost(
     config: BuildConfig,
@@ -1348,18 +1396,32 @@ export class DockerRuntime implements RuntimeAdapter {
   }
 
   /**
-   * THE CONTRACT both extractors satisfy: after either one returns, `hostOutDir`
-   * holds the doc-root's CONTENTS directly — `index.html` at the top, no wrapping
-   * `html/` directory. OpenResty's `root` points straight at it, so a stray extra
-   * level is a silent 404 for the whole site.
+   * THE CONTRACT all three extractors satisfy: once one returns, `hostOutDir` holds
+   * the doc-root's CONTENTS directly — `index.html` at the top, no wrapping
+   * directory. OpenResty's `root` points straight at it, so one stray level is a
+   * silent 404 for the whole site.
    *
-   * The two paths reach that same shape differently, which is why the rule is
-   * stated here once instead of in each branch:
-   *   - `docker cp <cid>:<root>/.` — the trailing `/.` means "contents of", so
-   *     there is nothing to strip.
-   *   - `getArchive({path: <root>})` — the tar IS rooted at `html/`, so exactly
-   *     one leading component must be stripped.
+   * They reach that shape differently, which is why the rule is stated here once
+   * instead of in each branch:
+   *   - `docker cp <cid>:<root>/.` and `cp -a <root>/. <out>/` — the trailing `/.`
+   *     means "contents of", so there is nothing to strip.
+   *   - `getArchive({path: <root>})` — the tar is rooted at the doc-root's own
+   *     basename (`dist/`, `build/`, …), so exactly one leading component is
+   *     stripped.
+   *
+   * The other half of the contract is that hostOutDir is non-EMPTY, which is what
+   * this enforces. It has to be checked per-path (three different filesystems) but
+   * the rule and its wording live here, because the failure it prevents is the
+   * expensive one: every extractor can succeed having copied nothing, which deploys
+   * green and then 404s the entire site.
    */
+  private assertDocRootFilled(isEmpty: boolean, docRoot: string): void {
+    if (!isEmpty) return;
+    throw new Error(
+      `static extract produced no files from ${docRoot} in the build container — ` +
+        `check the project's output directory setting.`,
+    );
+  }
 
   /** Remote host: disk-to-disk via the host's own docker CLI — never stream a
    *  large tar over the SSH dockerode bridge (same rationale as saveImage/pullImage). */
@@ -1374,40 +1436,167 @@ export class DockerRuntime implements RuntimeAdapter {
       await sshExecutor.exec(`mkdir -p ${sq(hostOutDir)}`);
       // `/.` → contents, so no strip step (see the contract above).
       await sshExecutor.exec(`docker cp ${sq(`${cid}:${docRoot}/.`)} ${sq(hostOutDir)}`);
+      // `docker cp` of an empty dir exits 0, so the contract is checked here.
+      const listing = (await sshExecutor.exec(`ls -A ${sq(hostOutDir)} | head -1`).catch(() => "")).trim();
+      this.assertDocRootFilled(!listing, docRoot);
     } finally {
       await sshExecutor.exec(`docker rm ${sq(cid)}`).catch(() => { /* best effort */ });
     }
   }
 
-  /** Local socket / remote TCP: pull the tar through dockerode (portable to a TCP
-   *  daemon where a local `docker` CLI wouldn't apply) and extract onto THIS
-   *  process's filesystem — in docker-edge mode that's /opt/openship/static,
-   *  bind-mounted into both the api and the edge at the same path. */
+  /**
+   * LOCAL DAEMON: let the daemon do the copy on its own disk. The builder image is
+   * run once with `hostOutDir` bind-mounted, and it `cp -a`s the doc-root across.
+   * No archive crosses this process at all.
+   *
+   * This exists because streaming the doc-root out via `getArchive` is undebuggable
+   * when it goes wrong. Once the daemon has sent 200 + headers for an archive it has
+   * NO way to report a mid-archive failure — an unreadable file, a socket/fifo, a
+   * path it can't stat — so it just closes the connection. The client sees a
+   * truncated body and the only symptom anywhere is `tar: Unexpected EOF in
+   * archive`, with the actual cause visible solely in the daemon's own log. That is
+   * the failure this method removes: `cp` runs in the container, so a real error
+   * arrives as real stderr and a real exit code.
+   *
+   * Requires that the daemon's filesystem IS this process's filesystem, which is
+   * true for DooD (`/opt/openship/static` is a host bind mount at the same path
+   * inside and out — see docker/docker-compose.yml) and false for a VM-backed
+   * daemon (Docker Desktop, Colima), where `hostOutDir` resolves inside the VM and
+   * the copy would land somewhere this process can't see.
+   *
+   * So it PROVES the assumption instead of trusting the transport: a sentinel file
+   * is written here and the container refuses to copy unless it can see it. A
+   * daemon that can't reach our disk exits 97 and the caller streams instead. That
+   * check is folded into the same container run — no extra round trip — because
+   * getting it wrong means an empty doc-root, i.e. a site that deploys green and
+   * serves 404s.
+   *
+   * Returns false when the bind isn't shared; throws on a real copy failure.
+   */
+  private async extractDocRootViaBindMount(
+    tag: string,
+    docRoot: string,
+    hostOutDir: string,
+  ): Promise<boolean> {
+    const { mkdir, readdir, writeFile, rm } = await import("node:fs/promises");
+    const { join } = await import("node:path");
+    const { randomBytes } = await import("node:crypto");
+    await mkdir(hostOutDir, { recursive: true });
+    const OUT = "/__openship_out";
+    const probe = `.openship-extract-probe-${randomBytes(6).toString("hex")}`;
+    await writeFile(join(hostOutDir, probe), "probe");
+    const container = await this.docker.createContainer({
+      Image: tag,
+      // Override the ENTRYPOINT: builder base images (node, bun) ship a
+      // docker-entrypoint.sh that would swallow this Cmd.
+      Entrypoint: ["/bin/sh", "-c"],
+      Cmd: [
+        `set -e; test -f ${sq(`${OUT}/${probe}`)} || exit 97; ` +
+          `cp -a ${sq(docRoot)}/. ${OUT}/; rm -f ${sq(`${OUT}/${probe}`)}`,
+      ],
+      // Root, explicitly. A builder image that sets `USER node`/`USER bun` would
+      // otherwise run this copy unprivileged and fail writing into a root-owned
+      // output dir — the two paths this replaces both run with daemon privileges,
+      // so anything less would be a NEW failure this change introduced.
+      User: "0:0",
+      HostConfig: {
+        // `:z` matches how compose mounts this dir — required on SELinux hosts for
+        // the container to write, and ignored where SELinux is off.
+        Binds: [`${hostOutDir}:${OUT}:z`],
+      },
+    });
+    try {
+      // A builder image with no shell (distroless/scratch) can't run this at all.
+      // That's not a reason to fail the deploy — fall back to streaming, same as an
+      // unshared filesystem.
+      try {
+        await container.start();
+      } catch {
+        return false;
+      }
+      const status = await container.wait();
+      // The daemon mounted a different filesystem than ours — not an error, just
+      // not a shortcut we can take here.
+      if (status.StatusCode === 97) return false;
+      if (status.StatusCode !== 0) {
+        const logs = await container
+          .logs({ stdout: true, stderr: true, tail: 40 })
+          .then((b) => Buffer.from(b as unknown as Buffer).toString("utf8"))
+          // Strip the 8-byte stream framing so the operator reads text, not control
+          // bytes (these logs are multiplexed — Tty is false).
+          .then((s) => s.replace(/[\x00-\x08\x0b-\x1f\x7f]/g, " ").trim())
+          .catch(() => "");
+        throw new Error(
+          `static extract failed copying ${docRoot} out of the build container ` +
+            `(exit ${status.StatusCode})${logs ? `: ${logs.slice(-500)}` : ""}`,
+        );
+      }
+      const entries = (await readdir(hostOutDir).catch(() => [] as string[]))
+        .filter((e) => e !== probe);
+      this.assertDocRootFilled(entries.length === 0, docRoot);
+      return true;
+    } finally {
+      await container.remove({ force: true }).catch(() => { /* best effort */ });
+      // The container removes the sentinel on success; clear it on every other path
+      // so it can't end up served as part of the site.
+      await rm(join(hostOutDir, probe), { force: true }).catch(() => { /* best effort */ });
+    }
+  }
+
+  /** Remote TCP daemon: no shared filesystem and no local `docker` CLI, so the tar
+   *  has to come through dockerode and be extracted onto THIS process's disk. */
   private async extractDocRootViaDaemon(
     tag: string,
     docRoot: string,
     hostOutDir: string,
   ): Promise<void> {
-    const { mkdir } = await import("node:fs/promises");
+    const { mkdir, readdir } = await import("node:fs/promises");
     const { spawn } = await import("node:child_process");
+    const { pipeline } = await import("node:stream/promises");
     await mkdir(hostOutDir, { recursive: true });
     const container = await this.docker.createContainer({ Image: tag });
     try {
       const tarStream = (await container.getArchive({ path: docRoot })) as unknown as Readable;
-      await new Promise<void>((resolve, reject) => {
-        // The archive is rooted at `html/` → strip that ONE component (contract above).
-        const extract = spawn("tar", ["-x", "--strip-components=1", "-C", hostOutDir]);
-        let errBuf = "";
-        extract.stderr.on("data", (d) => (errBuf += d.toString()));
-        extract.on("error", reject);
-        tarStream.on("error", reject);
-        tarStream.pipe(extract.stdin);
-        extract.on("close", (code) =>
-          code === 0
-            ? resolve()
-            : reject(new Error(`static extract failed (tar ${code}): ${errBuf.trim().slice(-500)}`)),
-        );
+      // The archive is rooted at the doc-root's own basename → strip that ONE
+      // component (contract above).
+      const extract = spawn("tar", ["-x", "--strip-components=1", "-C", hostOutDir]);
+      let errBuf = "";
+      extract.stderr.on("data", (d) => (errBuf += d.toString()));
+      const exited = new Promise<number>((resolve) => {
+        extract.on("close", (code) => resolve(code ?? 0));
+        extract.on("error", () => resolve(-1));
       });
+
+      // `pipeline`, NOT `.pipe()`. pipe propagates neither a mid-transfer source
+      // error nor the child's stdin flush, so a truncated archive surfaced only as
+      // tar's own "Unexpected EOF in archive" — the actual cause discarded, and the
+      // write side possibly still in flight when we resolved. pipeline awaits the
+      // flush, destroys both ends on failure, and rethrows the SOURCE error.
+      let streamError: unknown;
+      await pipeline(tarStream, extract.stdin).catch((err) => {
+        streamError = err;
+      });
+      const code = await exited;
+
+      const tarErr = errBuf.trim();
+      // Which half of the pipe to blame. tar's own stderr wins when it has something
+      // concrete to say (a bad option, a full disk). Otherwise a transport failure is
+      // the real story — reporting tar's EOF there points at the wrong half, which is
+      // exactly how this failure mode stayed undiagnosable.
+      if (streamError && !(code !== 0 && tarErr)) {
+        throw new Error(
+          `static extract failed reading ${docRoot} from the build container: ` +
+            `${safeErrorMessage(streamError)}${tarErr ? ` (tar: ${tarErr.slice(-200)})` : ""}`,
+        );
+      }
+      if (code !== 0) {
+        throw new Error(`static extract failed (tar ${code}): ${tarErr.slice(-500)}`);
+      }
+
+      // An archive truncated on a block boundary makes tar exit 0 having written
+      // NOTHING (contract above).
+      const entries = await readdir(hostOutDir).catch(() => [] as string[]);
+      this.assertDocRootFilled(entries.length === 0, docRoot);
     } finally {
       await container.remove({ force: true }).catch(() => { /* best effort */ });
     }
@@ -1571,6 +1760,7 @@ export class DockerRuntime implements RuntimeAdapter {
                   sessionId: spec.config.sessionId,
                 }),
                 buildargs: { ...spec.config.envVars, NODE_ENV: "production" },
+                ...dockerBuildResourceLimits(spec.config.resources),
                 forcerm: true,
               },
             );
@@ -1677,9 +1867,36 @@ export class DockerRuntime implements RuntimeAdapter {
 
     const restartPolicy = resolveRestartPolicy(config.restartPolicy);
 
+    // Persistent mounts. Each deploy creates a NEW container from a NEW image,
+    // so anything the app wrote to its own filesystem is gone unless it lives on
+    // a volume that outlives the container. Named volumes are project-scoped
+    // through the same helper the multi-service path uses, so two projects can't
+    // land on one daemon-level volume; bind mounts pass through.
+    const scopedBinds = scopeVolumeBinds(
+      config.slug || config.runtimeName || config.projectId,
+      config.volumes ?? [],
+      true,
+    );
+    const binds = scopedBinds.length > 0 ? scopedBinds : undefined;
+
     log({
       timestamp: new Date().toISOString(),
       message: `Creating container ${containerName} from ${imageRef}...\n`,
+      level: "info",
+    });
+    if (binds) {
+      log({
+        timestamp: new Date().toISOString(),
+        message: `Persistent storage: ${binds.join(", ")}\n`,
+        level: "info",
+      });
+    }
+    // State the caps in the build log. A silent 512 MB cap is how #333 hid: the
+    // deploy reported ready while the container OOM-crash-looped, with nothing
+    // anywhere saying a limit had been applied.
+    log({
+      timestamp: new Date().toISOString(),
+      message: `Resource limits: ${describeResourceLimits(config.resources)}\n`,
       level: "info",
     });
 
@@ -1695,8 +1912,10 @@ export class DockerRuntime implements RuntimeAdapter {
       ExposedPorts: { [`${config.port}/tcp`]: {} },
       HostConfig: {
         RestartPolicy: restartPolicy,
-        Memory: config.resources.memoryMb * 1024 * 1024,
-        CpuShares: Math.round(config.resources.cpuCores * 1024),
+        Binds: binds,
+        // Omitted entirely when the project has no cap (self-hosted default) —
+        // see dockerResourceLimits. Never substitute a tier here.
+        ...dockerResourceLimits(config.resources),
         // Publish on the LOOPBACK interface only — the edge (host process, or a
         // host-net OpenResty container) reaches it at 127.0.0.1:<hostPort>, and
         // it never faces the network. Binding 0.0.0.0 here would expose every
@@ -1914,62 +2133,26 @@ export class DockerRuntime implements RuntimeAdapter {
     }));
   }
 
-  // ── Rollback primitives ──────────────────────────────────────────────
+  // ── Rollback primitives (retention half only) ────────────────────────
   //
-  // Docker semantics:
-  //   makeActive — prefer `start` of the retained container (fast,
-  //     preserves PID/state). If the container was GC'd but the image
-  //     is still tagged, `run` from imageRef to provision a fresh
-  //     container. Stop the previous active as part of the swap.
-  //   archive   — `docker stop`. Image stays tagged. Container kept
-  //     for fast restart on later makeActive.
-  //   purge     — `docker rm` (force) + `docker rmi`. Past this point
-  //     rollback to this deployment is impossible.
-
-  async makeActive(input: RollbackInput): Promise<MakeActiveResult> {
-    // 1) Stop the currently-active deployment (if any) so we don't have
-    //    two containers serving the same port. Errors here are non-fatal
-    //    — if the previous container is already gone the swap continues.
-    if (input.from?.containerId) {
-      try {
-        await this.stop(input.from.containerId);
-      } catch {
-        // already stopped / gone — ignore
-      }
-    }
-
-    // 2) Try fast-start the target's existing container.
-    if (input.to.containerId) {
-      try {
-        await this.start(input.to.containerId);
-        return { containerId: input.to.containerId };
-      } catch {
-        // container missing — fall through to run-from-image
-      }
-    }
-
-    // 3) Container is gone but image is still tagged: provision a fresh
-    //    container from the retained image. Same parameters the original
-    //    deploy used — but we don't have the full DeployConfig here, so
-    //    we use minimal defaults. If the orchestrator needs richer
-    //    re-provisioning it can call `deploy()` instead.
-    if (!input.to.imageRef) {
-      throw new Error(
-        `Cannot make deployment ${input.to.id} active: container is gone and no imageRef is stored. Artifact has been purged.`,
-      );
-    }
-    const container = await this.docker.createContainer({
-      Image: input.to.imageRef,
-      name: `dep-${input.to.id}`,
-      HostConfig: { RestartPolicy: { Name: "unless-stopped" } },
-    });
-    await container.start();
-    return { containerId: container.id };
-  }
+  // Docker deliberately does NOT implement `makeActive` — see the
+  // "unitRestore" capability. A redeploy REMOVES the previous container
+  // (loopback-port routing can't overlap two containers on one host
+  // port), so there is no unit left to restart; the durable artifact is
+  // the IMAGE. Restore therefore re-materializes the container through
+  // the normal deploy step from the target's frozen snapshot + retained
+  // image (modules/deployments/rollback/restore-plan.ts), which is the
+  // only way env, published port, volumes, labels, network and routing
+  // all come back correctly.
+  //
+  //   archive — `docker stop` (usually a no-op: the container is gone).
+  //             The image stays tagged, retained by the rollback-window
+  //             keep-set in modules/deployments/image-gc.
+  //   purge   — `docker rm` (force) + `docker rmi`. Past this point an
+  //             instant restore of this deployment is impossible and
+  //             rollback degrades to a rebuild from its commit.
 
   async archive(deployment: DeploymentRef): Promise<void> {
-    // Docker archive = stop the container. Image + stopped container
-    // are preserved on the host until purge.
     if (!deployment.containerId) return; // already archived (no container) or never deployed
     try {
       await this.stop(deployment.containerId);
@@ -1989,7 +2172,7 @@ export class DockerRuntime implements RuntimeAdapter {
         // already removed
       }
     }
-    if (deployment.imageRef) {
+    if (deployment.imageRef && ownsBuiltImage(deployment.imageRef)) {
       try {
         await this.removeImage(deployment.imageRef);
       } catch {
@@ -2102,6 +2285,7 @@ export class DockerRuntime implements RuntimeAdapter {
             startPeriod: hc.StartPeriod,
           }
         : undefined,
+      resources: inspectResourceLimits(data.HostConfig),
       composeProject: labels["com.docker.compose.project"] || undefined,
       composeService: labels["com.docker.compose.service"] || undefined,
       composeConfigFiles: configFiles
@@ -2389,6 +2573,56 @@ export class DockerRuntime implements RuntimeAdapter {
       ip,
       hostPort,
       uptimeSeconds: uptimeSeconds && uptimeSeconds > 0 ? uptimeSeconds : undefined,
+    };
+  }
+
+  /**
+   * One stabilization reading for the post-deploy watch. Unlike
+   * `getContainerInfo` this keeps `restarting` distinct and carries
+   * `RestartCount` / `ExitCode` / health — the only fields that separate a
+   * container that is UP from one that is bouncing. A vanished container is a
+   * `missing` sample (not a throw): that is a verdict, not a transport error.
+   */
+  async sampleStability(containerId: string): Promise<ContainerStabilitySample> {
+    let data: Dockerode.ContainerInspectInfo;
+    try {
+      data = await this.docker.getContainer(containerId).inspect();
+    } catch (err) {
+      if (isDockerNotFoundError(err)) {
+        return {
+          state: "missing",
+          exitCode: null,
+          restartCount: 0,
+          health: null,
+          errorLine: null,
+          oomKilled: false,
+          restartPolicy: null,
+        };
+      }
+      throw err;
+    }
+
+    const rawState = (data.State?.Status ?? "").toLowerCase().trim();
+    const state: ContainerStabilitySample["state"] = (
+      ["created", "running", "restarting", "paused", "exited", "dead", "removing"] as const
+    ).includes(rawState as never)
+      ? (rawState as ContainerStabilitySample["state"])
+      : "unknown";
+
+    const rawHealth = (data.State?.Health?.Status ?? "").toLowerCase().trim();
+    const health: ContainerStabilitySample["health"] =
+      rawHealth === "healthy" || rawHealth === "unhealthy" || rawHealth === "starting"
+        ? rawHealth
+        : null;
+
+    return {
+      state,
+      exitCode: typeof data.State?.ExitCode === "number" ? data.State.ExitCode : null,
+      restartCount: typeof data.RestartCount === "number" ? data.RestartCount : 0,
+      health,
+      errorLine: data.State?.Error?.trim() ? data.State.Error.trim() : null,
+      oomKilled: data.State?.OOMKilled === true,
+      restartPolicy: data.HostConfig?.RestartPolicy?.Name ?? null,
     };
   }
 
@@ -3011,10 +3245,9 @@ export class DockerRuntime implements RuntimeAdapter {
       ...Object.entries(config.environment).map(([k, v]) => `${k}=${v}`),
     ];
 
-    // Command
-    const cmd = config.command
-      ? ["sh", "-c", config.command]
-      : undefined;
+    // Command (#332): argv Cmd, no implicit `sh -c` (that broke entrypoint+CMD
+    // images). See resolveComposeCmd.
+    const cmd = resolveComposeCmd(config);
 
     // Port bindings
     const { exposedPorts, portBindings } = parsePortBindings(config.ports);
@@ -3036,6 +3269,12 @@ export class DockerRuntime implements RuntimeAdapter {
     log({
       timestamp: new Date().toISOString(),
       message: `Creating service container ${containerName} from ${config.image}...\n`,
+      level: "info",
+    });
+    // Per-service caps, stated explicitly — see the single-app path for why.
+    log({
+      timestamp: new Date().toISOString(),
+      message: `Resource limits: ${describeResourceLimits(config.resources)}\n`,
       level: "info",
     });
 
@@ -3081,12 +3320,7 @@ export class DockerRuntime implements RuntimeAdapter {
       ExposedPorts: exposedPorts,
       HostConfig: {
         RestartPolicy: restartPolicy,
-        ...(config.resources?.memoryMb && {
-          Memory: config.resources.memoryMb * 1024 * 1024,
-        }),
-        ...(config.resources?.cpuCores && {
-          CpuShares: Math.round(config.resources.cpuCores * 1024),
-        }),
+        ...dockerResourceLimits(config.resources),
         PortBindings: portBindings,
         Binds: binds,
         NetworkMode: group.id,

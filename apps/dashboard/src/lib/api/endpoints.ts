@@ -22,6 +22,7 @@ export const endpoints = {
     outputCheck: (id: string | number) => `projects/${id}/output-check`,
     toggle: (id: string | number, action: "enable" | "disable") => `projects/${id}/${action}`,
     retryRouting: (id: string | number) => `projects/${id}/routing/retry`,
+    pendingActions: (id: string | number) => `projects/${id}/pending-actions`,
     edgeStatus: (id: string | number) => `projects/${id}/routing/edge-status`,
     clearCache: (id: string | number) => `projects/${id}/clear-cache`,
     clearBuild: (id: string | number) => `projects/${id}/clear-build`,
@@ -30,6 +31,7 @@ export const endpoints = {
     deploymentSession: (id: string | number) => `projects/${id}/deployment-session`,
     connect: (id: string | number) => `projects/${id}/connect`,
     connections: (id: string | number) => `projects/${id}/connections`,
+    storage: (id: string | number) => `projects/${id}/storage`,
     connection: (id: string | number, linkId: string) => `projects/${id}/connections/${linkId}`,
     env: (id: string | number) => `projects/${id}/env`,
     git: (id: string | number) => `projects/${id}/git`,
@@ -47,6 +49,7 @@ export const endpoints = {
     incomingWebhookDeliveries: (id: string | number, hookId: string) =>
       `projects/${id}/incoming-webhooks/${hookId}/deliveries`,
     resources: (id: string | number) => `projects/${id}/resources`,
+    rollbackCapacity: (id: string | number) => `projects/${id}/rollback-capacity`,
     cloneToken: (id: string | number) => `projects/${id}/clone-token`,
     sleepMode: (id: string | number) => `projects/${id}/sleep-mode`,
     deployments: (id: string | number) => `projects/${id}/deployments`,
@@ -58,6 +61,8 @@ export const endpoints = {
     ensure: "projects/ensure",
     folderSession: "projects/folder/session",
     folderScan: (sessionId: string) => `projects/folder/scan/${sessionId}`,
+    // #336: real (unmasked) per-service env for the folder-scan wizard reveal.
+    folderEnvReveal: (sessionId: string) => `projects/folder/scan/${sessionId}/env-reveal`,
     folderUpload: (sessionId: string) => `projects/folder/upload/${sessionId}`,
   },
 
@@ -108,6 +113,9 @@ export const endpoints = {
       `projects/${projectId}/services/${serviceId}/env`,
     envSet: (projectId: string | number, serviceId: string) =>
       `projects/${projectId}/services/${serviceId}/env`,
+    // #336: real (unmasked) compose env for the "show values" reveal.
+    envReveal: (projectId: string | number, serviceId: string) =>
+      `projects/${projectId}/services/${serviceId}/env-reveal`,
   },
 
   /* ---------------------------------------------------------------- */
@@ -120,6 +128,7 @@ export const endpoints = {
     keep: (id: string) => `deployments/${id}/keep`,
     skipPortCheck: (id: string) => `deployments/${id}/skip-port-check`,
     rollback: (id: string) => `deployments/${id}/rollback`,
+    restorePlan: (id: string) => `deployments/${id}/restore-plan`,
     cancel: (id: string) => `deployments/${id}/cancel`,
     prepare: "deployments/prepare",
     buildAccess: "deployments/build/access",
@@ -198,6 +207,9 @@ export const endpoints = {
       `github/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/clone-token`,
     repoBranches: (owner: string, repo: string) =>
       `github/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/branches`,
+    /** Recursive path list, for the source-access path picker. */
+    repoTree: (owner: string, repo: string) =>
+      `github/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/tree`,
     status: "github/status",
     connect: "github/connect",
     connectRedirect: "github/connect/redirect",
@@ -267,6 +279,9 @@ export const endpoints = {
   system: {
     browse: "system/browse",
     settings: "system/settings",
+    /** Vhosts the local edge serves that Openship no longer tracks. */
+    edgeUntracked: "system/edge/untracked",
+    edgeUntrackedRemove: "system/edge/untracked/remove",
     emailSettings: "system/settings/email",
     emailSettingsTest: "system/settings/email/test",
     onboarding: "system/onboarding",
@@ -352,9 +367,16 @@ export const endpoints = {
       mailboxes: (serverId: string) => `mail/admin/${encodeURIComponent(serverId)}/mailboxes`,
       mailbox: (serverId: string, email: string) =>
         `mail/admin/${encodeURIComponent(serverId)}/mailboxes/${encodeURIComponent(email)}`,
-      stats: (serverId: string) => `mail/admin/${encodeURIComponent(serverId)}/stats`,
-      dnsScan: (serverId: string) => `mail/admin/${encodeURIComponent(serverId)}/dns-scan`,
-      relay: (serverId: string) => `mail/admin/${encodeURIComponent(serverId)}/relay`,
+      aliases: (serverId: string) =>
+        `mail/admin/${encodeURIComponent(serverId)}/aliases`,
+      alias: (serverId: string, id: number) =>
+        `mail/admin/${encodeURIComponent(serverId)}/aliases/${id}`,
+      stats: (serverId: string) =>
+        `mail/admin/${encodeURIComponent(serverId)}/stats`,
+      dnsScan: (serverId: string) =>
+        `mail/admin/${encodeURIComponent(serverId)}/dns-scan`,
+      relay: (serverId: string) =>
+        `mail/admin/${encodeURIComponent(serverId)}/relay`,
       backupPolicy: (serverId: string) =>
         `mail/admin/${encodeURIComponent(serverId)}/backup-policy`,
       backupRuns: (serverId: string) => `mail/admin/${encodeURIComponent(serverId)}/backup-runs`,

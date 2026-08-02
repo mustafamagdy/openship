@@ -24,7 +24,13 @@
  */
 
 import type { Deployment } from "@repo/db";
-import type { Platform, RouteProxyLocation, RouteRedirect, RouteHeaderRule } from "@repo/adapters";
+import type {
+  Platform,
+  RouteProxyLocation,
+  RouteRedirect,
+  RouteHeaderRule,
+  RouteHostRedirect,
+} from "@repo/adapters";
 import { safeErrorMessage } from "@repo/core";
 import { platform } from "./controller-helpers";
 import { resolveDeploymentRuntime } from "./deployment-runtime";
@@ -72,6 +78,13 @@ export interface RouteRegister {
   proxyLocations?: RouteProxyLocation[];
   redirects?: RouteRedirect[];
   headerRules?: RouteHeaderRule[];
+  /**
+   * Canonical redirect to another host instead of serving (see
+   * RouteConfig.redirectHost). Carried on the LIVE path too, so turning a
+   * redirect on or off takes effect on save rather than waiting for a redeploy —
+   * the same treatment a domain/port edit already gets.
+   */
+  redirectHost?: RouteHostRedirect;
 }
 
 export interface RouteRemove {
@@ -163,6 +176,11 @@ export async function reconcileProjectRoutes(
       .registerRoute({
         domain: r.hostname,
         tls: true,
+        // A custom domain's TLS is ours to terminate, so the edge must keep a :443
+        // listener up for it even before its cert exists — otherwise the origin
+        // refuses the handshake and a proxied domain shows Cloudflare 525 (#308).
+        // A free *.opsh.io host is fronted by Cloud's edge; not ours.
+        terminatesTlsLocally: r.isCustomDomain,
         // staticRoot wins when present: it is the more specific instruction, and a
         // caller that resolved a doc root has already decided this domain serves
         // files. registerRoute keys off which one is set.
@@ -171,6 +189,7 @@ export async function reconcileProjectRoutes(
         ...(r.proxyLocations?.length ? { proxyLocations: r.proxyLocations } : {}),
         ...(r.redirects?.length ? { redirects: r.redirects } : {}),
         ...(r.headerRules?.length ? { headerRules: r.headerRules } : {}),
+        ...(r.redirectHost ? { redirectHost: r.redirectHost } : {}),
       })
       .catch((err) =>
         console.warn(`[route-apply] registerRoute ${r.hostname} failed (non-fatal): ${safeErrorMessage(err)}`),
