@@ -7,11 +7,11 @@ const r = secureRouter(new Hono(), {
   basePath: "/api/azure-devops",
 });
 
-r.get("/connections", { tag: "azure_devops:read" }, ctrl.getConnections);
-r.post("/connections", { tag: "azure_devops:write" }, ctrl.connect);
+r.get("/connections", { tag: "azure_devops:list" }, ctrl.getConnections);
+r.post("/connections", { tag: "azure_devops:write", collection: true }, ctrl.connect);
 r.delete(
   "/connections/:organization",
-  { tag: "azure_devops:admin" },
+  { tag: "azure_devops:admin", ids: { azure_devops: "organization" } },
   ctrl.disconnect,
 );
 r.get(
