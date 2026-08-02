@@ -3,11 +3,13 @@
 import React, { useCallback, useEffect, useRef } from "react";
 import { getApiErrorMessage, projectsApi } from "@/lib/api";
 import { useToast } from "@/context/ToastContext";
+import { usePlatform } from "@/context/PlatformContext";
 import { useI18n } from "@/components/i18n-provider";
 import { RoutingModePicker, type RoutingMode } from "@/components/routing/RoutingModePicker";
 import { createPublicEndpoint, type PublicEndpoint } from "@/context/deployment/types";
 import { useRegisteredDomains } from "@/hooks/useRegisteredDomains";
 import { buildRegisteredHostname } from "@/utils/registeredDomain";
+import { validatedPublicEndpointPayload } from "@/lib/public-endpoint-payload";
 import { normalizeSubdomain } from "@/utils/subdomain";
 
 interface DomainSettingsProps {
@@ -22,47 +24,8 @@ interface DomainSettingsProps {
   setNoPublicRoute: (value: boolean) => void;
 }
 
-function buildPublicEndpointPayload(
-  endpoint: PublicEndpoint,
-  hasServer: boolean,
-): {
-  port?: number;
-  targetPath?: string;
-  domain?: string;
-  customDomain?: string;
-  domainType: "free" | "custom";
-} | null {
-  const domainType: "free" | "custom" = endpoint.domainType === "custom" ? "custom" : "free";
-  const freeDomain = endpoint.domain.trim().toLowerCase();
-  const customDomain = endpoint.customDomain.trim().toLowerCase();
-
-  if (domainType === "custom" && !customDomain) {
-    return null;
-  }
-
-  if (domainType === "free" && !freeDomain) {
-    return null;
-  }
-
-  if (hasServer) {
-    const port = Number(endpoint.port.trim());
-    if (!Number.isFinite(port) || port < 1 || port > 65535) {
-      return null;
-    }
-
-    return {
-      port,
-      domainType,
-      ...(domainType === "custom" ? { customDomain } : { domain: freeDomain }),
-    };
-  }
-
-  return {
-    targetPath: endpoint.targetPath.trim() || "/",
-    domainType,
-    ...(domainType === "custom" ? { customDomain } : { domain: freeDomain }),
-  };
-}
+/** Shared with the project Domains tab — see lib/public-endpoint-payload. */
+const buildPublicEndpointPayload = validatedPublicEndpointPayload;
 
 const DomainSettings: React.FC<DomainSettingsProps> = ({
   projectId,
@@ -78,6 +41,7 @@ const DomainSettings: React.FC<DomainSettingsProps> = ({
   const { t } = useI18n();
   const { defaultDomain } = useRegisteredDomains();
   const appliedRegisteredDefault = useRef(false);
+  const { selfHosted } = usePlatform();
 
   const handleChange = useCallback(
     async (nextEndpoints: PublicEndpoint[], nextRuntimePort?: string) => {
@@ -206,6 +170,10 @@ const DomainSettings: React.FC<DomainSettingsProps> = ({
       hasServer={hasServer}
       runtimePort={runtimePort}
       onEndpointsChange={handleChange}
+      // "Include www" creates the sibling as a 301 to the apex, so the control has
+      // to be visible here or that's an invisible redirect. Rendered in the box's
+      // own vhost → self-hosted only (the API refuses it for cloud projects).
+      allowRedirects={selfHosted}
     />
   );
 };

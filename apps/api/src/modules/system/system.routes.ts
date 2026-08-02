@@ -29,6 +29,7 @@ import * as dataTransfer from "./data-transfer/data-transfer.controller";
 import * as systemHealth from "./system-health.controller";
 import * as instanceBackup from "./instance-backup.controller";
 import * as kubernetesClusters from "./kubernetes-clusters.controller";
+import * as edgeOrphans from "./edge-orphans.controller";
 
 const r = secureRouter(new Hono(), {
   module: "system",
@@ -180,6 +181,21 @@ r.public(
   },
   internalAuth,
   selfApp.edgeImportSites,
+);
+
+/* ── Untracked edge vhosts ──────────────────────────────────────────
+ * Edge config lives on the host and outlives its DB rows by design (record-only
+ * delete keeps the workload AND its route running). A leftover PROXY vhost 502s
+ * and announces itself; a leftover STATIC one keeps serving the removed project's
+ * files with a 200. This finds them, and removes them one named hostname at a
+ * time — never as a sweep, which would break record-only's guarantee. */
+r.get("/edge/untracked", { tag: "settings:read" }, edgeOrphans.listUntrackedEdgeSites);
+// Stops serving a hostname → owner-only, like the other destructive system routes.
+r.post(
+  "/edge/untracked/remove",
+  { tag: "settings:admin" },
+  requireRole("owner"),
+  edgeOrphans.removeUntrackedEdgeSite,
 );
 
 /* ── Authenticated routes (dashboard settings page) ─────────────── */

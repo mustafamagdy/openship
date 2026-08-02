@@ -78,6 +78,19 @@ export interface RegisteredDomainVerifyResult {
   domain: RegisteredDomain;
 }
 
+/** One domain row's verify + SSL state (GET /domains/:id). */
+export interface DomainState {
+  id: string;
+  hostname: string;
+  verified: boolean;
+  status: string;
+  sslStatus?: string | null;
+  sslExpiresAt?: string | null;
+  lastVerifyError?: string | null;
+  redirectTo?: string | null;
+  redirectStatus?: number | null;
+}
+
 export const domainsApi = {
   cloudflareConnection: () =>
     api.get<{ data: CloudflareConnection }>(endpoints.domains.cloudflare),
@@ -145,10 +158,18 @@ export const domainsApi = {
 
   removeRegistered: (id: string) =>
     api.delete<{ success: boolean }>(endpoints.domains.registryRemove(id)),
+  /**
+   * Read one domain's current verify/SSL state. The recovery read for a flow
+   * whose live stream dropped before reporting: the operation itself finished
+   * server-side, so the UI asks what happened rather than guessing.
+   */
+  get: (domainId: string) => api.get<{ data: DomainState }>(endpoints.domains.byId(domainId)),
 
   /** Get DNS records preview for a hostname (no domain creation needed). */
-  previewRecords: (hostname: string) =>
-    api.post<{ data: DomainDnsRecords }>(endpoints.domains.preview, { hostname }),
+  /** `includeWww` mirrors the Add-domain toggle so the panel shows the www
+   *  sibling's record too — the toggle claims a SECOND hostname. */
+  previewRecords: (hostname: string, includeWww = false) =>
+    api.post<{ data: DomainDnsRecords }>(endpoints.domains.preview, { hostname, includeWww }),
 
   /** Remove a domain/route (DELETE /domains/:id). Drops the route + its edge
    *  registration; the app/service keeps running. Used by the per-card ⋯ menu. */

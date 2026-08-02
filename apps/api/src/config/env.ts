@@ -128,6 +128,16 @@ const envSchema = z.object({
   OPENSHIP_DASHBOARD_PORT: z.coerce.number().int().positive().catch(3001),
   /** Let's Encrypt contact email for the managed edge (defaults to the admin). */
   OPENSHIP_ACME_EMAIL: z.string().optional(),
+  /**
+   * How long a deploy may HOLD waiting for a user decision (port conflict, edge
+   * 80/443 takeover) before it gives up and aborts. Milliseconds; default 5 min
+   * (see PROMPT_TIMEOUT_MS in lib/prompt-gateway).
+   *
+   * Exists for API-driven deploys: a human sees the modal instantly, but a client
+   * has to poll to notice the prompt at all, so the human-tuned window can expire
+   * before it ever looks. The deadline is published on the prompt as `expiresAt`.
+   */
+  OPENSHIP_PROMPT_TIMEOUT_MS: z.coerce.number().int().positive().optional(),
 
   /* ---------- Mode ---------- */
   CLOUD_MODE: envBool("false"),
@@ -468,6 +478,38 @@ if (env.DEPLOY_MODE === "desktop" && !env.OPENSHIP_AUTH_MODE && env.NODE_ENV !==
     `OPENSHIP_AUTH_MODE is required when DEPLOY_MODE="desktop". ` +
       `The launcher must declare the auth mode (the desktop app sets "none"); ` +
       `it is no longer inferred from the deploy mode.`,
+  );
+}
+
+// ─── "desktop" belongs to Electron alone ──────────────────────────────────
+//
+// DEPLOY_MODE=desktop is a POSTURE, not a convenience: it relaxes the zero-auth
+// gate (zero-auth-guard.ts), makes INTERNAL_TOKEN optional (internal-auth.ts),
+// silences the zero-auth banner, and reports `isServerHost: false` so the
+// dashboard stops treating the box as a deploy target.
+//
+// The CLI used to claim it on a bare VPS install purely to get an in-process job
+// runner. The result: a server-host install that identified as a laptop — no
+// "This Server" row (its startup hook is gated on modes:["selfhosted"]), a deploy
+// wizard offering only Openship Cloud, and a relaxed auth posture on a networked
+// box. The job runner never needed it (Redis reachability decides that).
+//
+// Electron declares BOTH DEPLOY_MODE=desktop and OPENSHIP_LOCAL_DASHBOARD_URL (it
+// serves the dashboard on a dynamic loopback port and must tell the API where).
+// Nothing else does. So a `desktop` claim without it is a launcher bug: warn
+// loudly rather than refuse, since a refusal here would brick the desktop app if
+// that pairing ever changes, and zeroAuthAllowed() still independently requires a
+// kernel-reported loopback peer.
+if (
+  env.DEPLOY_MODE === "desktop" &&
+  !env.OPENSHIP_LOCAL_DASHBOARD_URL &&
+  env.NODE_ENV !== "test"
+) {
+  console.warn(
+    `[env] DEPLOY_MODE="desktop" but OPENSHIP_LOCAL_DASHBOARD_URL is unset — ` +
+      `"desktop" is for the Electron app only. A server install should declare ` +
+      `DEPLOY_MODE="bare" (host processes) or "docker" (compose); claiming desktop ` +
+      `relaxes the zero-auth + internal-token gates and hides this box as a deploy target.`,
   );
 }
 

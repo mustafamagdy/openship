@@ -14,7 +14,6 @@
 
 import { Hono } from "hono";
 import { bodyLimit } from "hono/body-limit";
-import { tbValidator } from "@hono/typebox-validator";
 import { secureRouter } from "../../lib/secure-router";
 import { cloudProjectProxy } from "../../lib/cloud/project-router";
 import * as ctrl from "./project.controller";
@@ -31,7 +30,16 @@ import {
   CreateProjectEnvironmentBody,
   MergeEnvVarsBody,
   UpdateResourcesBody,
+  LinkRepoBody,
+  SetAutoDeployBody,
+  SetBranchBody,
+  SetSleepModeBody,
+  SetOptionsBody,
 } from "./project.schema";
+import {
+  CreateIncomingWebhookBody,
+  UpdateIncomingWebhookBody,
+} from "../incoming-webhooks/incoming.schema";
 
 const r = secureRouter(new Hono(), {
   module: "projects",
@@ -70,10 +78,10 @@ r.post(
   {
     tag: "project:write",
     collection: true,
+    body: FolderSessionBody,
     mcp: {
       description:
-        "Folder-upload deploy — STEP 1/4. Opens an upload session for a local source folder and returns `upload` = { url, method, headers }. NEXT, upload the gzipped tarball yourself: POST it to `upload.url` with the returned headers and Content-Type: application/gzip. That byte upload is NOT an MCP tool (raw binary can't cross JSON-RPC) — use an HTTP client. Then call folder/scan. Sequence: session → (out-of-band tarball upload) → folder/scan → projects/ensure → deployments/build/access.",
-      body: FolderSessionBody,
+        "Folder-upload deploy — STEP 1/4. Opens an upload session for a local source folder and returns `upload` = { url, absoluteUrl, method, headers, requiresAuth }. NEXT, upload the gzipped tarball yourself: POST it to `upload.absoluteUrl` (or resolve the API-relative `upload.url` against your own API base) with the returned headers and Content-Type: application/gzip — and, when `upload.requiresAuth` is true, the SAME Authorization: Bearer token you used to open the session. That byte upload is NOT an MCP tool (raw binary can't cross JSON-RPC) — use an HTTP client. Then call folder/scan. Sequence: session → (out-of-band tarball upload) → folder/scan → projects/ensure → deployments/build/access.",
     },
   },
   folder.createSession,
@@ -85,10 +93,17 @@ r.post(
     collection: true,
     mcp: {
       description:
-        "Folder-upload deploy — STEP 2/4. Run AFTER the tarball is uploaded. Detects the uploaded source's framework/build config (stack, packageManager, install/build/start commands, outputDirectory, productionPaths, port). Body may be empty ({}). Feed the result into projects/ensure (STEP 3).",
+        "Folder-upload deploy — STEP 2/4. Run AFTER the tarball is uploaded. Detects the uploaded source's framework/build config (stack, packageManager, install/build/start commands, outputDirectory, productionPaths, port) and, for a docker-compose folder, the `services` array. Body may be empty ({}). Feed the result into projects/ensure (STEP 3) — including `services` verbatim when present.",
     },
   },
   folder.scanSession,
+);
+r.get(
+  // #336: real (unmasked) compose env for the folder-scan wizard's reveal
+  // toggle. Write-gated (project:write); no mcp — reveal is a dashboard action.
+  "/folder/scan/:sessionId/env-reveal",
+  { tag: "project:write", collection: true },
+  folder.revealSessionEnv,
 );
 // The relay upload is SELF-HOSTED ONLY: on the SaaS the browser uploads
 // straight to the Oblien workspace, so the API never receives bytes. localOnly
@@ -112,10 +127,10 @@ r.post(
   {
     tag: "project:write",
     collection: true,
+    body: EnsureProjectBody,
     mcp: {
       description:
-        "Folder-upload deploy — STEP 3/4. Create or update the project that carries the build config — deployments/build/access reads config from the PROJECT ROW, not the upload session, so this must run first. Map the folder/scan fields in (framework = the scan's stack id) and set gitProvider:'upload'. Pass projectId to update an existing project. Returns the project id for STEP 4.",
-      body: EnsureProjectBody,
+        "Folder-upload deploy — STEP 3/4. Create or update the project that carries the build config — deployments/build/access reads config from the PROJECT ROW, not the upload session, so this must run first. Map the folder/scan fields in (framework = the scan's stack id) and set gitProvider:'upload'. For a docker-compose folder, pass the scan's `services` array through too — that persists the project's service set — AND pass `uploadSessionId` with it, since the scan masks env values (`••••••••`) and that is what restores them. Pass projectId to update an existing project. Returns the project id for STEP 4.",
     },
   },
   ctrl.ensure,
@@ -131,10 +146,10 @@ r.post(
     tag: "project:write",
     collection: true,
     projectCreate: true,
+    body: CreateProjectBody,
     mcp: {
       description:
         "Create a project from a git or local source (build config baked into the project). For a folder-upload deploy use projects/ensure instead (it accepts the folder/scan config and gitProvider:'upload').",
-      body: CreateProjectBody,
     },
   },
   ctrl.create,
@@ -151,7 +166,8 @@ r.patch(
   "/:id",
   {
     tag: "project:write",
-    mcp: { description: "Update a project's configuration (build config, source, options).", body: UpdateProjectBody },
+    body: UpdateProjectBody,
+    mcp: { description: "Update a project's configuration (build config, source, options)." },
   },
   cloudProjectProxy,
   ctrl.update,
@@ -163,7 +179,8 @@ r.post(
   "/:id/environments",
   {
     tag: "project:write",
-    mcp: { description: "Create a project environment (e.g. a preview).", body: CreateProjectEnvironmentBody },
+    body: CreateProjectEnvironmentBody,
+    mcp: { description: "Create a project environment (e.g. a preview)." },
   },
   cloudProjectProxy,
   ctrl.createEnvironment,
@@ -171,7 +188,7 @@ r.post(
 r.get("/:id/deletion-preview", { tag: "project:read", mcp: { description: "Preview what deleting this project would remove (read-only)." } }, cloudProjectProxy, ctrl.deletionPreview);
 
 /* ─── Build options ────────────────────────────────────────────────────── */
-r.post("/:id/options", { tag: "project:write", mcp: { description: "Set build/deploy options for a project." } }, cloudProjectProxy, ctrl.setOptions);
+r.post("/:id/options", { tag: "project:write", body: SetOptionsBody, mcp: { description: "Set build/deploy options for a project." } }, cloudProjectProxy, ctrl.setOptions);
 r.post("/:id/port-check", { tag: "project:read", readOnly: true, mcp: { description: "Live port-reachability check for the project's active deployment (advisory)." } }, cloudProjectProxy, ctrl.portCheck);
 r.post("/:id/output-check", { tag: "project:read", readOnly: true, mcp: { description: "Live static-output check for the project's active deployment (advisory; static apps)." } }, cloudProjectProxy, ctrl.outputCheck);
 
@@ -204,12 +221,12 @@ r.patch(
   "/:id/env",
   {
     tag: "project:write",
-    mcp: { description: "Merge env var changes (upserts + deletes); untouched vars are preserved.", body: MergeEnvVarsBody },
+    // Validated by the auto-wired tbValidator (spec.body) → a wrong-shape body
+    // is a 400, not a 500 in the service's data.upserts.map. #231
+    body: MergeEnvVarsBody,
+    mcp: { description: "Merge env var changes (upserts + deletes); untouched vars are preserved." },
   },
   cloudProjectProxy,
-  // Validate the body shape → 400 (not a 500 when the service does
-  // data.upserts.map on a wrong-shape-but-valid-JSON body). #231
-  tbValidator("json", MergeEnvVarsBody),
   ctrl.mergeEnvVars,
 );
 
@@ -220,16 +237,30 @@ r.patch("/:id/clone-token", { tag: "project:admin" }, cloudProjectProxy, ctrl.up
 /* ─── Git ──────────────────────────────────────────────────────────────── */
 r.get("/:id/git", { tag: "project:read", mcp: { description: "Get the project's linked git repository info." } }, cloudProjectProxy, ctrl.getGitInfo);
 r.get("/:id/commit-status", { tag: "project:read", mcp: { description: "Compare the deployed commit against the remote HEAD." } }, cloudProjectProxy, ctrl.getCommitStatus);
-r.post("/:id/git/link", { tag: "project:write", mcp: { description: "Link a git repository to the project." } }, cloudProjectProxy, ctrl.linkRepo);
+
+/* ─── Pending actions (everything waiting on a human) ───────────────────── */
+r.get(
+  "/:id/pending-actions",
+  {
+    tag: "project:read",
+    mcp: {
+      description:
+        "What is waiting on a human for this project, and how to resolve each item. Covers a deploy blocked on a named cause (e.g. a port already in use), a deploy HELD right now on a decision (answer it with the build-respond tool — the exact action id and body are in the item's resolveWith, and `expiresAt` is when the deploy gives up), a partial-failure release awaiting keep/reject, unsynced routing, unverified domains, and failed/expired certificates. Each item carries `resolveWith`, an array of concrete {method, path, body} calls — use those rather than guessing. Call this after starting a deploy that seems stuck, and whenever a project reads as Action Required.",
+    },
+  },
+  cloudProjectProxy,
+  ctrl.getPendingActions,
+);
+r.post("/:id/git/link", { tag: "project:write", body: LinkRepoBody, mcp: { description: "Link a git repository to the project." } }, cloudProjectProxy, ctrl.linkRepo);
 r.get("/:id/branches", { tag: "project:read", mcp: { description: "List the linked repository's branches." } }, cloudProjectProxy, ctrl.listBranches);
-r.post("/:id/auto-deploy", { tag: "project:write", mcp: { description: "Enable/disable auto-deploy on push." } }, cloudProjectProxy, ctrl.setAutoDeploy);
+r.post("/:id/auto-deploy", { tag: "project:write", body: SetAutoDeployBody, mcp: { description: "Enable/disable auto-deploy on push." } }, cloudProjectProxy, ctrl.setAutoDeploy);
 r.post("/:id/webhook-domain", { tag: "project:write" }, cloudProjectProxy, ctrl.setWebhookDomain);
-r.post("/:id/branch", { tag: "project:write", mcp: { description: "Set the project's deploy branch." } }, cloudProjectProxy, ctrl.setBranch);
+r.post("/:id/branch", { tag: "project:write", body: SetBranchBody, mcp: { description: "Set the project's deploy branch." } }, cloudProjectProxy, ctrl.setBranch);
 
 /* ─── Incoming webhooks (generic per-project trigger hooks) ─────────────── */
 r.get("/:id/incoming-webhooks", { tag: "project:read", mcp: { description: "List a project's incoming webhooks (dynamic trigger URLs)." } }, cloudProjectProxy, incomingWebhooks.list);
-r.post("/:id/incoming-webhooks", { tag: "project:write", mcp: { description: "Create an incoming webhook that fires a deploy or job when its URL is called." } }, cloudProjectProxy, incomingWebhooks.create);
-r.patch("/:id/incoming-webhooks/:hookId", { tag: "project:write", mcp: { description: "Update an incoming webhook (name/enabled/action/auth)." } }, cloudProjectProxy, incomingWebhooks.update);
+r.post("/:id/incoming-webhooks", { tag: "project:write", body: CreateIncomingWebhookBody, mcp: { description: "Create an incoming webhook that fires a deploy or job when its URL is called." } }, cloudProjectProxy, incomingWebhooks.create);
+r.patch("/:id/incoming-webhooks/:hookId", { tag: "project:write", body: UpdateIncomingWebhookBody, mcp: { description: "Update an incoming webhook (name/enabled/action/auth)." } }, cloudProjectProxy, incomingWebhooks.update);
 r.post("/:id/incoming-webhooks/:hookId/rotate", { tag: "project:write", mcp: { description: "Rotate an incoming webhook's token / HMAC secret." } }, cloudProjectProxy, incomingWebhooks.rotate);
 r.delete("/:id/incoming-webhooks/:hookId", { tag: "project:write", mcp: { description: "Delete an incoming webhook." } }, cloudProjectProxy, incomingWebhooks.remove);
 r.get("/:id/incoming-webhooks/:hookId/deliveries", { tag: "project:read", mcp: { description: "List one incoming webhook's recent deliveries (paginated)." } }, cloudProjectProxy, incomingWebhooks.hookDeliveries);
@@ -237,11 +268,24 @@ r.get("/:id/webhook-deliveries", { tag: "project:read", mcp: { description: "Lis
 
 /* ─── Resources ────────────────────────────────────────────────────────── */
 r.get("/:id/resources", { tag: "project:read", mcp: { description: "Get the project's CPU/RAM/disk resource config." } }, cloudProjectProxy, ctrl.getResources);
+r.get(
+  "/:id/rollback-capacity",
+  {
+    tag: "project:read",
+    mcp: {
+      description:
+        "Get the rollback retention window in force (explicit or disk-sized), the measured per-release size, and the deploy host's free disk.",
+    },
+  },
+  cloudProjectProxy,
+  ctrl.getRollbackCapacity,
+);
 r.patch(
   "/:id/resources",
   {
     tag: "project:write",
-    mcp: { description: "Update the project's CPU/RAM/disk, sleep mode, or port.", body: UpdateResourcesBody },
+    body: UpdateResourcesBody,
+    mcp: { description: "Update the project's CPU/RAM/disk, sleep mode, or port." },
   },
   cloudProjectProxy,
   ctrl.updateResources,
@@ -249,7 +293,7 @@ r.patch(
 r.post("/:id/resources", { tag: "project:write" }, cloudProjectProxy, ctrl.updateResources);
 
 /* ─── Sleep mode ───────────────────────────────────────────────────────── */
-r.post("/:id/sleep-mode", { tag: "project:write", mcp: { description: "Set the project's sleep mode (auto_sleep / always_on)." } }, cloudProjectProxy, ctrl.setSleepMode);
+r.post("/:id/sleep-mode", { tag: "project:write", body: SetSleepModeBody, mcp: { description: "Set the project's sleep mode (auto_sleep / always_on)." } }, cloudProjectProxy, ctrl.setSleepMode);
 
 /* ─── Deployments ──────────────────────────────────────────────────────── */
 r.get("/:id/deployments", { tag: "project:deployment:list", mcp: { description: "List a project's deployments (history, statuses)." } }, cloudProjectProxy, ctrl.listDeployments);

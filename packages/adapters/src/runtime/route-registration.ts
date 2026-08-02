@@ -1,7 +1,7 @@
 import { DeployError, safeErrorMessage } from "@repo/core";
 import { posix as pathPosix } from "node:path";
 
-import type { RouteConfig } from "../types";
+import type { RouteConfig, RouteHostRedirect } from "../types";
 import type { BuildLogger } from "./build-pipeline";
 import type { DeployRouting, DeploySsl } from "./deploy-pipeline";
 
@@ -9,8 +9,14 @@ export interface RoutedDomainInput {
   hostname: string;
   tls: boolean;
   provisionSsl?: boolean;
+  /** TLS terminates on the serving box — see RouteConfig.terminatesTlsLocally. */
+  terminatesTlsLocally?: boolean;
   targetPort?: number;
   targetPath?: string;
+  /** Canonical redirect to another host instead of serving — see
+   *  RouteConfig.redirectHost. The destination below is still resolved and
+   *  validated so dropping the redirect restores a serving route. */
+  redirectHost?: RouteHostRedirect;
 }
 
 export interface RouteRegistrationOptions {
@@ -91,23 +97,36 @@ export async function registerResolvedRoutes(
         ? `static:${staticRoot}`
         : "⚠ NO STATIC ROOT RESOLVED";
     logger.log(
-      `Registering route ${domain.hostname} → ${upstream} ` +
-        `[${hasPortTarget ? `container port ${domain.targetPort}` : `path ${domain.targetPath}`}, tls=${domain.tls}]\n`,
+      domain.redirectHost
+        ? `Registering route ${domain.hostname} → ${domain.redirectHost.statusCode} redirect to ` +
+            `${domain.redirectHost.target} [tls=${domain.tls}]\n`
+        : `Registering route ${domain.hostname} → ${upstream} ` +
+            `[${hasPortTarget ? `container port ${domain.targetPort}` : `path ${domain.targetPath}`}, tls=${domain.tls}]\n`,
     );
 
     if (hasPortTarget && typeof targetUrl === "string") {
-      routeConfig = { domain: domain.hostname, tls: domain.tls, targetUrl };
+      routeConfig = {
+        domain: domain.hostname,
+        tls: domain.tls,
+        terminatesTlsLocally: domain.terminatesTlsLocally,
+        targetUrl,
+      };
     } else if (hasPathTarget && typeof staticRoot === "string") {
       const targetPath = domain.targetPath!;
       routeConfig = {
         domain: domain.hostname,
         tls: domain.tls,
+        terminatesTlsLocally: domain.terminatesTlsLocally,
         staticRoot: targetPath === "/"
           ? staticRoot
           : pathPosix.join(staticRoot, targetPath.slice(1)),
       };
     } else {
       throw new DeployError("Resolved route target is invalid", "INVALID_ROUTE_TARGET");
+    }
+
+    if (domain.redirectHost) {
+      routeConfig.redirectHost = domain.redirectHost;
     }
 
     // Add webhook proxy location if this domain is the project's webhook domain

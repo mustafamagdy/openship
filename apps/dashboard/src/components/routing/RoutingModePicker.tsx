@@ -1,7 +1,8 @@
 "use client";
 
 import React from "react";
-import { useI18n, interpolate } from "@/components/i18n-provider";
+import { isApexDomain } from "@repo/core";
+import { useI18n } from "@/components/i18n-provider";
 import PublicEndpointsCard from "@/components/routing/PublicEndpointsCard";
 import { createPublicEndpoint, type PublicEndpoint } from "@/context/deployment/types";
 
@@ -36,6 +37,10 @@ interface RoutingModePickerProps {
   onEndpointsChange: (endpoints: PublicEndpoint[], runtimePort?: string) => void;
   allowPortEdit?: boolean;
   saveMode?: "change" | "explicit";
+  /** Show the per-endpoint "Redirect to" control. Matters here because the www
+   *  toggle CREATES a redirect — hiding the control would leave the user with a
+   *  301 they didn't see and can't change. */
+  allowRedirects?: boolean;
 }
 
 // Segmented tab styling — identical to RoutingSettingsCard's Free/Custom tabs so
@@ -55,20 +60,31 @@ export function RoutingModePicker({
   onEndpointsChange,
   allowPortEdit = false,
   saveMode = "change",
+  allowRedirects = false,
 }: RoutingModePickerProps) {
   const { t } = useI18n();
   const w = t.widgets.routing.settingsCard;
 
-  // The apex the www variant would attach to: the first custom endpoint's hostname.
+  // The apex the www variant would attach to: the first custom endpoint's hostname,
+  // but ONLY when it's a real registrable apex — `www.<subdomain>` is nonsensical,
+  // so a subdomain (app.example.com) or an already-www host offers no www toggle.
   const apex = endpoints.find((e) => e.domainType === "custom")?.customDomain?.trim().toLowerCase();
-  const wwwCandidate = apex && !apex.startsWith("www.") ? apex : null;
+  const wwwCandidate = apex && isApexDomain(apex) ? apex : null;
   const wwwIncluded =
     !!wwwCandidate &&
     endpoints.some(
       (e) => e.domainType === "custom" && e.customDomain?.trim().toLowerCase() === `www.${wwwCandidate}`,
     );
 
-  /** Add/remove the `www.` endpoint, mirroring the apex's port or target path. */
+  /**
+   * Add/remove the `www.` endpoint, mirroring the apex's port or target path.
+   *
+   * The sibling starts as a 301 to the apex: it's a full, independent endpoint
+   * (own DNS record, own verification, own certificate) whose job is to funnel
+   * traffic to the canonical host. Two hostnames both serving the app is
+   * duplicate content, and picking a canonical one later is a migration; the
+   * direction is editable on the endpoint's own card either way.
+   */
   const toggleWww = (on: boolean) => {
     if (!wwwCandidate) return;
     const host = `www.${wwwCandidate}`;
@@ -86,6 +102,8 @@ export function RoutingModePicker({
       createPublicEndpoint({
         domainType: "custom",
         customDomain: host,
+        redirectTo: wwwCandidate,
+        redirectStatus: 301,
         ...(primary?.port ? { port: primary.port } : {}),
         ...(primary?.targetPath ? { targetPath: primary.targetPath } : {}),
       }),
@@ -117,28 +135,10 @@ export function RoutingModePicker({
         <p className="px-1 pt-0.5 text-xs text-muted-foreground">{labels.noneDesc}</p>
       ) : (
         <div className="pt-1">
-          {/* Offered wherever a CUSTOM domain is chosen — including initial setup,
-              where it was missing entirely (#289 item 2.1) and users had to come back
-              to the project's Domains tab afterwards. `www.<apex>` is appended as its
-              own endpoint because publicEndpoints is what routing reconciles against:
-              `syncProjectPublicRoutes` mints the pending row from it, then the domain
-              sweep verifies it and issues its cert. A flag on the apex would be
-              dropped by the same reconciler. */}
-          {mode === "custom" && wwwCandidate && (
-            <label className="mb-2 flex cursor-pointer items-start gap-2 px-1">
-              <input
-                type="checkbox"
-                checked={wwwIncluded}
-                onChange={(e) => toggleWww(e.target.checked)}
-                className="mt-0.5 size-3.5 accent-primary"
-              />
-              <span className="text-xs text-muted-foreground">
-                {interpolate(t.projectSettings.domains.add.includeWwwDesc, {
-                  domain: wwwCandidate,
-                })}
-              </span>
-            </label>
-          )}
+          {/* `www.<apex>` is appended as its OWN endpoint (publicEndpoints is what
+              routing reconciles against — a flag on the apex would be dropped by the
+              same reconciler). The toggle now lives as the first row INSIDE the domain
+              card (a Switch), shown only for a real apex — never a subdomain. */}
           <PublicEndpointsCard
             projectName={projectName}
             endpoints={endpoints}
@@ -147,7 +147,18 @@ export function RoutingModePicker({
             allowPortEdit={allowPortEdit}
             saveMode={saveMode}
             hideTypeToggle
+            allowRedirects={allowRedirects}
             onChange={onEndpointsChange}
+            wwwToggle={
+              mode === "custom"
+                ? {
+                    show: !!wwwCandidate,
+                    included: wwwIncluded,
+                    apex: wwwCandidate,
+                    onToggle: toggleWww,
+                  }
+                : undefined
+            }
           />
         </div>
       )}

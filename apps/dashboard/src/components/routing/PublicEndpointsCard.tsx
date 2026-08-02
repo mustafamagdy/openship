@@ -3,9 +3,13 @@
 import React, { useState } from "react";
 import { ChevronDown, Globe, Plus, Trash2 } from "lucide-react";
 import { RoutingSettingsCard } from "@/components/routing/RoutingSettingsCard";
+import { Switch } from "@/components/ui/Switch";
 import { useI18n, interpolate } from "@/components/i18n-provider";
 import type { PublicEndpoint } from "@/context/deployment/types";
 import { createPublicEndpoint } from "@/context/deployment/types";
+import { useDefaultDomainType } from "@/context/CloudContext";
+import { usePlatform } from "@/context/PlatformContext";
+import { resolvePublicEndpointHostname } from "@/lib/public-endpoint-payload";
 
 interface PublicEndpointsCardProps {
   projectName: string;
@@ -28,6 +32,23 @@ interface PublicEndpointsCardProps {
    *  deploy/migrate flows keep ≥1 route; the project domains tab opts in so a user
    *  can delete their only/last domain and re-add one. */
   allowRemoveAll?: boolean;
+  /** Optional "Include www." switch shown as the first row of the domain card,
+   *  for the apex custom domain. `apex` is the bare apex (null until one is typed);
+   *  `show` hides it for subdomains (where `www.<sub>` is nonsensical). Only the
+   *  primary/apex input gets the `www.` auto-strip — never the `www.<apex>` row. */
+  wwwToggle?: {
+    show: boolean;
+    included: boolean;
+    apex: string | null;
+    onToggle: (on: boolean) => void;
+  };
+  /**
+   * Offer the per-endpoint "Redirect to" control (a hostname answers a 30x to
+   * another of the project's hostnames instead of serving). Off by default; the
+   * caller opts in where it applies — never for a cloud project, whose routing the
+   * managed edge owns.
+   */
+  allowRedirects?: boolean;
 }
 
 const PublicEndpointsCard: React.FC<PublicEndpointsCardProps> = ({
@@ -42,10 +63,18 @@ const PublicEndpointsCard: React.FC<PublicEndpointsCardProps> = ({
   portInline = false,
   hideTypeToggle = false,
   allowRemoveAll = false,
+  wwwToggle,
+  allowRedirects = false,
 }) => {
   const { t } = useI18n();
+  const { baseDomain } = usePlatform();
   const w = t.widgets.routing.publicEndpoints;
   const hasMultipleEndpoints = endpoints.length > 1;
+  const newEndpointDomainType = useDefaultDomainType();
+
+  /** Shared with the project Domains tab — one answer for "which host is this?". */
+  const endpointHostname = (endpoint: PublicEndpoint): string =>
+    resolvePublicEndpointHostname(endpoint, baseDomain);
 
   // With multiple domains, collapse each into a compact row so the list isn't
   // a huge stack of full forms — click a row to expand its editor. A single
@@ -107,9 +136,11 @@ const PublicEndpointsCard: React.FC<PublicEndpointsCardProps> = ({
         hasServer
           ? {
               port: lastEndpoint?.port || runtimePort || "",
+              domainType: newEndpointDomainType,
             }
           : {
               targetPath: lastEndpoint?.targetPath || "/",
+              domainType: newEndpointDomainType,
             },
       )),
     ]);
@@ -151,12 +182,31 @@ const PublicEndpointsCard: React.FC<PublicEndpointsCardProps> = ({
         }
       : undefined;
 
+    // Auto-strip `www.` on the primary/apex custom input only — NOT the
+    // `www.<apex>` variant endpoint (stripping it would collapse it into the apex).
+    const isWwwVariant =
+      !!wwwToggle?.apex &&
+      endpoint.domainType === "custom" &&
+      endpoint.customDomain.trim().toLowerCase() === `www.${wwwToggle.apex}`;
+    const stripWww = !!wwwToggle && endpoint.domainType === "custom" && !isWwwVariant;
+
+    // Redirect targets = the project's OTHER named hostnames. A closed list, so a
+    // redirect can never point off-site; an endpoint with no hostname yet (freshly
+    // added row) isn't offerable as a target.
+    const redirectTargets = allowRedirects
+      ? endpoints
+          .filter((other) => other.id !== endpoint.id)
+          .map((other) => endpointHostname(other))
+          .filter((hostname): hostname is string => !!hostname)
+      : [];
+
     return (
       <RoutingSettingsCard
         projectName={projectName}
         domain={endpoint.domain}
         customDomain={endpoint.customDomain}
         domainType={endpoint.domainType}
+        stripWww={stripWww}
         targetMode={hasServer ? "proxy" : "static"}
         targetPath={hasServer ? undefined : endpoint.targetPath}
         exposedPort={hasServer ? endpoint.port : undefined}
@@ -165,6 +215,20 @@ const PublicEndpointsCard: React.FC<PublicEndpointsCardProps> = ({
         actionSlot={actionSlot}
         portInline={portInline}
         hideTypeToggle={hideTypeToggle}
+        redirect={
+          redirectTargets.length > 0
+            ? {
+                to: endpoint.redirectTo ?? "",
+                status: endpoint.redirectStatus ?? 301,
+                targets: redirectTargets,
+                onChange: ({ to, status }) =>
+                  handleEndpointChange(endpoint.id, {
+                    redirectTo: to || undefined,
+                    redirectStatus: to ? status : undefined,
+                  }),
+              }
+            : undefined
+        }
         onDomainChange={(value) => handleEndpointChange(endpoint.id, { domain: value })}
         onCustomDomainChange={(value) => handleEndpointChange(endpoint.id, { customDomain: value })}
         onDomainTypeChange={(value) => handleEndpointChange(endpoint.id, { domainType: value })}
@@ -365,6 +429,21 @@ const PublicEndpointsCard: React.FC<PublicEndpointsCardProps> = ({
         }) : renderRoutingCard(
           endpoints[0],
           allowRemoveAll ? removeButton(endpoints[0].id) : undefined,
+        )}
+
+        {/* Single compact row, kept UNDER the domain input so toggling it (or its
+            appearance once a domain is typed) never shifts the input above. */}
+        {wwwToggle?.show && (
+          <div className="flex items-center justify-between gap-4 rounded-xl bg-muted/30 px-4 py-3">
+            <span className="text-[13px] font-medium text-foreground">
+              {t.projectSettings.domains.add.includeWww}
+            </span>
+            <Switch
+              checked={wwwToggle.included}
+              onChange={(next) => wwwToggle.onToggle(next)}
+              ariaLabel={t.projectSettings.domains.add.includeWww}
+            />
+          </div>
         )}
       </div>
     </div>

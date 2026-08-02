@@ -5,7 +5,6 @@
  */
 
 import { Hono } from "hono";
-import { tbValidator } from "@hono/typebox-validator";
 import { secureRouter } from "../../lib/secure-router";
 import { cloudDomainProxy } from "../../lib/cloud/project-router";
 import * as ctrl from "./domain.controller";
@@ -14,6 +13,7 @@ import {
   ConnectCloudflareBody,
   RegisterOrganizationDomainBody,
   UploadCertBody,
+  PreviewDomainBody,
 } from "./domain.schema";
 
 const r = secureRouter(new Hono(), {
@@ -51,6 +51,10 @@ r.post(
   "/",
   {
     tag: "domain:write",
+    // ctrl.add asserts project ownership itself; collectionProject keeps scoped
+    // tokens from being treated as org-wide when projectId is in the body.
+    collectionProject: true,
+    body: AddDomainBody,
     mcp: { description: "Add a domain (free subdomain or custom).", body: AddDomainBody },
   },
   tbValidator("json", AddDomainBody),
@@ -65,11 +69,13 @@ r.post(
     readOnly: true,
     mcp: { description: "Preview the DNS records a domain will need, before adding it." },
   },
+  tbValidator("json", PreviewDomainBody),
   ctrl.preview,
 );
 // Per-domain routes carry cloudDomainProxy (after the permission middleware):
 // a domain belonging to a cloud project is proxied to the SaaS; a local domain
 // falls through to the local handler.
+r.get("/:id", { tag: "domain:read", mcp: { description: "Read one domain's verify + SSL state." } }, cloudDomainProxy, ctrl.get);
 r.delete("/:id", { tag: "domain:admin" }, cloudDomainProxy, ctrl.remove);
 r.post(
   "/:id/verify",

@@ -131,6 +131,7 @@ export const DeploymentCard: React.FC<DeploymentCardProps> = ({
     building: t.deployments.status.building,
     deploying: t.deployments.status.deploying,
     partial_failure: t.deployments.status.partial,
+    action_required: t.deployments.status.actionRequired,
     rejected: t.deployments.status.rejected,
     reconciling: t.deployments.status.verifying,
   };

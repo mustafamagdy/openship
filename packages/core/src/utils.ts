@@ -29,6 +29,27 @@ export function slugify(text: string): string {
 }
 
 /**
+ * Redirect codes a canonical host redirect may use, and the one it defaults to.
+ *
+ * Lives here because BOTH sides of the package boundary need the same list: the
+ * API validates an operator's choice against it (lib/domain-redirect.ts) and the
+ * edge renderer re-checks before interpolating it into a vhost
+ * (adapters/infra/nginx.ts — an out-of-range value there would emit `return 0`
+ * and make `openresty -t` reject the whole file). Two copies could drift into a
+ * status the API accepts and the edge refuses.
+ */
+export const REDIRECT_STATUSES = [301, 302, 307, 308] as const;
+export type RedirectStatus = (typeof REDIRECT_STATUSES)[number];
+export const DEFAULT_REDIRECT_STATUS: RedirectStatus = 301;
+
+/** Coerce to a usable redirect code, falling back to 301. */
+export function resolveRedirectStatus(status?: number | null): RedirectStatus {
+  return REDIRECT_STATUSES.includes(status as RedirectStatus)
+    ? (status as RedirectStatus)
+    : DEFAULT_REDIRECT_STATUS;
+}
+
+/**
  * Canonical stored form of a custom hostname: trimmed, lowercased, scheme
  * stripped, trailing slash removed. The SINGLE normalizer shared by service
  * route storage (@repo/db) and the domain service (@repo/api), so a hostname
@@ -41,6 +62,46 @@ export function normalizeCustomHostname(raw: string): string {
     .toLowerCase()
     .replace(/^https?:\/\//, "")
     .replace(/\/+$/, "");
+}
+
+/**
+ * Comparison form of a hostname READ BACK from serving config — an nginx
+ * `server_name`, a DNS answer, a cert SAN.
+ *
+ * Trim + lowercase + drop the FQDN root dot, and nothing else. `example.com.` is
+ * legal in `server_name` and in DNS, so anything comparing live config against
+ * stored rows must fold that away or it silently fails to match its own domain.
+ *
+ * Deliberately NOT built on {@link normalizeCustomHostname}, even though it looks
+ * like a superset: that one also strips `https://` and trailing slashes, which
+ * would make `isApexDomain` (below) start accepting scheme-prefixed input it
+ * previously rejected. This is byte-for-byte the expression `isApexDomain` already
+ * open-coded, so extracting it changes no behavior anywhere — it just stops the
+ * edge-orphan sweep from being a third copy.
+ *
+ * The split from `normalizeCustomHostname` is real, not incidental: that one
+ * normalizes USER INPUT (where a trailing dot is rejected by
+ * {@link isValidCustomHostname}); this one normalizes MACHINE OUTPUT.
+ */
+export function normalizeServedHostname(raw: string): string {
+  return raw.trim().toLowerCase().replace(/\.$/, "");
+}
+
+/**
+ * The `www.` sibling of a hostname, or null when there isn't one to claim
+ * because the hostname already IS a www host.
+ *
+ * ONE rule, because "Include www" fans out to three places that each need the
+ * same answer — the row the add path creates, the SAN the cert covers, and the
+ * DNS record the setup panel shows. Three inline `www.${host}` prefixes meant a
+ * "no stacking www on www" guard could exist in one and be missing in another,
+ * producing a `www.www.example.com` row or a record for a hostname that never
+ * gets a row.
+ */
+export function wwwSiblingHostname(hostname: string): string | null {
+  const host = normalizeCustomHostname(hostname);
+  if (!host || host.startsWith("www.")) return null;
+  return `www.${host}`;
 }
 
 /**
@@ -83,6 +144,41 @@ export function isValidCustomHostname(host: string): boolean {
   return labels.every(
     (label) => label.length <= 63 && /^[a-z0-9]([a-z0-9-]*[a-z0-9])?$/i.test(label),
   );
+}
+
+/**
+ * Public suffixes whose registrable domain is THREE labels (`example.co.uk`),
+ * not two. Deliberately NOT the full Public Suffix List — that needs a
+ * dependency we don't carry — just the handful common enough that mis-classifying
+ * `example.co.uk` as a subdomain would be visibly wrong. Extend as usage demands.
+ */
+const MULTI_PART_TLDS = new Set([
+  "co.uk", "org.uk", "gov.uk", "ac.uk", "me.uk", "net.uk", "ltd.uk", "plc.uk", "sch.uk",
+  "com.au", "net.au", "org.au", "edu.au", "gov.au", "id.au",
+  "co.nz", "net.nz", "org.nz",
+  "co.jp", "or.jp", "ne.jp",
+  "co.in", "net.in", "org.in", "firm.in",
+  "com.br", "net.br", "org.br",
+  "com.mx", "com.sg", "com.tr", "co.za", "com.cn",
+]);
+
+/**
+ * True when `host` is an APEX / registrable domain (`example.com`,
+ * `example.co.uk`) rather than a subdomain (`app.example.com`, `www.example.com`).
+ *
+ * Used to decide whether offering a `www.` variant makes sense — `www.<subdomain>`
+ * almost never does, so the UI hides the www toggle for subdomains. Heuristic, not
+ * the full PSL (no dependency): apex = exactly one label in front of the public
+ * suffix, where the suffix is two labels for the common multi-part TLDs above and
+ * one label otherwise. Input should already be normalized (see normalizeCustomHostname).
+ */
+export function isApexDomain(host: string): boolean {
+  const h = normalizeServedHostname(host);
+  if (!isValidCustomHostname(h)) return false;
+  const labels = h.split(".");
+  const lastTwo = labels.slice(-2).join(".");
+  const suffixLabels = MULTI_PART_TLDS.has(lastTwo) ? 2 : 1;
+  return labels.length === suffixLabels + 1;
 }
 
 /** Generate a prefixed unique ID (e.g. "proj_abc123...") */

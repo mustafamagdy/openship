@@ -3,6 +3,7 @@
  */
 
 import { Type, type Static } from "@sinclair/typebox";
+import { CloudResourceTierEnum } from "../projects/project.schema";
 
 // ─── Route params ────────────────────────────────────────────────────────────
 
@@ -39,6 +40,14 @@ const PublicEndpointInput = Type.Object({
   domain: Type.Optional(Type.String()),
   customDomain: Type.Optional(Type.String()),
   domainType: Type.Optional(Type.Union([Type.Literal("free"), Type.Literal("custom")])),
+  /** Canonical redirect to another hostname of the same project instead of serving
+   *  (validated by lib/domain-redirect.ts). Declared here because the deploy sends
+   *  the endpoint list back and an omitted redirect CLEARS the stored one — a
+   *  field the schema doesn't name is a field a deploy can silently drop. */
+  redirectTo: Type.Optional(Type.String()),
+  redirectStatus: Type.Optional(
+    Type.Union([Type.Literal(301), Type.Literal(302), Type.Literal(307), Type.Literal(308)]),
+  ),
 });
 
 /**
@@ -149,15 +158,7 @@ export const BuildAccessBody = Type.Object({
         "ONE-TIME migration image handover: serviceName → an already-present image ref. Those services deploy from that image with no build/pull; used only on a migration's first deploy.",
     }),
   ),
-  cloudResourceTier: Type.Optional(
-    Type.Union([
-      Type.Literal("micro"),
-      Type.Literal("low"),
-      Type.Literal("medium"),
-      Type.Literal("high"),
-      Type.Literal("custom"),
-    ]),
-  ),
+  cloudResourceTier: Type.Optional(CloudResourceTierEnum()),
   cloudResourceCustom: Type.Optional(
     Type.Object(
       { cpuCores: Type.Number(), memoryMb: Type.Number(), diskMb: Type.Number() },
@@ -165,6 +166,33 @@ export const BuildAccessBody = Type.Object({
     ),
   ),
   cloneStrategy: Type.Optional(Type.Union([Type.Literal("api-host"), Type.Literal("server")])),
+});
+
+// POST /prepare — detect stack/build config before deploying. All optional:
+// the controller resolves source from (owner,repo) vs path and enforces the
+// conditional requireds (owner+repo for github, path for local).
+export const PrepareDeployBody = Type.Object({
+  source: Type.Optional(
+    Type.Union([Type.Literal("github"), Type.Literal("local")], {
+      description: "Source kind; inferred from owner/repo vs path when omitted.",
+    }),
+  ),
+  owner: Type.Optional(Type.String({ description: "GitHub repo owner (github source)." })),
+  repo: Type.Optional(Type.String({ description: "GitHub repo name (github source)." })),
+  branch: Type.Optional(Type.String({ description: "Git branch (github source)." })),
+  path: Type.Optional(Type.String({ description: "Local filesystem path (local source; self-hosted only)." })),
+  composePath: Type.Optional(
+    Type.String({
+      maxLength: 300,
+      description:
+        "Where the compose file lives when it is not at the auto-detected root — the file itself (\"deploy/stack.yml\", which also covers non-standard filenames) or the directory holding it (\"deploy/docker-compose\"). Detects the project as a compose/services deploy; errors when no compose file is there.",
+    }),
+  ),
+});
+
+// POST /:id/build/respond — answer a build gate/prompt.
+export const BuildRespondBody = Type.Object({
+  action: Type.String({ description: "The gate response (e.g. approve / continue / cancel)." }),
 });
 
 // ─── Inferred types ──────────────────────────────────────────────────────────
