@@ -631,6 +631,13 @@
       "when": 1786054907324,
       "tag": "0081_project_readiness_repair",
       "breakpoints": true
+    },
+    {
+      "idx": 90,
+      "version": "7",
+      "when": 1786141307324,
+      "tag": "0082_repair_skipped_fork_schema",
+      "breakpoints": true
     }
   ]
 }
