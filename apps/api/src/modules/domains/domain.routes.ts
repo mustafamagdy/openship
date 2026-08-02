@@ -5,6 +5,7 @@
  */
 
 import { Hono } from "hono";
+import { tbValidator } from "@hono/typebox-validator";
 import { secureRouter } from "../../lib/secure-router";
 import { cloudDomainProxy } from "../../lib/cloud/project-router";
 import * as ctrl from "./domain.controller";
